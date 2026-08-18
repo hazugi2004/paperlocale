@@ -57,6 +57,7 @@
 - [x] 贡献指南、Issue/PR 模板与标签构建工作流
 - [ ] 发布到 PyPI
 - [x] GitHub `v0.1.0` Release
+- [x] GitHub `v0.2.0` 一键运行、结构门禁与 Provider 评估 Release
 - [x] 三个有验收标准的 good first issues
 - [x] 自有合成论文的原文、译文与全页 QA 演示 GIF
 

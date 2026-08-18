@@ -9,6 +9,8 @@
 同日的发布后审计发现 API 明文传输与 QA 后候选替换边界，并发布了
 [v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1)。该记录证明维护者能够发现问题、增加回归测试并交付补丁版本，但时间跨度仍不足以证明长期维护。
 
+随后发布的 [v0.2.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.2.0) 增加一键断点续跑、图片与矢量绘图硬门禁、真实 Provider 领域评估及 37 项测试。它证明用户可见功能已经进入正式发行，但同日版本迭代仍不能替代跨周维护或真实用户采用。
+
 维护者还在 PDFMathTranslate-next 上游发布了
 [CLITranslator 两阶段集成讨论 #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)。它证明上游沟通已经开始；在上游维护者或其他参与者回复前，它仍不构成外部认可或采用。
 
@@ -24,6 +26,7 @@
 | 日期 | 证据类型 | 公开链接 | 能证明什么 | 是否为外部贡献者 |
 |---|---|---|---|---|
 | 2026-08-18 | 维护者补丁 Release | [v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1) | 发布后审计、27 项测试、远端构建 | 否 |
+| 2026-08-18 | 功能 Release | [v0.2.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.2.0) | 一键运行、结构门禁、Provider 评估、37 项测试与发行构建 | 否 |
 | 2026-08-18 | 维护者发起的上游讨论 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) | 两阶段 CLITranslator 接口稳定性与文档协作请求 | 否，等待外部回复 |
 | 2026-08-18 | 外部 fork 与 Draft PR | [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) / [CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274) | 非维护者响应 good first issue；贡献分支 CI 通过，维护者将其与最新主线组合验证 36 项测试并批准 | 是，尚未合并 |
 | 待记录 | 真实试用反馈 / Issue / 引用 / 下游项目 / 下载统计 | 待记录 | 待记录 | 是 / 否 |

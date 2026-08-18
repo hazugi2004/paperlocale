@@ -21,9 +21,9 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 | 可运行项目 | CLI、两种 Provider、单向状态机、29 项不联网测试 | 已实现 |
 | 可复现质量证据 | 合成双栏 PDF、公式/表格/图片回归、逐页 QA | 已实现 |
 | 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
-| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试和标签构建工作流 | v0.1.0 与 v0.1.1 远端 CI 已通过 |
+| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建和上游兼容性工作流 | v0.1.0、v0.1.1 与[首次真实兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32152325669)已通过 |
 | 公开版本 | [GitHub v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1) | 已发布 |
-| 外部贡献 | 非维护者 fork 与 [两页 PDF QA Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；PR 提交与最新主线组合验证 30 项测试通过，维护者已批准 | 初步证据，等待作者标记 Ready 并合并 |
+| 外部贡献 | 非维护者 fork 与 [两页 PDF QA Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 30 项测试均通过，维护者已批准 | 初步证据，等待作者标记 Ready 并合并 |
 | 广泛使用或真实用户采用 | 尚无非维护者真实翻译反馈、问题报告或下游引用 | 未证明 |
 | 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 已发出，等待维护者反馈 | 已启动，尚无外部回应 |
 

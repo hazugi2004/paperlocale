@@ -11,12 +11,20 @@ from pathlib import Path
 from PIL import Image
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.pdfgen import canvas
+from pypdf import PdfReader
 
 from paperlocale.qa import _extract_text, inspect_pdf_pair
 
 
-def _build_pdf(path: Path, *, pagesize: tuple[float, float], label: str, image: Path) -> None:
-    """生成含双栏、矢量表格、公式文本和图片对象的一页合成论文。"""
+def _build_pdf(
+    path: Path,
+    *,
+    pagesize: tuple[float, float],
+    label: str,
+    image: Path,
+    placeholder: str | None = None,
+) -> None:
+    """生成含不同版式、公式文本和图片对象的两页合成论文。"""
 
     width, height = pagesize
     document = canvas.Canvas(str(path), pagesize=pagesize)
@@ -33,6 +41,20 @@ def _build_pdf(path: Path, *, pagesize: tuple[float, float], label: str, image: 
     for offset in (0, 15, 30, 45):
         document.line(table_x, table_y - offset, table_x + 150, table_y - offset)
     document.drawImage(str(image), width - 140, 70, width=90, height=60)
+    document.showPage()
+
+    document.setFont("Helvetica-Bold", 16)
+    document.drawString(40, height - 50, f"{label} - Figure Layout")
+    document.setFont("Helvetica", 10)
+    document.drawString(40, height - 85, "Second page uses a single-column composition.")
+    document.drawString(40, height - 105, "Formula: F = ma")
+    document.rect(40, height - 330, 220, 170)
+    document.line(55, height - 300, 245, height - 190)
+    document.line(55, height - 190, 245, height - 300)
+    document.drawString(65, height - 350, "Vector diagram")
+    document.drawImage(str(image), width - 220, height - 300, width=140, height=95)
+    if placeholder is not None:
+        document.drawString(40, height - 390, placeholder)
     document.showPage()
     document.save()
 
@@ -73,7 +95,23 @@ class PdfQaTest(unittest.TestCase):
                 dpi=72,
             )
             self.assertEqual(report["errors"], [])
-            self.assertEqual(report["source_pages"], 1)
+            self.assertEqual(report["source_pages"], 2)
+            self.assertEqual(report["translated_pages"], 2)
+            self.assertEqual(len(report["pages"]), 2)
+            expected_box = (0.0, 0.0, float(A4[0]), float(A4[1]))
+            for page in report["pages"]:
+                for box_name in (
+                    "source_media_box",
+                    "translated_media_box",
+                    "source_crop_box",
+                    "translated_crop_box",
+                ):
+                    self.assertEqual(
+                        tuple(round(value, 3) for value in page[box_name]),
+                        tuple(round(value, 3) for value in expected_box),
+                    )
+                self.assertGreaterEqual(page["source_images"], 1)
+                self.assertGreaterEqual(page["translated_images"], 1)
             self.assertEqual(
                 report["source_sha256"],
                 hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -82,8 +120,36 @@ class PdfQaTest(unittest.TestCase):
                 report["translated_sha256"],
                 hashlib.sha256(translated.read_bytes()).hexdigest(),
             )
-            self.assertTrue((root / "qa" / "comparisons" / "page-001.png").is_file())
+            self.assertIn("F = ma", PdfReader(translated).pages[1].extract_text())
+            for page_number in (1, 2):
+                self.assertTrue(
+                    (root / "qa" / "comparisons" / f"page-{page_number:03d}.png").is_file()
+                )
             self.assertTrue(report["visual_inspection_required"])
+
+    def test_placeholder_on_second_page_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "figure.png"
+            Image.new("RGB", (120, 80), "steelblue").save(image)
+            source = root / "source.pdf"
+            translated = root / "translated.pdf"
+            _build_pdf(source, pagesize=A4, label="Source", image=image)
+            _build_pdf(
+                translated,
+                pagesize=A4,
+                label="Translated",
+                image=image,
+                placeholder="{v99}",
+            )
+            report = inspect_pdf_pair(
+                source_pdf=source,
+                translated_pdf=translated,
+                output_dir=root / "qa",
+                dpi=72,
+            )
+            self.assertTrue(any("第2页仍有内部占位符" in error for error in report["errors"]))
+            self.assertTrue((root / "qa" / "comparisons" / "page-002.png").is_file())
 
     def test_page_size_mismatch_is_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

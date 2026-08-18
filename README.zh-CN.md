@@ -1,5 +1,9 @@
 # PaperLocale
 
+[![tests](https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml/badge.svg)](https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml)
+[![release](https://img.shields.io/github/v/release/hazugi2004/paperlocale)](https://github.com/hazugi2004/paperlocale/releases/latest)
+[![license](https://img.shields.io/github/license/hazugi2004/paperlocale)](LICENSE)
+
 PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的目标不是笼统承诺“原格式完全不变”，而是在明确、可测试的边界内保留页数、页面尺寸、栏位、图片、表格和公式，并在科学信息被破坏时拒绝生成候选 PDF。
 
 ## 当前目标

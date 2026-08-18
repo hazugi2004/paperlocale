@@ -1,5 +1,9 @@
 # PaperLocale
 
+[![tests](https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml/badge.svg)](https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml)
+[![release](https://img.shields.io/github/v/release/hazugi2004/paperlocale)](https://github.com/hazugi2004/paperlocale/releases/latest)
+[![license](https://img.shields.io/github/license/hazugi2004/paperlocale)](LICENSE)
+
 Verified, layout-preserving academic PDF translation with pluggable model providers and domain-specific terminology packs.
 
 [中文说明](README.zh-CN.md)

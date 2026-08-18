@@ -54,8 +54,9 @@
 - [x] Wheel 构建与隔离安装验证
 - [x] 贡献指南、Issue/PR 模板与标签构建工作流
 - [ ] 发布到 PyPI
-- [ ] `v0.1.0`
-- [ ] 演示 GIF 和 good first issues
+- [x] GitHub `v0.1.0` Release
+- [x] 三个有验收标准的 good first issues
+- [ ] 演示 GIF
 
 ## 阶段 6：申请准备
 

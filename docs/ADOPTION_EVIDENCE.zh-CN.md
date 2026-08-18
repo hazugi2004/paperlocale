@@ -4,7 +4,9 @@
 
 ## 当前状态
 
-截至 2026-08-18，项目仍处于公开发布前阶段，尚无可验证的外部用户、外部 Issue、外部 PR、下游引用或 PyPI 下载数据。
+项目已于 2026-08-18 发布 [GitHub v0.1.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0)，并由维护者创建三个 good first issues 作为贡献入口。它们证明项目已经公开并可参与，但不属于外部采用证据。
+
+截至目前，尚无可验证的非维护者用户、外部 Issue、外部 PR、下游引用或 PyPI 下载数据。
 
 ## 记录格式
 

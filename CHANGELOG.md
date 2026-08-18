@@ -2,6 +2,12 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
+## Unreleased
+
+### Documentation
+
+- 记录公开 Release、远端 CI、维护者权限和申请准备证据。
+
 ## 0.1.0 - 2026-08-18
 
 ### Added

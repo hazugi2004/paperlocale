@@ -9,7 +9,7 @@
 - Project: PaperLocale
 - Repository: https://github.com/hazugi2004/paperlocale
 - Core maintainer: `hazugi2004`
-- Role evidence: 仓库管理员、提交者和 `v0.1.0` 发布者
+- Role evidence: 仓库管理员、提交者和 `v0.1.0` / `v0.1.1` 发布者
 - License: AGPL-3.0-only
 
 ## 英文项目简介
@@ -26,7 +26,8 @@
 
 ## 已有证据链接
 
-- Release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0
+- Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1
+- Initial release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0
 - CI: https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml
 - Security policy: https://github.com/hazugi2004/paperlocale/security/policy
 - Good first issues: https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22

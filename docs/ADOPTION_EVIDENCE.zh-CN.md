@@ -6,6 +6,9 @@
 
 项目已于 2026-08-18 发布 [GitHub v0.1.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0)，并由维护者创建三个 good first issues 作为贡献入口。它们证明项目已经公开并可参与，但不属于外部采用证据。
 
+同日的发布后审计发现 API 明文传输与 QA 后候选替换边界，并发布了
+[v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1)。该记录证明维护者能够发现问题、增加回归测试并交付补丁版本，但时间跨度仍不足以证明长期维护。
+
 截至目前，尚无可验证的非维护者用户、外部 Issue、外部 PR、下游引用或 PyPI 下载数据。
 
 ## 记录格式
@@ -14,6 +17,7 @@
 
 | 日期 | 证据类型 | 公开链接 | 能证明什么 | 是否为外部贡献者 |
 |---|---|---|---|---|
+| 2026-08-18 | 维护者补丁 Release | [v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1) | 发布后审计、27 项测试、远端构建 | 否 |
 | 待记录 | Issue / PR / 引用 / 下游项目 / 下载统计 | 待记录 | 待记录 | 是 / 否 |
 
 ## 可接受证据

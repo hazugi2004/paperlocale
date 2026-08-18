@@ -2,6 +2,12 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
+## Unreleased
+
+### Documentation
+
+- 记录 v0.1.1 远端测试、发行构建和哈希绑定维护证据。
+
 ## 0.1.1 - 2026-08-18
 
 ### Security

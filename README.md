@@ -10,6 +10,12 @@ Verified, layout-preserving academic PDF translation with pluggable model provid
 
 ![PaperLocale verified workflow](docs/assets/workflow.svg)
 
+The demo below is generated from PaperLocale's own one-page, double-column PDF
+fixture. It contains formula text, a vector table, and an embedded image; no
+copyrighted paper is redistributed.
+
+![PaperLocale source, translation, and all-page QA demo](docs/assets/demo.gif)
+
 ## Status
 
 PaperLocale is under active development. The first release focuses on one strict pipeline:
@@ -103,10 +109,14 @@ After layout-engine upgrades, run the deterministic full-path smoke test:
 
 ```bash
 python -m pip install -e ".[layout,test]"
-python scripts/layout_smoke.py --output tmp/layout-smoke-001
+python scripts/layout_smoke.py \
+  --output tmp/layout-smoke-001 \
+  --demo-gif tmp/layout-smoke-001.gif
 ```
 
 The script intentionally stops before visual acceptance and prints the comparison image to inspect.
+The scheduled compatibility workflow repeats this real CLI check weekly against
+the newest `pdf2zh-next` release allowed by the declared dependency range.
 
 ## Contributing
 

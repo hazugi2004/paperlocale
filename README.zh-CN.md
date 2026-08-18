@@ -8,6 +8,10 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 
 ![PaperLocale 可验证工作流](docs/assets/workflow.svg)
 
+下方演示由 PaperLocale 自有的一页双栏合成 PDF 生成，其中包含公式文本、矢量表格和嵌入图片，不会再分发任何受版权限制的论文。
+
+![PaperLocale 原文、译文与全页 QA 演示](docs/assets/demo.gif)
+
 ## 当前目标
 
 第一条正式生产路径固定为：
@@ -123,7 +127,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 27 项单元测试不联网运行，覆盖内容合同、Provider、断点、PDF 哈希绑定和页面 QA；
+- 29 项单元测试不联网运行，覆盖内容合同、Provider、断点、PDF 哈希绑定、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 合成页包含公式占位、矢量表格与嵌入图片，不提交任何受版权限制的论文；
 - “保版”不等于像素完全一致。中文长度变化会改变行内断行，因此最终候选必须人工逐页核对。
@@ -141,10 +145,13 @@ python -m unittest discover -s tests -v
 
 ```bash
 python -m pip install -e ".[layout,test]"
-python scripts/layout_smoke.py --output tmp/layout-smoke-001
+python scripts/layout_smoke.py \
+  --output tmp/layout-smoke-001 \
+  --demo-gif tmp/layout-smoke-001.gif
 ```
 
 脚本不会自动执行 `accept`。机器检查通过后仍应打开它打印的逐页对照图。
+每周兼容性工作流会安装依赖范围内最新的 `pdf2zh-next`，重复运行这条真实 CLI 闭环；这是对上游接口假设的持续验证，不代表上游已经作出稳定性承诺。
 
 ## 参与贡献
 

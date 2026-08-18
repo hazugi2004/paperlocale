@@ -56,7 +56,7 @@
 - [ ] 发布到 PyPI
 - [x] GitHub `v0.1.0` Release
 - [x] 三个有验收标准的 good first issues
-- [ ] 演示 GIF
+- [x] 自有合成论文的原文、译文与全页 QA 演示 GIF
 
 ## 阶段 6：申请准备
 
@@ -66,6 +66,7 @@
 - [ ] 外部真实用户、Issue 和 PR
 - [ ] 新领域包贡献
 - [x] 发起 [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 上游接口讨论
+- [x] 在等待回复期间按当前 CLI 契约继续，并用每周真实版面冒烟持续验证兼容性
 - [ ] 获得上游回应或提交文档 PR
 
 申请准备的逐项证据与缺口见 [CODEX_FOR_OSS_READINESS.zh-CN.md](CODEX_FOR_OSS_READINESS.zh-CN.md)。

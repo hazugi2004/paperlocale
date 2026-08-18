@@ -18,12 +18,15 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 |---|---|---|
 | 明确的公共开源价值 | 学术 PDF 保版翻译、科学信息硬门禁、可扩展领域术语包 | 已实现 |
 | 核心维护者与写权限 | `MAINTAINERS.md` 与 GitHub `hazugi2004/paperlocale` 管理权限 | 已验证 |
-| 可运行项目 | CLI、两种 Provider、单向状态机、27 项不联网测试 | 已实现 |
+| 可运行项目 | CLI、两种 Provider、单向状态机、29 项不联网测试 | 已实现 |
 | 可复现质量证据 | 合成双栏 PDF、公式/表格/图片回归、逐页 QA | 已实现 |
+| 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
 | 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试和标签构建工作流 | v0.1.0 与 v0.1.1 远端 CI 已通过 |
 | 公开版本 | [GitHub v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1) | 已发布 |
 | 广泛使用或外部采用 | 尚无真实外部用户、Issue、PR 或下游引用 | 未证明 |
 | 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 已发出，等待维护者反馈 | 已启动，尚无外部回应 |
+
+在 #354 获得回复前，项目临时按当前 `CLITranslator` 契约继续开发，并由每周真实版面冒烟工作流验证依赖范围内最新 2.x 版本。该策略降低等待成本，但不等同于上游兼容性承诺。
 
 ## 申请判断
 

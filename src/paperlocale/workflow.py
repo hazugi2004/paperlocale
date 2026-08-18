@@ -21,7 +21,6 @@ from .pipeline import translate_segment_file
 from .providers import TranslationProvider
 from .qa import inspect_pdf_pair
 
-
 STATES = (
     "initialized",
     "collected",
@@ -172,12 +171,21 @@ def initialize_run(
 
 
 def _resolve_pdf2zh(executable: str | Path | None) -> str:
-    resolved = str(executable) if executable else shutil.which("pdf2zh_next")
-    if not resolved:
-        raise FileNotFoundError(
-            "未找到 pdf2zh_next；请安装兼容的 PDFMathTranslate-next/BabelDOC"
-        )
-    return resolved
+    if executable:
+        return str(executable)
+    resolved = shutil.which("pdf2zh_next")
+    if resolved:
+        return resolved
+
+    # 直接执行 ``.venv/bin/python`` 不会自动把 ``.venv/bin`` 加入 PATH，
+    # 但 pip 会把 pdf2zh_next 安装在该解释器旁边。检查这个确定位置可让
+    # 已正确安装的隔离环境无需预先 activate，同时不跨环境猜测其他命令。
+    sibling = Path(sys.executable).with_name("pdf2zh_next")
+    if sibling.is_file():
+        return str(sibling)
+    raise FileNotFoundError(
+        "未找到 pdf2zh_next；请安装兼容的 PDFMathTranslate-next/BabelDOC"
+    )
 
 
 def _bridge_command(*parts: str | Path) -> str:

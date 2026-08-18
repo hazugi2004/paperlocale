@@ -11,8 +11,14 @@ from unittest.mock import patch
 
 from paperlocale.contracts import segment_id, write_jsonl_atomic
 from paperlocale.domains import load_domain_pack
-from paperlocale.providers import Segment, Translation, TranslationContext, TranslationProvider
+from paperlocale.providers import (
+    Segment,
+    Translation,
+    TranslationContext,
+    TranslationProvider,
+)
 from paperlocale.workflow import (
+    _resolve_pdf2zh,
     accept_run,
     collect_run,
     initialize_run,
@@ -156,6 +162,22 @@ class WorkflowTest(unittest.TestCase):
             source.write_bytes(b"changed")
             with self.assertRaisesRegex(ValueError, "发生变化"):
                 collect_run(run_dir, "/fake/pdf2zh_next")
+
+    def test_layout_cli_is_found_next_to_current_interpreter(self) -> None:
+        """未激活 venv 时仍应找到由同一解释器安装的版面命令。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            interpreter = bin_dir / "python"
+            interpreter.touch()
+            layout_cli = bin_dir / "pdf2zh_next"
+            layout_cli.touch()
+            with (
+                patch("paperlocale.workflow.shutil.which", return_value=None),
+                patch("paperlocale.workflow.sys.executable", str(interpreter)),
+            ):
+                self.assertEqual(_resolve_pdf2zh(None), str(layout_cli))
 
     def test_domain_language_mismatch_is_rejected(self) -> None:
         """运行语言必须和领域包声明一致，不能静默套用错误提示。"""

@@ -7,10 +7,9 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
@@ -58,6 +57,81 @@ class SmokeProvider(TranslationProvider):
         return translations
 
 
+def _scaled_default_label(text: str, scale: int = 3) -> Image.Image:
+    """用 Pillow 自带字体生成跨平台标题，避免依赖操作系统字体文件。
+
+    默认位图字体尺寸较小，因此先按原始像素绘制，再用最近邻插值整数倍放大。
+    这种做法在 macOS、Linux 和 CI 中得到相同结果，也不会为一个演示图引入字体依赖。
+    """
+
+    font = ImageFont.load_default()
+    left, top, right, bottom = font.getbbox(text)
+    label = Image.new("RGBA", (right - left + 2, bottom - top + 2), (0, 0, 0, 0))
+    ImageDraw.Draw(label).text((-left + 1, -top + 1), text, font=font, fill="#10243e")
+    return label.resize(
+        (label.width * scale, label.height * scale),
+        Image.Resampling.NEAREST,
+    )
+
+
+def _demo_frame(content: Image.Image, title: str, accent: str) -> Image.Image:
+    """把一张 QA 页面放入固定尺寸画布，保证 GIF 各帧尺寸完全一致。"""
+
+    canvas = Image.new("RGB", (960, 720), "#f5f7fb")
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((20, 18, 940, 702), radius=18, fill="white", outline="#d8deea")
+    draw.rounded_rectangle((36, 32, 48, 66), radius=6, fill=accent)
+    label = _scaled_default_label(title)
+    canvas.paste(label, (62, 38), label)
+
+    # 只在副本上缩放，调用方传入的源图不会被修改；缩略图保留原始宽高比。
+    fitted = content.convert("RGB")
+    fitted.thumbnail((888, 610), Image.Resampling.LANCZOS)
+    x = (canvas.width - fitted.width) // 2
+    y = 78 + (610 - fitted.height) // 2
+    canvas.paste(fitted, (x, y))
+    return canvas
+
+
+def build_demo_gif(comparison_path: Path, output_path: Path) -> Path:
+    """把真实逐页 QA 对照图转换为可嵌入 README 的三帧演示 GIF。
+
+    第一帧展示原文页，第二帧展示译文页，第三帧回到完整并排对照。
+    输入必须是 PaperLocale 生成的左右等宽对照图；奇数像素会归入右半页。
+    """
+
+    comparison_file = comparison_path.expanduser().resolve()
+    if not comparison_file.is_file():
+        raise FileNotFoundError(f"QA 对照图不存在：{comparison_file}")
+    with Image.open(comparison_file) as opened:
+        comparison = opened.convert("RGB")
+    if comparison.width < 2 or comparison.height < 2:
+        raise ValueError("QA 对照图尺寸过小，无法拆分原文页与译文页")
+
+    midpoint = comparison.width // 2
+    source = comparison.crop((0, 0, midpoint, comparison.height))
+    translated = comparison.crop((midpoint, 0, comparison.width, comparison.height))
+    frames = [
+        _demo_frame(source, "1  SOURCE PDF", "#2f6feb"),
+        _demo_frame(translated, "2  TRANSLATED PDF", "#2da44e"),
+        _demo_frame(comparison, "3  ALL-PAGE QA COMPARISON", "#8250df"),
+    ]
+
+    destination = output_path.expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(
+        destination,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=[1500, 1500, 2400],
+        loop=0,
+        optimize=True,
+        disposal=2,
+    )
+    return destination
+
+
 def build_synthetic_pdf(path: Path, figure_path: Path) -> None:
     """生成包含双栏、公式、矢量表格和图片对象的一页 A4 测试论文。"""
 
@@ -89,6 +163,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=Path("tmp/layout-smoke"))
     parser.add_argument("--pdf2zh-bin")
     parser.add_argument("--pdftoppm-bin")
+    parser.add_argument(
+        "--demo-gif",
+        type=Path,
+        help="可选：把首张逐页 QA 对照图导出为 README 演示 GIF",
+    )
     return parser
 
 
@@ -98,10 +177,6 @@ def main() -> int:
     if root.exists():
         raise FileExistsError(f"输出目录已存在，请更换 --output，避免覆盖证据：{root}")
     root.mkdir(parents=True)
-
-    pdf2zh = args.pdf2zh_bin or shutil.which("pdf2zh_next")
-    if not pdf2zh:
-        raise FileNotFoundError("未找到 pdf2zh_next；请安装项目的 layout 可选依赖")
 
     figure = root / "figure.png"
     Image.new("RGB", (240, 160), "steelblue").save(figure)
@@ -116,10 +191,10 @@ def main() -> int:
         source_language="en",
         target_language="zh-CN",
     )
-    collect_run(run_dir, pdf2zh)
+    collect_run(run_dir, args.pdf2zh_bin)
     translate_run(run_dir=run_dir, provider=SmokeProvider(), domain=domain)
     validate_run(run_dir, domain)
-    translated_pdf = render_run(run_dir, pdf2zh)
+    translated_pdf = render_run(run_dir, args.pdf2zh_bin)
     report = qa_run(
         run_dir,
         dpi=96,
@@ -128,6 +203,8 @@ def main() -> int:
     comparison = Path(str(report["pages"][0]["comparison"]))
     print(f"版面冒烟测试通过：{translated_pdf}")
     print(f"仍需人工查看逐页对照：{comparison}")
+    if args.demo_gif:
+        print(f"演示 GIF 已生成：{build_demo_gif(comparison, args.demo_gif)}")
     return 0
 
 

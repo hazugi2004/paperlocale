@@ -35,3 +35,5 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 2. ~~创建 2–3 个有明确验收标准的 `good first issue`，邀请领域包和兼容性贡献；~~
 3. 用可公开的合成 PDF 或开放许可论文收集首批非维护者反馈；
 4. 在本项目和上游留下可复核的 Issue/PR 记录，再更新采用证据台账并申请。
+
+可编辑的英文回答见 [CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md](CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md)。

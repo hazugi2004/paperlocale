@@ -34,7 +34,7 @@ The project does not promise bitwise-identical typography. Chinese text naturall
 - `openai-compatible`: BYOK access to OpenAI and compatible endpoints;
 - an extensible `atmospheric-science` pack with terminology and evaluation cases;
 - a resumable `collect -> translate -> validate -> render -> qa -> accept` workflow;
-- page geometry, image object, blank-page, placeholder, and all-page visual checks.
+- page geometry, image-object, vector-drawing, blank-page, placeholder, and all-page visual checks.
 
 PaperLocale never reads or copies Codex authentication files. ChatGPT-managed Codex access is for trusted local use only and is not exposed as a public translation API.
 

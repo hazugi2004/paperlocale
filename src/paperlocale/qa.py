@@ -13,8 +13,18 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 from pypdf import PdfReader
 
-
 PLACEHOLDER_RE = re.compile(r"\{v\d+\}|<style\s+id=|</style>", re.IGNORECASE)
+VECTOR_PAINT_OPERATORS = {
+    b"S",
+    b"s",
+    b"f",
+    b"F",
+    b"f*",
+    b"B",
+    b"B*",
+    b"b",
+    b"b*",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -37,7 +47,19 @@ def _box(page: object, name: str) -> tuple[float, float, float, float]:
 def _image_count(page: object) -> int:
     """统计页面可枚举图片；解析失败时交给调用方记录警告。"""
 
-    return len(list(getattr(page, "images")))
+    return len(list(page.images))  # type: ignore[attr-defined]
+
+
+def _vector_paint_count(page: object) -> int:
+    """统计页面内容流中实际描边或填充的路径，用于发现矢量表格/图形丢失。"""
+
+    contents = page.get_contents()  # type: ignore[attr-defined]
+    if contents is None:
+        return 0
+    return sum(
+        operator in VECTOR_PAINT_OPERATORS
+        for _operands, operator in contents.operations
+    )
 
 
 def _extract_text(page: object) -> tuple[str, int]:
@@ -63,7 +85,7 @@ def _extract_text(page: object) -> tuple[str, int]:
     logger.setLevel(logging.WARNING)
     logger.propagate = False
     try:
-        text = getattr(page, "extract_text")() or ""
+        text = page.extract_text() or ""  # type: ignore[attr-defined]
     finally:
         logger.handlers = original_handlers
         logger.setLevel(original_level)
@@ -189,12 +211,23 @@ def inspect_pdf_pair(
         try:
             source_images = _image_count(source_page)
             target_images = _image_count(target_page)
-        except Exception as exc:  # pypdf 对少数损坏 XObject 可能无法枚举。
+        except Exception as exc:  # noqa: BLE001  # pypdf 可能抛出多类解析异常。
             source_images = target_images = -1
             warnings.append(f"第{index + 1}页图片对象无法枚举：{exc}")
         if source_images >= 0 and target_images < source_images:
-            warnings.append(
+            errors.append(
                 f"第{index + 1}页图片对象减少：source={source_images}, translated={target_images}"
+            )
+        try:
+            source_vectors = _vector_paint_count(source_page)
+            target_vectors = _vector_paint_count(target_page)
+        except Exception as exc:  # noqa: BLE001  # 特殊内容流异常类型不固定。
+            source_vectors = target_vectors = -1
+            warnings.append(f"第{index + 1}页矢量绘图无法枚举：{exc}")
+        if source_vectors >= 0 and target_vectors < source_vectors:
+            errors.append(
+                f"第{index + 1}页矢量绘图减少："
+                f"source={source_vectors}, translated={target_vectors}"
             )
         pages.append(
             {
@@ -205,6 +238,8 @@ def inspect_pdf_pair(
                 "translated_crop_box": target_crop,
                 "source_images": source_images,
                 "translated_images": target_images,
+                "source_vector_drawings": source_vectors,
+                "translated_vector_drawings": target_vectors,
                 "translated_text_characters": len(target_text),
             }
         )

@@ -102,6 +102,42 @@ class PdfQaTest(unittest.TestCase):
             )
             self.assertTrue(any("MediaBox" in error for error in report["errors"]))
 
+    def test_lost_image_and_vector_table_are_errors(self) -> None:
+        """译文页丢失图片或矢量表格时必须阻止 QA，而不只是发出警告。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "figure.png"
+            Image.new("RGB", (120, 80), "steelblue").save(image)
+            source = root / "source.pdf"
+            translated = root / "translated.pdf"
+            _build_pdf(source, pagesize=A4, label="Source", image=image)
+
+            _width, height = A4
+            document = canvas.Canvas(str(translated), pagesize=A4)
+            document.setFont("Helvetica", 9)
+            # 译文保留足够正文以通过空白页检查，但故意不绘制图片和矢量表格。
+            for row in range(24):
+                document.drawString(
+                    40,
+                    height - 50 - row * 22,
+                    f"Translated paragraph {row + 1}: E = mc^2",
+                )
+            document.showPage()
+            document.save()
+
+            report = inspect_pdf_pair(
+                source_pdf=source,
+                translated_pdf=translated,
+                output_dir=root / "qa",
+                dpi=72,
+            )
+            self.assertTrue(any("图片对象减少" in error for error in report["errors"]))
+            self.assertTrue(any("矢量绘图减少" in error for error in report["errors"]))
+            page = report["pages"][0]
+            self.assertGreater(page["source_vector_drawings"], 0)
+            self.assertEqual(page["translated_vector_drawings"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

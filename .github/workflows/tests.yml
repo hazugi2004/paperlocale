@@ -21,6 +21,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install PDF rendering dependency
+        # 两项 PDF QA 测试会真实调用 pdftoppm，CI 镜像默认不包含 Poppler。
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes poppler-utils
       - name: Install project
         run: python -m pip install ".[test]"
       - name: Run unit tests

@@ -65,7 +65,8 @@
 - [ ] 跨周持续发布和兼容性维护
 - [ ] 外部真实用户、Issue 和 PR
 - [ ] 新领域包贡献
-- [ ] 上游 BabelDOC/PDFMathTranslate 协作记录
+- [x] 发起 [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 上游接口讨论
+- [ ] 获得上游回应或提交文档 PR
 
 申请准备的逐项证据与缺口见 [CODEX_FOR_OSS_READINESS.zh-CN.md](CODEX_FOR_OSS_READINESS.zh-CN.md)。
 

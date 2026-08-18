@@ -1,6 +1,7 @@
 # PaperLocale 社区沟通草稿
 
-状态：仅为草稿，尚未代表维护者发布。发出后应把公开链接写入采用证据台账，但不能把维护者自己的帖子算作外部采用。
+状态：上游讨论已于 2026-08-18 发布为
+[PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)；中英文社区发布仍为未发送草稿。维护者自己的帖子不算外部采用，只有非维护者回应、Issue、PR 或下游使用才能形成对应证据。
 
 ## PDFMathTranslate-next / BabelDOC 上游讨论
 
@@ -29,7 +30,7 @@
 >
 > I am not asking the upstream project to support PaperLocale-specific validation rules; I mainly want to avoid relying on accidental CLI behavior. I can prepare a focused documentation PR if this pattern fits the project direction.
 
-发布前需要把目标仓库的版本、模板要求和是否更适合 Discussion 而非 Issue 再核对一次。
+目标仓库未启用 GitHub Discussions，但提供专门的 “Discussion Issue” 模板；发布前已检索 `CLITranslator`、`clitranslator-command` 和 collect/lookup，未发现重复项。
 
 ## 中文社区发布
 

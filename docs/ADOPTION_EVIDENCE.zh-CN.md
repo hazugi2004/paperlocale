@@ -9,6 +9,9 @@
 同日的发布后审计发现 API 明文传输与 QA 后候选替换边界，并发布了
 [v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1)。该记录证明维护者能够发现问题、增加回归测试并交付补丁版本，但时间跨度仍不足以证明长期维护。
 
+维护者还在 PDFMathTranslate-next 上游发布了
+[CLITranslator 两阶段集成讨论 #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)。它证明上游沟通已经开始；在上游维护者或其他参与者回复前，它仍不构成外部认可或采用。
+
 截至目前，尚无可验证的非维护者用户、外部 Issue、外部 PR、下游引用或 PyPI 下载数据。
 
 ## 记录格式
@@ -18,6 +21,7 @@
 | 日期 | 证据类型 | 公开链接 | 能证明什么 | 是否为外部贡献者 |
 |---|---|---|---|---|
 | 2026-08-18 | 维护者补丁 Release | [v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1) | 发布后审计、27 项测试、远端构建 | 否 |
+| 2026-08-18 | 维护者发起的上游讨论 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) | 两阶段 CLITranslator 接口稳定性与文档协作请求 | 否，等待外部回复 |
 | 待记录 | Issue / PR / 引用 / 下游项目 / 下载统计 | 待记录 | 待记录 | 是 / 否 |
 
 ## 可接受证据

@@ -23,7 +23,7 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 | 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试和标签构建工作流 | v0.1.0 与 v0.1.1 远端 CI 已通过 |
 | 公开版本 | [GitHub v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1) | 已发布 |
 | 广泛使用或外部采用 | 尚无真实外部用户、Issue、PR 或下游引用 | 未证明 |
-| 上游生态协作 | 尚无公开的 BabelDOC/PDFMathTranslate-next Issue 或 PR | 未证明 |
+| 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 已发出，等待维护者反馈 | 已启动，尚无外部回应 |
 
 ## 申请判断
 

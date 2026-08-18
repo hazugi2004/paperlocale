@@ -33,6 +33,7 @@
 - Good first issues: https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 - Architecture: https://github.com/hazugi2004/paperlocale/blob/main/docs/ARCHITECTURE.md
 - Adoption ledger: https://github.com/hazugi2004/paperlocale/blob/main/docs/ADOPTION_EVIDENCE.zh-CN.md
+- Upstream integration discussion: https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354
 
 ## 提交前仍需补强
 

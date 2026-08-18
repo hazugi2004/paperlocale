@@ -35,6 +35,7 @@
 - Adoption ledger: https://github.com/hazugi2004/paperlocale/blob/main/docs/ADOPTION_EVIDENCE.zh-CN.md
 - Upstream integration discussion: https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354
 - First external contribution: https://github.com/hazugi2004/paperlocale/pull/4
+- Provider evaluation evidence: https://github.com/hazugi2004/paperlocale/blob/main/docs/PROVIDER_EVALUATION.zh-CN.md
 
 ## 提交前仍需补强
 

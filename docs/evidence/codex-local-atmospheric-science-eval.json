@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "domain_pack": {
+    "id": "atmospheric-science",
+    "version": "1.0.0"
+  },
+  "source_language": "en",
+  "target_language": "zh-CN",
+  "provider": {
+    "name": "codex-local",
+    "model": null
+  },
+  "case_count": 5,
+  "contract_passed_count": 5,
+  "contract_failed_count": 0,
+  "exact_reference_match_count": 0,
+  "manual_semantic_review_required": true,
+  "cases": [
+    {
+      "case": 1,
+      "id": "307d06eea13745b42f62c22edd7ad2912952911ca2658b0c31b7897e92ff6bde",
+      "source": "ERA5 reanalysis data have a spatial resolution of 0.25°.",
+      "reference_target": "ERA5 再分析资料的空间分辨率为0.25°。",
+      "candidate_target": "ERA5 再分析资料的空间分辨率为 0.25°。",
+      "contract_passed": true,
+      "contract_errors": [],
+      "exact_reference_match": false,
+      "semantic_review": "required"
+    },
+    {
+      "case": 2,
+      "id": "82c9cb1e78b403b397281878768c94bdbe886cfa2ee91dbd06ca8c3cc6ddafc7",
+      "source": "Gross primary productivity (GPP) decreased slightly by 2.5%.",
+      "reference_target": "总初级生产力（GPP）小幅下降2.5%。",
+      "candidate_target": "总初级生产力 (GPP) 略微下降了 2.5%。",
+      "contract_passed": true,
+      "contract_errors": [],
+      "exact_reference_match": false,
+      "semantic_review": "required"
+    },
+    {
+      "case": 3,
+      "id": "12e1ea2cb78b11a4f2f74c0449e192ae900ad24c7d8622ab7e1f24c1ee17e496",
+      "source": "The compound dry-hot event is defined by {v1} at the site scale.",
+      "reference_target": "站点尺度的复合干热事件由{v1}定义。",
+      "candidate_target": "在站点尺度上，复合干热事件由 {v1} 定义。",
+      "contract_passed": true,
+      "contract_errors": [],
+      "exact_reference_match": false,
+      "semantic_review": "required"
+    },
+    {
+      "case": 4,
+      "id": "3905aad586d8f9f8a7508fb21229478e681a09636549222d5911d37d6c17bd21",
+      "source": "Net ecosystem exchange (NEE) was associated with soil moisture, DOI 10.1000/demo.",
+      "reference_target": "净生态系统交换（NEE）与土壤湿度相关，DOI 10.1000/demo。",
+      "candidate_target": "净生态系统交换 (NEE) 与土壤湿度相关，DOI 10.1000/demo。",
+      "contract_passed": true,
+      "contract_errors": [],
+      "exact_reference_match": false,
+      "semantic_review": "required"
+    },
+    {
+      "case": 5,
+      "id": "c3e7d1838dad1a51f914af80b392fc43474e1b231c2c7ce67866c6c052137df4",
+      "source": "<style id='1'>Sensitivity analysis</style> used PET in mm.",
+      "reference_target": "<style id='1'>敏感性分析</style>使用以 mm 表示的 PET。",
+      "candidate_target": "<style id='1'>敏感性分析</style>使用了单位为 mm 的 PET。",
+      "contract_passed": true,
+      "contract_errors": [],
+      "exact_reference_match": false,
+      "semantic_review": "required"
+    }
+  ]
+}

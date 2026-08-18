@@ -9,6 +9,7 @@
 - 增加由真实 QA 对照图生成的 README 演示 GIF；
 - 增加每周与手动触发的 `pdf2zh-next` 真实版面兼容性工作流。
 - 增加 `paperlocale run`，复用现有状态机从当前断点一键推进到机器 QA，并保留显式人工验收。
+- 增加 `paperlocale provider-eval`，用领域案例原子保存真实候选、参考译文与内容合同结果，并明确保留人工语义复核。
 
 ### Fixed
 

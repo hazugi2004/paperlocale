@@ -27,6 +27,7 @@
 - [x] Provider 协议与确定性测试 Provider
 - [x] `codex-local`
 - [x] `openai-compatible`
+- [x] 真实 Provider 领域案例评估与原子 JSON 报告
 - [x] 结构化输出、批次和断点测试
 
 完成标准：两个真实 Provider 产生的结果都必须经过同一门禁，且凭据不落盘。
@@ -67,6 +68,7 @@
 - [x] 首个非维护者 fork 与 [Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)
 - [ ] 合并首个外部 PR
 - [ ] 非维护者真实试用反馈或问题报告
+- [ ] 领域人员完成首份 Provider 语义复核
 - [ ] 新领域包贡献
 - [x] 发起 [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 上游接口讨论
 - [x] 在等待回复期间按当前 CLI 契约继续，并用每周真实版面冒烟持续验证兼容性

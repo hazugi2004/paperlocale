@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .contracts import validate_translation, validate_translation_files
 from .domains import load_domain_pack
+from .evaluation import evaluate_provider, write_evaluation_report
 from .pipeline import translate_segment_file
 from .providers import CodexLocalProvider, OpenAICompatibleProvider
 from .workflow import (
@@ -72,6 +73,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     domain = subparsers.add_parser("domain-check", help="验证内置或外部领域包")
     domain.add_argument("domain")
+
+    provider_eval = subparsers.add_parser(
+        "provider-eval",
+        help="用领域案例生成 Provider 合同与人工语义复核报告",
+    )
+    provider_eval.add_argument("--domain", default="atmospheric-science")
+    provider_eval.add_argument(
+        "--provider",
+        choices=("codex-local", "openai-compatible"),
+        required=True,
+    )
+    provider_eval.add_argument("--model")
+    provider_eval.add_argument("--codex-bin")
+    provider_eval.add_argument("--base-url")
+    provider_eval.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    provider_eval.add_argument("--output", type=Path, required=True)
 
     validate = subparsers.add_parser("validate-segments", help="验证片段与译文 JSONL")
     validate.add_argument("--segments", type=Path, required=True)
@@ -182,6 +199,22 @@ def main() -> int:
     if args.command == "domain-check":
         _domain_check(args.domain)
         return 0
+    if args.command == "provider-eval":
+        pack = load_domain_pack(args.domain)
+        report = evaluate_provider(
+            provider=_provider_from_args(args),
+            provider_name=args.provider,
+            model=args.model,
+            domain=pack,
+        )
+        output = write_evaluation_report(args.output, report)
+        print(
+            f"Provider 评估完成：合同通过 {report['contract_passed_count']}/"
+            f"{report['case_count']}，参考译文完全匹配 "
+            f"{report['exact_reference_match_count']}/{report['case_count']}"
+        )
+        print(f"报告：{output}；语义准确性仍需逐条人工复核")
+        return 1 if report["contract_failed_count"] else 0
     if args.command == "translate-segments":
         pack = load_domain_pack(args.domain)
         provider = _provider_from_args(args)

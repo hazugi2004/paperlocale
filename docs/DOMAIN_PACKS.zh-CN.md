@@ -40,4 +40,15 @@ cp -R src/paperlocale/packs/atmospheric-science /tmp/your-domain
 paperlocale domain-check /tmp/your-domain
 ```
 
+检查数据文件后，再用计划采用的真实 Provider 运行公开案例：
+
+```bash
+paperlocale provider-eval \
+  --provider codex-local \
+  --domain /tmp/your-domain \
+  --output tmp/your-domain-provider-eval.json
+```
+
+命令会原子写入每条原文、参考译文、候选译文、内容合同错误和逐字匹配结果。合同失败时报告仍会保留，但命令返回非零。逐字不匹配不等于语义错误；报告始终标记 `manual_semantic_review_required=true`，必须由理解该领域的人逐条判断术语、限定词、因果强度和专业含义。
+
 提交新领域包时，还应在 `tests/` 增加一个加载测试，并说明术语来源与专业边界。不要提交受版权保护的整篇论文、完整译文或数据库导出。

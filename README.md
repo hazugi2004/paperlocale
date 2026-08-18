@@ -50,6 +50,20 @@ python -m paperlocale validate-segments \
   --domain atmospheric-science
 ```
 
+Evaluate a real Provider on every public domain case and save candidates next
+to their references:
+
+```bash
+paperlocale provider-eval \
+  --provider codex-local \
+  --domain atmospheric-science \
+  --output provider-eval.json
+```
+
+The report automatically evaluates only the hard content contract and exact
+reference matches. It never treats string similarity as semantic accuracy;
+every candidate remains marked for manual domain review.
+
 ## Install
 
 Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workflow.

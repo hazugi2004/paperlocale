@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+output/
+tmp/
+*.pdf
+!.github/fixtures/*.pdf
+
+# 任何 Provider 密钥和 Codex 登录材料都不得进入版本库。
+.env
+.env.*
+auth.json

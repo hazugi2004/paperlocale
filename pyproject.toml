@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperlocale"
+version = "0.1.0"
+description = "Verified, layout-preserving academic PDF translation with pluggable providers and domain packs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0-only" }
+authors = [{ name = "PaperLocale contributors" }]
+dependencies = [
+  "Pillow>=10",
+  "pypdf>=6",
+]
+keywords = [
+  "academic-pdf",
+  "pdf-translation",
+  "babeldoc",
+  "codex",
+  "scientific-translation",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: GNU Affero General Public License v3",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Text Processing :: Linguistic",
+]
+
+[project.scripts]
+paperlocale = "paperlocale.cli:main"
+
+[project.optional-dependencies]
+test = ["reportlab>=4"]
+layout = ["pdf2zh-next>=2.9,<3"]
+
+[project.urls]
+Repository = "https://github.com/hazugi2004/paperlocale"
+Issues = "https://github.com/hazugi2004/paperlocale/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+paperlocale = ["packs/*/*"]

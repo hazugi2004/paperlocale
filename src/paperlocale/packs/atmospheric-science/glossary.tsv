@@ -1,0 +1,18 @@
+source	target	required	note
+reanalysis data	再分析资料	true	具体产品名和版本必须保留
+remote sensing product	遥感产品	true	反演产品可按上下文使用 retrieval product
+eddy covariance observations	涡度协方差观测	true	不要泛化为普通站点观测
+gross primary productivity	总初级生产力	true	保留缩写 GPP
+net ecosystem exchange	净生态系统交换	true	保留缩写 NEE 并保持正负号定义
+soil moisture	土壤湿度	true	具体层次必须保留深度
+vegetation index	植被指数	true	NDVI/EVI 等缩写原样保留
+compound dry-hot event	复合干热事件	true	全文统一
+compound dry-hot condition	复合干热状况	true	用于状态或条件而非独立事件
+land-atmosphere interaction	陆气相互作用	true	不要与 land-atmosphere coupling 混淆
+potential evapotranspiration	潜在蒸散发	true	保留缩写 PET
+significance test	显著性检验	true	具体检验名称必须保留
+sensitivity analysis	敏感性分析	true	不能与稳健性分析混用
+robustness analysis	稳健性分析	true	不能与敏感性分析混用
+bias correction	偏差校正	true	quantile mapping 应显式保留
+spatial resolution	空间分辨率	true	数值和单位必须保留
+temporal resolution	时间分辨率	true	数值和时间单位必须保留

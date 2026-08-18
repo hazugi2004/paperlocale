@@ -1,0 +1,47 @@
+name: Bug report
+description: 报告可复现的翻译、门禁或版面问题
+title: "[Bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: 请勿上传无权公开的论文、API Key、Codex 登录文件或完整译本。
+  - type: input
+    id: version
+    attributes:
+      label: PaperLocale 版本或提交
+      placeholder: v0.1.0 或 Git SHA
+    validations:
+      required: true
+  - type: input
+    id: layout_version
+    attributes:
+      label: pdf2zh-next / BabelDOC 版本
+      placeholder: pdf2zh-next 2.9.0
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 失败阶段
+      options: [collect, translate, validate, render, qa, accept]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 最小复现步骤
+      description: 优先使用自行生成或可公开的小型 PDF，并附准确命令。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏日志或 QA 报告
+      render: shell

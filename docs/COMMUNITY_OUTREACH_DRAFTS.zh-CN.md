@@ -1,7 +1,7 @@
 # PaperLocale 社区沟通草稿
 
 状态：上游讨论已于 2026-08-18 发布为
-[PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)；中英文社区发布仍为未发送草稿。维护者自己的帖子不算外部采用，只有非维护者回应、Issue、PR 或下游使用才能形成对应证据。
+[PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)，并于 2026-08-19 发布 [v0.2.0 兼容性证据跟进](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545)；中英文社区发布仍为未发送草稿。维护者自己的帖子不算外部采用，只有非维护者回应、Issue、PR 或下游使用才能形成对应证据。
 
 ## PDFMathTranslate-next / BabelDOC 上游讨论
 

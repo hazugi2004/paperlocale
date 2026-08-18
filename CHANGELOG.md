@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### Documentation
+
+- 发布 v0.2.0 后，在 PDFMathTranslate-next #354 补充真实兼容性与标签发行构建证据，继续等待外部回应。
+
 ## 0.2.0 - 2026-08-18
 
 ### Added

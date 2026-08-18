@@ -1,6 +1,6 @@
 # Codex for Open Source 申请准备
 
-核验日期：2026-08-18。
+核验日期：2026-08-19。
 
 ## 官方条件与权益
 
@@ -26,7 +26,7 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 | 公开版本 | [GitHub v0.2.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.2.0) | 已发布 |
 | 外部贡献 | 非维护者 fork 与 [两页 PDF QA Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 36 项测试均通过，维护者已批准 | 初步证据，等待作者标记 Ready 并合并 |
 | 广泛使用或真实用户采用 | 尚无非维护者真实翻译反馈、问题报告或下游引用 | 未证明 |
-| 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 已发出，等待维护者反馈 | 已启动，尚无外部回应 |
+| 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 与 [v0.2.0 证据跟进](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545) 已发出 | 已持续跟进，尚无外部回应 |
 
 在 #354 获得回复前，项目临时按当前 `CLITranslator` 契约继续开发，并由每周真实版面冒烟工作流验证依赖范围内最新 2.x 版本。该策略降低等待成本，但不等同于上游兼容性承诺。
 

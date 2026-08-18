@@ -1,5 +1,7 @@
 # PaperLocale 采用证据台账
 
+核验日期：2026-08-19。
+
 本文件只记录可以由公开链接复核的真实采用，不把维护者自己创建的测试 Issue、下载或 Star 当作外部用户证据。
 
 ## 当前状态
@@ -12,7 +14,7 @@
 随后发布的 [v0.2.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.2.0) 增加一键断点续跑、图片与矢量绘图硬门禁、真实 Provider 领域评估及 37 项测试。它证明用户可见功能已经进入正式发行，但同日版本迭代仍不能替代跨周维护或真实用户采用。
 
 维护者还在 PDFMathTranslate-next 上游发布了
-[CLITranslator 两阶段集成讨论 #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)。它证明上游沟通已经开始；在上游维护者或其他参与者回复前，它仍不构成外部认可或采用。
+[CLITranslator 两阶段集成讨论 #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)，并在 v0.2.0 发布后补充了[真实兼容性与标签构建证据](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545)。它证明上游沟通和可复现跟进已经开始；在上游维护者或其他参与者回复前，它仍不构成外部认可或采用。
 
 非维护者 `icecold009` 已公开 fork 仓库，并针对 good first issue #2 提交
 [两页 PDF QA 回归 PR #4](https://github.com/hazugi2004/paperlocale/pull/4)。维护者已在隔离工作树中将该提交与最新 `main` 组合验证，36 项测试全部通过，并公开提交批准评审和[最新主线兼容性说明](https://github.com/hazugi2004/paperlocale/pull/4#issuecomment-5330379908)；GitHub 的[首次贡献者 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)也已通过。该 PR 仍由作者标记为 Draft，尚未合并，因此它可以证明贡献入口已吸引首个外部参与者，但不能写成已采用、已发布或已合并贡献。
@@ -28,6 +30,7 @@
 | 2026-08-18 | 维护者补丁 Release | [v0.1.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.1) | 发布后审计、27 项测试、远端构建 | 否 |
 | 2026-08-18 | 功能 Release | [v0.2.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.2.0) | 一键运行、结构门禁、Provider 评估、37 项测试与发行构建 | 否 |
 | 2026-08-18 | 维护者发起的上游讨论 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) | 两阶段 CLITranslator 接口稳定性与文档协作请求 | 否，等待外部回复 |
+| 2026-08-19 | 维护者上游跟进 | [v0.2.0 兼容性证据](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545) | 真实兼容性运行、标签构建和结构 QA 证据 | 否，等待外部回复 |
 | 2026-08-18 | 外部 fork 与 Draft PR | [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) / [CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274) | 非维护者响应 good first issue；贡献分支 CI 通过，维护者将其与最新主线组合验证 36 项测试并批准 | 是，尚未合并 |
 | 待记录 | 真实试用反馈 / Issue / 引用 / 下游项目 / 下载统计 | 待记录 | 待记录 | 是 / 否 |
 

@@ -65,26 +65,29 @@ paperlocale domain-check atmospheric-science
 
 ## Quick start
 
-```bash
-paperlocale init-run paper.pdf --run-dir runs/paper
-paperlocale collect --run-dir runs/paper
+Use one resumable command to initialize the run, collect layout segments,
+translate, validate, rebuild, and generate all-page QA:
 
+```bash
 # Uses the authenticated Codex CLI session on this trusted local machine.
-paperlocale translate --run-dir runs/paper \
+paperlocale run paper.pdf --run-dir runs/paper \
   --provider codex-local --domain atmospheric-science
 
-paperlocale validate --run-dir runs/paper --domain atmospheric-science
-paperlocale render --run-dir runs/paper
-paperlocale qa --run-dir runs/paper
 # Inspect every image under runs/paper/qa/comparisons/ before acceptance.
 paperlocale accept --run-dir runs/paper --reviewed-by "Your name"
 ```
+
+If a stage fails, rerun the same `paperlocale run` command. The manifest resumes
+from the last completed stage and validated translation batches are reused.
+The command deliberately stops at `qa_generated`; it never records human
+acceptance. Once translation is complete, a resume command does not need
+`--provider` or API credentials.
 
 For a BYOK OpenAI-compatible endpoint:
 
 ```bash
 export PAPERLOCALE_API_KEY="your-key"
-paperlocale translate --run-dir runs/paper \
+paperlocale run paper.pdf --run-dir runs/paper \
   --provider openai-compatible \
   --base-url https://api.example.com/v1 \
   --model your-model \
@@ -93,6 +96,9 @@ paperlocale translate --run-dir runs/paper \
 
 Remote compatible endpoints must use HTTPS. Plain HTTP is accepted only for
 loopback services on `localhost`, `127.0.0.1`, or `::1`.
+
+For explicit stage-by-stage control, the same production path remains available
+as `init-run -> collect -> translate -> validate -> render -> qa -> accept`.
 
 See the detailed [Chinese guide](README.zh-CN.md), [ROADMAP](docs/ROADMAP.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [domain-pack guide](docs/DOMAIN_PACKS.zh-CN.md), [Codex for Open Source readiness](docs/CODEX_FOR_OSS_READINESS.zh-CN.md), and [PROVENANCE](docs/PROVENANCE.md).
 

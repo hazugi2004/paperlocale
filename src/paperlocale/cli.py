@@ -1,4 +1,4 @@
-"""PaperLocale 当前可用的合同与领域包检查命令。"""
+"""PaperLocale 可验证学术 PDF 翻译命令行入口。"""
 
 from __future__ import annotations
 
@@ -6,17 +6,18 @@ import argparse
 import os
 from pathlib import Path
 
-from .contracts import validate_translation_files, validate_translation
+from .contracts import validate_translation, validate_translation_files
 from .domains import load_domain_pack
 from .pipeline import translate_segment_file
 from .providers import CodexLocalProvider, OpenAICompatibleProvider
 from .workflow import (
-    collect_run,
     accept_run,
+    collect_run,
     initialize_run,
     load_manifest,
     qa_run,
     render_run,
+    run_to_qa,
     translate_run,
     validate_run,
 )
@@ -36,6 +37,32 @@ def _domain_check(identifier: str) -> None:
     print(
         f"领域包通过：{pack.pack_id} {pack.version}，"
         f"术语 {len(pack.glossary)} 条，案例 {len(pack.eval_cases)} 条"
+    )
+
+
+def _initialize_or_load_run(
+    *,
+    source_pdf: Path,
+    run_dir: Path,
+    source_language: str,
+    target_language: str,
+    pages: str | None,
+) -> dict[str, object]:
+    """新建运行或核对既有运行仍绑定同一源 PDF，禁止误续跑其他论文。"""
+
+    source = source_pdf.expanduser().resolve()
+    root = run_dir.expanduser().resolve()
+    if (root / "run_manifest.json").is_file():
+        manifest = load_manifest(root)
+        if Path(str(manifest["source_pdf"])).resolve() != source:
+            raise ValueError("--run-dir 已绑定另一份源 PDF；请使用新的运行目录")
+        return manifest
+    return initialize_run(
+        source_pdf=source,
+        run_dir=root,
+        source_language=source_language,
+        target_language=target_language,
+        pages=pages,
     )
 
 
@@ -73,6 +100,24 @@ def build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--source-language", default="en")
     initialize.add_argument("--target-language", default="zh-CN")
     initialize.add_argument("--pages")
+
+    run = subparsers.add_parser("run", help="从当前断点一键推进到机器 QA")
+    run.add_argument("source_pdf", type=Path)
+    run.add_argument("--run-dir", type=Path, required=True)
+    run.add_argument("--source-language", default="en")
+    run.add_argument("--target-language", default="zh-CN")
+    run.add_argument("--pages")
+    run.add_argument("--domain", default="atmospheric-science")
+    run.add_argument("--provider", choices=("codex-local", "openai-compatible"))
+    run.add_argument("--model")
+    run.add_argument("--codex-bin")
+    run.add_argument("--base-url")
+    run.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    run.add_argument("--max-segments", type=int, default=200)
+    run.add_argument("--max-characters", type=int, default=30000)
+    run.add_argument("--pdf2zh-bin")
+    run.add_argument("--dpi", type=int, default=144)
+    run.add_argument("--pdftoppm-bin")
 
     collect = subparsers.add_parser("collect", help="收集 PDF 待译片段")
     collect.add_argument("--run-dir", type=Path, required=True)
@@ -159,6 +204,36 @@ def main() -> int:
             pages=args.pages,
         )
         print(f"运行已初始化：{manifest['source_sha256']}")
+        return 0
+    if args.command == "run":
+        root = args.run_dir.expanduser().resolve()
+        is_new = not (root / "run_manifest.json").is_file()
+        if is_new and args.provider is None:
+            raise ValueError("新运行必须提供 --provider")
+        manifest = _initialize_or_load_run(
+            source_pdf=args.source_pdf,
+            run_dir=root,
+            source_language=args.source_language,
+            target_language=args.target_language,
+            pages=args.pages,
+        )
+        needs_provider = manifest["status"] in {"initialized", "collected"}
+        if needs_provider and args.provider is None:
+            raise ValueError("运行尚未翻译；请提供 --provider 后重试")
+        final_manifest = run_to_qa(
+            run_dir=root,
+            provider=_provider_from_args(args) if needs_provider else None,
+            domain=load_domain_pack(args.domain),
+            pdf2zh_bin=args.pdf2zh_bin,
+            dpi=args.dpi,
+            pdftoppm_bin=args.pdftoppm_bin,
+        )
+        if final_manifest["status"] == "qa_generated":
+            comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"
+            print(f"运行已推进到机器 QA；请逐页检查：{comparisons}")
+            print("确认无误后执行 paperlocale accept，人工验收不会自动完成")
+        else:
+            print(f"运行当前状态：{final_manifest['status']}")
         return 0
     if args.command == "collect":
         collect_run(args.run_dir, args.pdf2zh_bin)

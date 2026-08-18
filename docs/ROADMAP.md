@@ -34,6 +34,7 @@
 ## 阶段 3：PDF 流水线
 
 - [x] `collect -> translate -> validate -> render -> qa -> accept` 状态机
+- [x] 复用同一状态机、只推进到机器 QA 的一键断点续跑命令
 - [x] PDFMathTranslate-next/BabelDOC CLI 桥接
 - [x] 运行清单与断点续跑
 

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -21,12 +22,8 @@ from paperlocale.providers import (
     TranslationProvider,
 )
 from paperlocale.workflow import (
-    collect_run,
     initialize_run,
-    qa_run,
-    render_run,
-    translate_run,
-    validate_run,
+    run_to_qa,
 )
 
 
@@ -191,14 +188,17 @@ def main() -> int:
         source_language="en",
         target_language="zh-CN",
     )
-    collect_run(run_dir, args.pdf2zh_bin)
-    translate_run(run_dir=run_dir, provider=SmokeProvider(), domain=domain)
-    validate_run(run_dir, domain)
-    translated_pdf = render_run(run_dir, args.pdf2zh_bin)
-    report = qa_run(
-        run_dir,
+    manifest = run_to_qa(
+        run_dir=run_dir,
+        provider=SmokeProvider(),
+        domain=domain,
+        pdf2zh_bin=args.pdf2zh_bin,
         dpi=96,
         pdftoppm_bin=args.pdftoppm_bin,
+    )
+    translated_pdf = Path(str(manifest["rendered_pdf"]))
+    report = json.loads(
+        Path(str(manifest["qa_report"])).read_text(encoding="utf-8")
     )
     comparison = Path(str(report["pages"][0]["comparison"]))
     print(f"版面冒烟测试通过：{translated_pdf}")

@@ -121,7 +121,7 @@ def _verify_domain_languages(
     manifest: dict[str, object],
     domain: DomainPack,
 ) -> None:
-    """拒绝运行语言与领域包不一致，避免提示和术语规则被错误套用。"""
+    """拒绝语言或已记录领域包不一致，避免续跑时静默更换术语合同。"""
 
     expected = (str(manifest["source_language"]), str(manifest["target_language"]))
     actual = (domain.source_language, domain.target_language)
@@ -130,6 +130,16 @@ def _verify_domain_languages(
             "领域包语言与运行不一致："
             f"run={expected[0]}->{expected[1]}, domain={actual[0]}->{actual[1]}"
         )
+    recorded = manifest.get("domain_pack")
+    if isinstance(recorded, dict):
+        recorded_identity = (str(recorded.get("id")), str(recorded.get("version")))
+        actual_identity = (domain.pack_id, domain.version)
+        if actual_identity != recorded_identity:
+            raise ValueError(
+                "领域包与翻译记录不一致："
+                f"run={recorded_identity[0]}@{recorded_identity[1]}, "
+                f"domain={actual_identity[0]}@{actual_identity[1]}"
+            )
 
 
 def initialize_run(
@@ -405,6 +415,49 @@ def qa_run(
     manifest["status"] = "qa_generated"
     save_manifest(root, manifest)
     return report
+
+
+def run_to_qa(
+    *,
+    run_dir: Path,
+    provider: TranslationProvider | None,
+    domain: DomainPack,
+    pdf2zh_bin: str | Path | None = None,
+    dpi: int = 144,
+    pdftoppm_bin: str | Path | None = None,
+) -> dict[str, object]:
+    """从当前断点沿唯一生产路径推进到机器 QA，保留人工验收边界。
+
+    每个阶段仍由原有阶段函数完成并原子更新清单；这里仅按清单状态依次调用，
+    不复制翻译、验证或渲染逻辑。已经完成翻译的运行不再要求 Provider，方便
+    在模型额度或登录环境不可用时继续执行验证、重建与 QA。
+    """
+
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] == "initialized":
+        collect_run(root, pdf2zh_bin)
+        manifest = load_manifest(root)
+    if manifest["status"] == "collected":
+        if provider is None:
+            raise ValueError("运行尚未翻译；请提供 --provider 后重试")
+        translate_run(run_dir=root, provider=provider, domain=domain)
+        manifest = load_manifest(root)
+    if manifest["status"] == "translated":
+        validate_run(root, domain)
+        manifest = load_manifest(root)
+    if manifest["status"] == "validated":
+        render_run(root, pdf2zh_bin)
+        manifest = load_manifest(root)
+    if manifest["status"] == "rendered":
+        qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin)
+        manifest = load_manifest(root)
+
+    if manifest["status"] in {"qa_generated", "accepted"}:
+        # 无需执行新阶段时仍核对产物身份，避免把已被替换的 PDF 报告为可验收。
+        _verify_source_pdf(manifest)
+        _verify_rendered_pdf(manifest)
+    return manifest
 
 
 def accept_run(run_dir: Path, *, reviewed_by: str) -> None:

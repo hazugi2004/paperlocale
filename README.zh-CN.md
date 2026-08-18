@@ -56,18 +56,11 @@ paperlocale domain-check atmospheric-science
 
 ## 五分钟开始翻译
 
-先创建一次绑定源 PDF SHA-256 的运行：
-
-```bash
-paperlocale init-run paper.pdf --run-dir runs/paper
-paperlocale collect --run-dir runs/paper
-```
-
-选择以下一种 Provider。使用本机 Codex 登录态：
+使用一条可断点续跑的命令完成初始化、片段收集、翻译、内容门禁、PDF 重建和全页 QA。使用本机 Codex 登录态：
 
 ```bash
 codex login
-paperlocale translate \
+paperlocale run paper.pdf \
   --run-dir runs/paper \
   --provider codex-local \
   --domain atmospheric-science
@@ -77,7 +70,7 @@ paperlocale translate \
 
 ```bash
 export PAPERLOCALE_API_KEY="你的密钥"
-paperlocale translate \
+paperlocale run paper.pdf \
   --run-dir runs/paper \
   --provider openai-compatible \
   --base-url https://api.example.com/v1 \
@@ -88,14 +81,6 @@ paperlocale translate \
 远程端点必须使用 HTTPS，避免 API Key 经明文网络发送。只有
 `localhost`、`127.0.0.1` 和 `::1` 等本机 loopback 服务可以使用 HTTP。
 
-然后执行内容门禁、PDF 重建和全页 QA：
-
-```bash
-paperlocale validate --run-dir runs/paper --domain atmospheric-science
-paperlocale render --run-dir runs/paper
-paperlocale qa --run-dir runs/paper
-```
-
 打开 `runs/paper/qa/comparisons/` 逐页核对。确认页面结构、表格、图片、公式和中文断行可接受后，记录验收：
 
 ```bash
@@ -103,7 +88,9 @@ paperlocale accept --run-dir runs/paper --reviewed-by "你的名字"
 paperlocale status --run-dir runs/paper
 ```
 
-运行中断后，重新执行当前阶段即可：已通过门禁的译文会从 `translations.jsonl` 复用，不会重复消耗额度。项目不会在同一次运行中静默切换 Provider。
+运行中断后，重新执行同一条 `paperlocale run` 命令即可：清单会从最后完成的阶段继续，已通过门禁的译文会从 `translations.jsonl` 复用。翻译完成后的续跑可以省略 `--provider` 和 API 凭据。`run` 只推进到 `qa_generated`，不会自动记录人工验收；项目也不会在同一次运行中静默切换 Provider。
+
+需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> translate -> validate -> render -> qa -> accept` 命令序列。
 
 ## 领域包扩展
 
@@ -127,7 +114,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 29 项单元测试不联网运行，覆盖内容合同、Provider、断点、PDF 哈希绑定、页面 QA、隔离环境入口和演示产物；
+- 34 项单元测试不联网运行，覆盖内容合同、Provider、一键断点续跑、领域包身份、PDF 哈希绑定、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 合成页包含公式占位、矢量表格与嵌入图片，不提交任何受版权限制的论文；
 - “保版”不等于像素完全一致。中文长度变化会改变行内断行，因此最终候选必须人工逐页核对。

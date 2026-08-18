@@ -11,6 +11,8 @@
 5. 执行 `python -m pip install -e ".[test]"` 后运行
    `python -m unittest discover -s tests -v`。
 
+复核 Provider 评估时，必须逐条填写对应工作表的接受/需修改结论和专业理由。参考译文与候选译文不逐字一致不等于错误；不得用字符串相似度代替术语、程度词、相关/因果和自然度判断。
+
 涉及 BabelDOC/PDFMathTranslate 的解析、渲染或许可证边界时，请先开 Issue 讨论。
 
 版面桥接变更还必须执行：

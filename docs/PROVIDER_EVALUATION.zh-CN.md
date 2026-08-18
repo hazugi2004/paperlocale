@@ -15,6 +15,8 @@
 
 机器可复核的逐条结果见 [JSON 报告](evidence/codex-local-atmospheric-science-eval.json)。报告不含 Codex 登录材料、API Key、版权论文或私人数据。
 
+领域人员可直接填写[五案例人工语义复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)，并通过 Pull Request 保留逐条判定、专业理由和建议译文。
+
 ## 如何解释
 
 五条候选均保留了案例中的术语、数字、单位、缩写、公式占位符、样式标签和 DOI。0/5 逐字匹配主要来自空格、中文/半角括号和“略微/小幅”等措辞变化。逐字不一致既不能自动证明错误，也不能自动证明语义正确。

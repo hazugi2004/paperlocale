@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -14,6 +15,16 @@ from pypdf import PdfReader
 
 
 PLACEHOLDER_RE = re.compile(r"\{v\d+\}|<style\s+id=|</style>", re.IGNORECASE)
+
+
+def _sha256(path: Path) -> str:
+    """把 QA 报告绑定到实际检查的两个 PDF 字节。"""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _box(page: object, name: str) -> tuple[float, float, float, float]:
@@ -235,6 +246,8 @@ def inspect_pdf_pair(
     report: dict[str, object] = {
         "source_pdf": str(source_path),
         "translated_pdf": str(target_path),
+        "source_sha256": _sha256(source_path),
+        "translated_sha256": _sha256(target_path),
         "source_pages": len(source_reader.pages),
         "translated_pages": len(target_reader.pages),
         "dpi": dpi,

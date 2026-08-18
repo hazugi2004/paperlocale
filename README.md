@@ -83,6 +83,9 @@ paperlocale translate --run-dir runs/paper \
   --domain atmospheric-science
 ```
 
+Remote compatible endpoints must use HTTPS. Plain HTTP is accepted only for
+loopback services on `localhost`, `127.0.0.1`, or `::1`.
+
 See the detailed [Chinese guide](README.zh-CN.md), [ROADMAP](docs/ROADMAP.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [domain-pack guide](docs/DOMAIN_PACKS.zh-CN.md), [Codex for Open Source readiness](docs/CODEX_FOR_OSS_READINESS.zh-CN.md), and [PROVENANCE](docs/PROVENANCE.md).
 
 ## Development

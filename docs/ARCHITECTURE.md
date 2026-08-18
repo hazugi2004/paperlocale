@@ -26,6 +26,10 @@ PDF
 `run_manifest.json`，避免在每条片段中重复。每个后续阶段都会重新核对源 PDF
 身份；源文件变化后必须创建新运行。
 
+schema 2 还会在 `render` 后记录候选 PDF 的 SHA-256。`qa_report.json` 同时记录
+源文件和候选文件的路径与哈希；`accept` 只有在四者仍与运行清单闭合时才记录
+人工批准。v0.1.0 的 schema 1 清单必须重新执行 `qa`，不能复用旧报告直接验收。
+
 `translations.jsonl` 每行至少包含：
 
 - `id`；

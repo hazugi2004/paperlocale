@@ -18,7 +18,7 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 |---|---|---|
 | 明确的公共开源价值 | 学术 PDF 保版翻译、科学信息硬门禁、可扩展领域术语包 | 已实现 |
 | 核心维护者与写权限 | `MAINTAINERS.md` 与 GitHub `hazugi2004/paperlocale` 管理权限 | 已验证 |
-| 可运行项目 | CLI、两种 Provider、单向状态机、21 项不联网测试 | 已实现 |
+| 可运行项目 | CLI、两种 Provider、单向状态机、27 项不联网测试 | 已实现 |
 | 可复现质量证据 | 合成双栏 PDF、公式/表格/图片回归、逐页 QA | 已实现 |
 | 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试和标签构建工作流 | 远端 CI 已通过 |
 | 公开版本 | [GitHub v0.1.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0) | 已发布 |

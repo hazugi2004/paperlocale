@@ -86,6 +86,43 @@ class ProviderTest(unittest.TestCase):
             result = provider.translate([self.segment], self.context)
         self.assertEqual(result[0].id, "id-1")
 
+    def test_openai_compatible_rejects_remote_plaintext_http(self) -> None:
+        """API Key 不能通过明文网络发送到远程主机。"""
+
+        with self.assertRaisesRegex(ValueError, "必须使用 HTTPS"):
+            OpenAICompatibleProvider(
+                base_url="http://api.example.test/v1",
+                api_key="secret-key",
+                model="example-model",
+            )
+
+    def test_openai_compatible_allows_loopback_http(self) -> None:
+        """本机 Ollama 等兼容服务可以继续使用明确的 loopback HTTP。"""
+
+        provider = OpenAICompatibleProvider(
+            base_url="http://127.0.0.1:11434/v1",
+            api_key="local-placeholder",
+            model="local-model",
+        )
+        self.assertEqual(provider.endpoint, "http://127.0.0.1:11434/v1/chat/completions")
+
+    def test_openai_compatible_rejects_credentials_and_query_in_url(self) -> None:
+        """密钥只允许走 Authorization header，端点身份必须无歧义。"""
+
+        invalid_urls = (
+            "https://user:password@example.test/v1",
+            "https://example.test/v1?tenant=secret",
+            "https://example.test/v1#fragment",
+            "https://example.test/v1/chat/completions",
+        )
+        for base_url in invalid_urls:
+            with self.subTest(base_url=base_url), self.assertRaises(ValueError):
+                OpenAICompatibleProvider(
+                    base_url=base_url,
+                    api_key="secret-key",
+                    model="example-model",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

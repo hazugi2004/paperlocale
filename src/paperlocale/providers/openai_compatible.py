@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from .base import (
@@ -27,8 +28,18 @@ class OpenAICompatibleProvider(TranslationProvider):
         model: str,
         timeout_seconds: int = 300,
     ) -> None:
-        if not base_url.startswith(("https://", "http://")):
+        parsed = urllib.parse.urlsplit(base_url)
+        scheme = parsed.scheme.lower()
+        if scheme not in {"https", "http"} or not parsed.hostname:
             raise ValueError("base_url 必须是 http:// 或 https:// URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("base_url 不得包含用户名或密码")
+        if parsed.query or parsed.fragment:
+            raise ValueError("base_url 不得包含查询参数或片段")
+        if scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            raise ValueError("远程 OpenAI-compatible 接口必须使用 HTTPS")
+        if parsed.path.rstrip("/").endswith("/chat/completions"):
+            raise ValueError("base_url 不得包含 /chat/completions")
         if not api_key:
             raise ValueError("api_key 不能为空")
         if not model:

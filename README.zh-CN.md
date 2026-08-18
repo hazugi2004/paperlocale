@@ -79,6 +79,9 @@ paperlocale translate \
   --domain atmospheric-science
 ```
 
+远程端点必须使用 HTTPS，避免 API Key 经明文网络发送。只有
+`localhost`、`127.0.0.1` 和 `::1` 等本机 loopback 服务可以使用 HTTP。
+
 然后执行内容门禁、PDF 重建和全页 QA：
 
 ```bash
@@ -118,7 +121,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 20 项单元测试不联网运行，覆盖内容合同、Provider、断点、源文件身份和页面 QA；
+- 27 项单元测试不联网运行，覆盖内容合同、Provider、断点、PDF 哈希绑定和页面 QA；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 合成页包含公式占位、矢量表格与嵌入图片，不提交任何受版权限制的论文；
 - “保版”不等于像素完全一致。中文长度变化会改变行内断行，因此最终候选必须人工逐页核对。

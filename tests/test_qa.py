@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import tempfile
 import unittest
-import logging
 from pathlib import Path
 
 from PIL import Image
@@ -73,6 +74,14 @@ class PdfQaTest(unittest.TestCase):
             )
             self.assertEqual(report["errors"], [])
             self.assertEqual(report["source_pages"], 1)
+            self.assertEqual(
+                report["source_sha256"],
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                report["translated_sha256"],
+                hashlib.sha256(translated.read_bytes()).hexdigest(),
+            )
             self.assertTrue((root / "qa" / "comparisons" / "page-001.png").is_file())
             self.assertTrue(report["visual_inspection_required"])
 

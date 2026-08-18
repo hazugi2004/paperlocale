@@ -90,6 +90,34 @@ def _verify_source_pdf(manifest: dict[str, object]) -> Path:
     return source
 
 
+def _verify_rendered_pdf(
+    manifest: dict[str, object],
+    *,
+    bind_legacy: bool = False,
+) -> Path:
+    """确认候选 PDF 与渲染阶段绑定的 SHA-256 一致。
+
+    v0.1.0 的运行清单尚无 ``rendered_sha256``。它只允许在重新执行 QA 时
+    绑定当前候选；已有旧 QA 不能直接 accept，必须重新生成报告。
+    """
+
+    rendered = manifest.get("rendered_pdf")
+    if not isinstance(rendered, str) or not Path(rendered).is_file():
+        raise FileNotFoundError("运行清单中的 rendered_pdf 不存在")
+    path = Path(rendered).resolve()
+    actual = _sha256(path)
+    expected = manifest.get("rendered_sha256")
+    if not isinstance(expected, str) or not expected:
+        if not bind_legacy:
+            raise ValueError("运行清单缺少译文 PDF 哈希；请重新执行 qa")
+        manifest["rendered_sha256"] = actual
+        manifest["schema_version"] = 2
+        return path
+    if actual != expected:
+        raise ValueError("译文 PDF 在 render 后发生变化；请重新执行 render 和 qa")
+    return path
+
+
 def _verify_domain_languages(
     manifest: dict[str, object],
     domain: DomainPack,
@@ -122,7 +150,7 @@ def initialize_run(
     if _manifest_path(root).exists():
         raise FileExistsError(f"运行目录已有清单，请继续原运行或使用新目录：{root}")
     manifest: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": _utc_now(),
         "updated_at": _utc_now(),
         "status": "initialized",
@@ -137,6 +165,7 @@ def initialize_run(
         "render_output_dir": str(root / "render_output"),
         "qa_output_dir": str(root / "qa"),
         "rendered_pdf": None,
+        "rendered_sha256": None,
     }
     save_manifest(root, manifest)
     return manifest
@@ -329,6 +358,8 @@ def render_run(run_dir: Path, pdf2zh_bin: str | Path | None = None) -> Path:
     if len(candidates) != 1:
         raise RuntimeError(f"渲染后应有且仅有一个 PDF，实际 {len(candidates)} 个")
     manifest["rendered_pdf"] = str(candidates[0].resolve())
+    manifest["rendered_sha256"] = _sha256(candidates[0])
+    manifest["schema_version"] = 2
     manifest["status"] = "rendered"
     save_manifest(root, manifest)
     return candidates[0].resolve()
@@ -347,19 +378,22 @@ def qa_run(
     if manifest["status"] not in {"rendered", "qa_generated"}:
         raise ValueError(f"qa 不接受状态：{manifest['status']}")
     _verify_source_pdf(manifest)
-    rendered = manifest.get("rendered_pdf")
-    if not isinstance(rendered, str) or not Path(rendered).is_file():
-        raise FileNotFoundError("运行清单中的 rendered_pdf 不存在")
+    rendered = _verify_rendered_pdf(manifest, bind_legacy=True)
     report = inspect_pdf_pair(
         source_pdf=Path(str(manifest["source_pdf"])),
-        translated_pdf=Path(rendered),
+        translated_pdf=rendered,
         output_dir=Path(str(manifest["qa_output_dir"])),
         dpi=dpi,
         pdftoppm_bin=pdftoppm_bin,
     )
     if report["errors"]:
         raise RuntimeError(f"PDF 机器 QA 失败：{report['errors']}")
+    if report.get("source_sha256") != manifest["source_sha256"]:
+        raise RuntimeError("源 PDF 在 QA 读取期间发生变化")
+    if report.get("translated_sha256") != manifest["rendered_sha256"]:
+        raise RuntimeError("译文 PDF 在 QA 读取期间发生变化")
     manifest["qa_report"] = str(Path(str(manifest["qa_output_dir"])) / "qa_report.json")
+    manifest["schema_version"] = 2
     manifest["status"] = "qa_generated"
     save_manifest(root, manifest)
     return report
@@ -374,12 +408,22 @@ def accept_run(run_dir: Path, *, reviewed_by: str) -> None:
     manifest = load_manifest(root)
     if manifest["status"] != "qa_generated":
         raise ValueError(f"accept 只接受 qa_generated，当前为 {manifest['status']}")
+    source = _verify_source_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest)
     report_path = Path(str(manifest.get("qa_report", "")))
     if not report_path.is_file():
         raise FileNotFoundError("QA 报告不存在")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     if report.get("errors"):
         raise ValueError("QA 报告仍包含机器错误，不能人工批准")
+    if Path(str(report.get("source_pdf", ""))).resolve() != source:
+        raise ValueError("QA 报告不属于当前源 PDF")
+    if Path(str(report.get("translated_pdf", ""))).resolve() != rendered:
+        raise ValueError("QA 报告不属于当前译文 PDF")
+    if report.get("source_sha256") != manifest["source_sha256"]:
+        raise ValueError("QA 报告的源 PDF 哈希不一致")
+    if report.get("translated_sha256") != manifest["rendered_sha256"]:
+        raise ValueError("QA 报告的译文 PDF 哈希不一致")
     report["visual_accepted"] = True
     report["visual_reviewed_by"] = reviewed_by.strip()
     report["visual_reviewed_at"] = _utc_now()

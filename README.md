@@ -8,6 +8,8 @@ Verified, layout-preserving academic PDF translation with pluggable model provid
 
 [中文说明](README.zh-CN.md)
 
+![PaperLocale verified workflow](docs/assets/workflow.svg)
+
 ## Status
 
 PaperLocale is under active development. The first release focuses on one strict pipeline:
@@ -105,6 +107,10 @@ python scripts/layout_smoke.py --output tmp/layout-smoke-001
 ```
 
 The script intentionally stops before visual acceptance and prints the comparison image to inspect.
+
+## Contributing
+
+Start with the scoped [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22), or read [CONTRIBUTING.md](CONTRIBUTING.md). Current entry points cover an ecology domain pack, a two-page synthetic PDF regression, and Ubuntu installation verification.
 
 ## License
 

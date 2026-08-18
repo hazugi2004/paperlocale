@@ -6,6 +6,8 @@
 
 PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的目标不是笼统承诺“原格式完全不变”，而是在明确、可测试的边界内保留页数、页面尺寸、栏位、图片、表格和公式，并在科学信息被破坏时拒绝生成候选 PDF。
 
+![PaperLocale 可验证工作流](docs/assets/workflow.svg)
+
 ## 当前目标
 
 第一条正式生产路径固定为：
@@ -143,3 +145,7 @@ python scripts/layout_smoke.py --output tmp/layout-smoke-001
 ```
 
 脚本不会自动执行 `accept`。机器检查通过后仍应打开它打印的逐页对照图。
+
+## 参与贡献
+
+可以从已有的 [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) 开始，或阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。当前入口包括生态学领域包、两页合成 PDF 回归和 Ubuntu 安装复核。

@@ -37,3 +37,5 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 4. 在本项目和上游留下可复核的 Issue/PR 记录，再更新采用证据台账并申请。
 
 可编辑的英文回答见 [CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md](CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md)。
+尚未发送的上游讨论与中英文社区发布文本见
+[COMMUNITY_OUTREACH_DRAFTS.zh-CN.md](COMMUNITY_OUTREACH_DRAFTS.zh-CN.md)；只有公开发出并收到非维护者回应后，才能形成外部采用证据。

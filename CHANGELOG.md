@@ -4,11 +4,21 @@
 
 ## Unreleased
 
+### Added
+
+- 增加由真实 QA 对照图生成的 README 演示 GIF；
+- 增加每周与手动触发的 `pdf2zh-next` 真实版面兼容性工作流。
+
+### Fixed
+
+- 未激活虚拟环境时，也能定位与当前 Python 解释器同目录安装的 `pdf2zh_next`。
+
 ### Documentation
 
 - 记录 v0.1.1 远端测试、发行构建和哈希绑定维护证据。
 - 增加 README 工作流图、贡献入口和未经发送的社区沟通草稿。
 - 记录 PDFMathTranslate-next #354 上游集成讨论及其待回应状态。
+- 记录首个非维护者 fork、Draft PR #4 与维护者验证结论，严格区分外部贡献和真实用户采用。
 
 ## 0.1.1 - 2026-08-18
 

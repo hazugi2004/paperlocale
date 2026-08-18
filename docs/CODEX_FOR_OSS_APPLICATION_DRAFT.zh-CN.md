@@ -34,15 +34,16 @@
 - Architecture: https://github.com/hazugi2004/paperlocale/blob/main/docs/ARCHITECTURE.md
 - Adoption ledger: https://github.com/hazugi2004/paperlocale/blob/main/docs/ADOPTION_EVIDENCE.zh-CN.md
 - Upstream integration discussion: https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354
+- First external contribution: https://github.com/hazugi2004/paperlocale/pull/4
 
 ## 提交前仍需补强
 
-以下任意两类真实证据出现后，申请说服力会显著提高：
+首个非维护者 fork 与 Draft PR 已经出现，但尚不能代替真实使用或已合并贡献。以下再完成任意两类证据后，申请说服力会显著提高：
 
-1. 至少一个非维护者提交的可复现 Issue、试用反馈或 PR；
-2. 一个被合并的新领域包或兼容性修复；
+1. 将外部 [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) 或后续外部 PR 完成合并；
+2. 至少一个非维护者提交的真实试用反馈或可复现问题报告；
 3. 一个公开下游使用、课程、研究方法说明或工具清单引用；
 4. 与 BabelDOC/PDFMathTranslate-next 的公开 Issue 或 PR；
 5. 第二个经过 CI 和变更记录验证的 Release。
 
-如果在这些证据出现前申请，应明确写“new public project”，并依照官方说明解释其生态重要性，不能把维护者创建的 Issue、测试调用或自己的 Star 描述为外部采用。
+如果在这些证据出现前申请，应明确写“new public project”，并依照官方说明解释其生态重要性，不能把维护者创建的 Issue、测试调用、自己的 Star 或未合并 Draft PR 描述为真实用户采用。

@@ -63,7 +63,9 @@
 - [x] 发布后审计并发布 `v0.1.1` 安全与完整性修复
 - [x] 准备上游讨论与中英文社区发布草稿
 - [ ] 跨周持续发布和兼容性维护
-- [ ] 外部真实用户、Issue 和 PR
+- [x] 首个非维护者 fork 与 [Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)
+- [ ] 合并首个外部 PR
+- [ ] 非维护者真实试用反馈或问题报告
 - [ ] 新领域包贡献
 - [x] 发起 [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 上游接口讨论
 - [x] 在等待回复期间按当前 CLI 契约继续，并用每周真实版面冒烟持续验证兼容性

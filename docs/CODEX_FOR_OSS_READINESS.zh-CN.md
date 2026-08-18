@@ -20,7 +20,7 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 | 核心维护者与写权限 | `MAINTAINERS.md` 与 GitHub `hazugi2004/paperlocale` 管理权限 | 已验证 |
 | 可运行项目 | 一键断点续跑 CLI、两种 Provider、Provider 评估、单向状态机、37 项不联网测试 | 已实现 |
 | 可复现质量证据 | 合成双栏 PDF、公式合同、图片与矢量绘图硬门禁、逐页 QA | 已实现 |
-| 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考与[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)公开 | 初步证据，等待非维护者领域人员提交复核 |
+| 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考、[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)与 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 公开 | 初步证据，等待非维护者领域人员提交复核 |
 | 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
 | 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建和上游兼容性工作流 | v0.1.0、v0.1.1、v0.2.0 与[首次真实兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32152325669)已通过 |
 | 公开版本 | [GitHub v0.2.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.2.0) | 已发布 |

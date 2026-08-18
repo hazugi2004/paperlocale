@@ -1,0 +1,38 @@
+name: release-build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-distributions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # 构建任务不需要向仓库写入，避免把临时令牌保留在 Git 配置中。
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install release tools
+        run: python -m pip install "build==1.5.0" "twine==7.0.0"
+      - name: Build wheel and source distribution
+        run: python -m build
+      - name: Validate distribution metadata
+        run: python -m twine check dist/*
+      - name: Install the exact built wheel
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          paperlocale domain-check atmospheric-science
+      - name: Preserve reviewed release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: paperlocale-${{ github.ref_name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30

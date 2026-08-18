@@ -52,9 +52,10 @@
 
 - [x] GitHub Actions
 - [x] Wheel 构建与隔离安装验证
+- [x] 贡献指南、Issue/PR 模板与标签构建工作流
 - [ ] 发布到 PyPI
 - [ ] `v0.1.0`
-- [ ] 演示 GIF、贡献指南和 good first issues
+- [ ] 演示 GIF 和 good first issues
 
 ## 阶段 6：申请准备
 
@@ -62,5 +63,7 @@
 - [ ] 外部真实用户、Issue 和 PR
 - [ ] 新领域包贡献
 - [ ] 上游 BabelDOC/PDFMathTranslate 协作记录
+
+申请准备的逐项证据与缺口见 [CODEX_FOR_OSS_READINESS.zh-CN.md](CODEX_FOR_OSS_READINESS.zh-CN.md)。
 
 Stars 只是采用信号之一。申请前更重要的是证明项目有真实用户、持续维护责任和生态价值。

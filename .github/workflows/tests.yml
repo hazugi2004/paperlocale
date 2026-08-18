@@ -11,13 +11,14 @@ jobs:
   unit-tests:
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # 项目声明支持 3.10–3.13，因此 CI 必须覆盖完整范围。
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install project

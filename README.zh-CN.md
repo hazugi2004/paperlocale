@@ -110,7 +110,7 @@ your-domain/
 paperlocale domain-check /path/to/your-domain
 ```
 
-字段、门禁和贡献要求见 [领域包指南](docs/DOMAIN_PACKS.zh-CN.md)。实施进度见 [路线图](docs/ROADMAP.md)，安全与订阅边界见 [安全策略](SECURITY.md)。
+字段、门禁和贡献要求见 [领域包指南](docs/DOMAIN_PACKS.zh-CN.md)。实施进度见 [路线图](docs/ROADMAP.md)，申请证据边界见 [Codex for Open Source 准备清单](docs/CODEX_FOR_OSS_READINESS.zh-CN.md)，安全与订阅边界见 [安全策略](SECURITY.md)。
 
 ## 当前证据边界
 

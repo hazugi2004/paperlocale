@@ -8,6 +8,16 @@
 2. 不添加真实密钥、Token 或本机登录文件；
 3. 为科学信息门禁变化增加回归测试；
 4. 为领域术语注明含义和使用边界；
-5. 运行 `python -m unittest discover -s tests -v`。
+5. 执行 `python -m pip install -e ".[test]"` 后运行
+   `python -m unittest discover -s tests -v`。
 
 涉及 BabelDOC/PDFMathTranslate 的解析、渲染或许可证边界时，请先开 Issue 讨论。
+
+版面桥接变更还必须执行：
+
+```bash
+python -m pip install -e ".[layout,test]"
+python scripts/layout_smoke.py --output tmp/layout-smoke-你的编号
+```
+
+脚本通过后仍需查看它输出的逐页对照图；机器 QA 不等于人工视觉验收。

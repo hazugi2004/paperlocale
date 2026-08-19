@@ -25,6 +25,10 @@ jobs:
       - name: Install PDF rendering dependency
         # 两项 PDF QA 测试会真实调用 pdftoppm，CI 镜像默认不包含 Poppler。
         run: |
+          # Hosted runner 的 Azure 主镜像曾在单个矩阵任务中持续 5 分钟无响应；
+          # 固定到同时提供四个 noble pocket 的 Ubuntu 官方主镜像。
+          echo "https://archive.ubuntu.com/ubuntu/" \
+            | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           timeout 5m sudo apt-get update \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \

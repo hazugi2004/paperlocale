@@ -55,6 +55,8 @@ paperlocale provider-eval \
 ## 安装
 
 需要 Python 3.10–3.13。完整 PDF 流程还需要 Poppler 的 `pdftoppm`：macOS 可执行 `brew install poppler`，Ubuntu 可执行 `sudo apt-get install poppler-utils`。
+PaperLocale 尚未发布到 PyPI，因此当前已验证的普通用户路径仍是从仓库源码安装。仅供
+维护者使用的可信发布步骤见 [PyPI 发布手册](docs/PYPI_PUBLISHING.zh-CN.md)。
 
 ```bash
 git clone https://github.com/hazugi2004/paperlocale.git

@@ -47,14 +47,48 @@ class ProviderTest(unittest.TestCase):
             self.assertIn("read-only", command)
             self.assertIn("--ephemeral", command)
             self.assertIn("--ignore-user-config", command)
+            self.assertIn("--model", command)
+            self.assertIn("gpt-5.6-sol", command)
+            self.assertIn("model_reasoning_effort=\"high\"", command)
             self.assertNotIn("auth.json", " ".join(command))
             self.assertIn("待翻译 JSON", str(kwargs["input"]))
             return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        provider = CodexLocalProvider(codex_bin="/fake/codex")
+        provider = CodexLocalProvider(
+            codex_bin="/fake/codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="high",
+        )
         with patch("paperlocale.providers.codex_local.subprocess.run", side_effect=fake_run):
             result = provider.translate([self.segment], self.context)
         self.assertEqual(result[0].target, "土壤湿度为10 mm。")
+
+    def test_codex_provenance_records_cli_model_and_effort(self) -> None:
+        """运行清单需要足以复核本机会员额度调用的非敏感身份。"""
+
+        completed = type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "codex-cli 0.148.0\n", "stderr": ""},
+        )()
+        provider = CodexLocalProvider(
+            codex_bin="/fake/codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="high",
+        )
+        with patch(
+            "paperlocale.providers.codex_local.subprocess.run",
+            return_value=completed,
+        ):
+            self.assertEqual(
+                provider.provenance(),
+                {
+                    "provider": "codex-local",
+                    "model": "gpt-5.6-sol",
+                    "reasoning_effort": "high",
+                    "codex_cli_version": "codex-cli 0.148.0",
+                },
+            )
 
     def test_openai_compatible_provider_keeps_key_out_of_body(self) -> None:
         api_payload = {

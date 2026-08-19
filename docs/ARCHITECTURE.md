@@ -6,6 +6,7 @@
 PDF
   -> 版面解析与片段收集
   -> segments.jsonl
+  -> 参考文献复核与确认映射
   -> 领域包 + 单一 Provider
   -> translations.jsonl
   -> 科学信息硬门禁
@@ -15,9 +16,15 @@ PDF
 
 同一次运行不得静默切换 Provider。失败必须保留断点并明确退出，避免一篇论文混用多个模型后无法追溯。
 
+CLITranslator 片段没有页码且顺序不等于阅读顺序。默认 `preserve` 因此先从源
+PDF 精确定位唯一 `REFERENCES` 区域，只自动接受完整规范化文本落入该区域的
+长片段，并把全部片段写入 `reference_review.jsonl`。人工确认后的
+`reference_map.json` 同时绑定源 PDF 与 `segments.jsonl` 哈希；没有确认映射时
+不得调用模型。`translate-titles` 复用同一映射，参考文献不执行正文术语门禁。
+
 `paperlocale run` 只是上述单一生产路径的状态编排器：它读取清单后依次调用现有阶段函数，从最后成功状态推进到 `qa_generated`。它不实现第二套翻译或渲染逻辑，也不会自动执行必须由人完成的 `accept`。
 
-PDF 机器 QA 将页数、页面框、图片对象和直接页面内容流中的矢量绘制数量逐页对照。译文少于原文时视为硬错误，以捕获图片、矢量表格或图形丢失；复杂内容流无法解析时记录警告并保留全页人工视觉复核，不能据此自动验收。
+PDF 机器 QA 将页数、页面框、图片对象和直接页面内容流中的矢量绘制数量逐页对照。译文少于原文时视为硬错误，以捕获图片、矢量表格或图形丢失；矢量缺失还会记录边界框与面积，并在对照图两侧红框定位。复杂内容流无法解析时记录警告并保留全页人工视觉复核，不能据此自动验收。
 
 ## 稳定中间格式
 
@@ -30,7 +37,9 @@ PDF 机器 QA 将页数、页面框、图片对象和直接页面内容流中的
 `run_manifest.json`，避免在每条片段中重复。每个后续阶段都会重新核对源 PDF
 身份；源文件变化后必须创建新运行。
 
-schema 2 还会在 `render` 后记录候选 PDF 的 SHA-256。`qa_report.json` 同时记录
+schema 3 还会记录领域包内容 SHA-256、Provider/模型/推理强度、Codex CLI 与
+collect/render 版面引擎版本，并在 `render` 后记录候选 PDF 的 SHA-256。
+`qa_report.json` 同时记录
 源文件和候选文件的路径与哈希；`accept` 只有在四者仍与运行清单闭合时才记录
 人工批准。v0.1.0 的 schema 1 清单必须重新执行 `qa`，不能复用旧报告直接验收。
 
@@ -41,6 +50,8 @@ schema 2 还会在 `render` 后记录候选 PDF 的 SHA-256。`qa_report.json` �
 - `target`。
 
 渲染前必须确认两份文件的 ID 集合完全一致，并逐片段通过合同。
+同一批次有个别候选失败时，其他合格行先原子写入 `translations.jsonl`，失败候选
+及门禁原因写入 `rejected_translations.jsonl`；运行状态保持 `collected`。
 
 ## Provider 边界
 

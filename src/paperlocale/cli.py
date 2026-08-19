@@ -10,12 +10,16 @@ from .contracts import validate_translation, validate_translation_files
 from .domains import load_domain_pack
 from .evaluation import evaluate_provider, write_evaluation_report
 from .pipeline import translate_segment_file
-from .providers import CodexLocalProvider, OpenAICompatibleProvider
+from .providers import REASONING_EFFORTS, CodexLocalProvider, OpenAICompatibleProvider
+from .references import REFERENCE_POLICIES
 from .workflow import (
     accept_run,
+    apply_vector_repair,
     collect_run,
+    confirm_reference_run,
     initialize_run,
     load_manifest,
+    prepare_reference_review_run,
     qa_run,
     render_run,
     run_to_qa,
@@ -85,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     provider_eval.add_argument("--model")
+    provider_eval.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     provider_eval.add_argument("--codex-bin")
     provider_eval.add_argument("--base-url")
     provider_eval.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -105,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     translate.add_argument("--model")
+    translate.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     translate.add_argument("--codex-bin")
     translate.add_argument("--base-url")
     translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -125,8 +131,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--target-language", default="zh-CN")
     run.add_argument("--pages")
     run.add_argument("--domain", default="atmospheric-science")
+    run.add_argument(
+        "--reference-policy",
+        choices=REFERENCE_POLICIES,
+        default="preserve",
+    )
     run.add_argument("--provider", choices=("codex-local", "openai-compatible"))
     run.add_argument("--model")
+    run.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     run.add_argument("--codex-bin")
     run.add_argument("--base-url")
     run.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -140,15 +152,40 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--run-dir", type=Path, required=True)
     collect.add_argument("--pdf2zh-bin")
 
+    reference_review = subparsers.add_parser(
+        "reference-review",
+        help="生成参考文献片段人工复核清单",
+    )
+    reference_review.add_argument("--run-dir", type=Path, required=True)
+
+    confirm_references = subparsers.add_parser(
+        "confirm-references",
+        help="确认自动匹配结果并补充参考文献片段 ID",
+    )
+    confirm_references.add_argument("--run-dir", type=Path, required=True)
+    confirm_references.add_argument(
+        "--segment-id",
+        action="append",
+        default=[],
+        help="补充一个未自动匹配的参考文献片段 ID；可重复使用",
+    )
+    confirm_references.add_argument("--confirmed-by", required=True)
+
     run_translate = subparsers.add_parser("translate", help="翻译一个已初始化运行")
     run_translate.add_argument("--run-dir", type=Path, required=True)
     run_translate.add_argument("--domain", default="atmospheric-science")
+    run_translate.add_argument(
+        "--reference-policy",
+        choices=REFERENCE_POLICIES,
+        default="preserve",
+    )
     run_translate.add_argument(
         "--provider",
         choices=("codex-local", "openai-compatible"),
         required=True,
     )
     run_translate.add_argument("--model")
+    run_translate.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     run_translate.add_argument("--codex-bin")
     run_translate.add_argument("--base-url")
     run_translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -171,6 +208,14 @@ def build_parser() -> argparse.ArgumentParser:
     qa.add_argument("--dpi", type=int, default=144)
     qa.add_argument("--pdftoppm-bin")
 
+    repair = subparsers.add_parser(
+        "apply-vector-repair",
+        help="导入只增加矢量绘图的候选 PDF，并记录修复历史",
+    )
+    repair.add_argument("--run-dir", type=Path, required=True)
+    repair.add_argument("--repaired-pdf", type=Path, required=True)
+    repair.add_argument("--description", required=True)
+
     accept = subparsers.add_parser("accept", help="记录人工逐页视觉验收")
     accept.add_argument("--run-dir", type=Path, required=True)
     accept.add_argument("--reviewed-by", required=True)
@@ -181,7 +226,15 @@ def _provider_from_args(args: argparse.Namespace):
     """根据明确命令行选择构造唯一 Provider，不做自动回退。"""
 
     if args.provider == "codex-local":
-        return CodexLocalProvider(model=args.model, codex_bin=args.codex_bin)
+        if not args.model:
+            raise ValueError("codex-local 必须显式提供 --model，才能审计实际模型")
+        return CodexLocalProvider(
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+            codex_bin=args.codex_bin,
+        )
+    if args.reasoning_effort:
+        raise ValueError("--reasoning-effort 当前只适用于 codex-local")
     if not args.base_url or not args.model:
         raise ValueError("openai-compatible 必须提供 --base-url 和 --model")
     api_key = os.environ.get(args.api_key_env, "")
@@ -260,6 +313,7 @@ def main() -> int:
             pdf2zh_bin=args.pdf2zh_bin,
             dpi=args.dpi,
             pdftoppm_bin=args.pdftoppm_bin,
+            reference_policy=args.reference_policy,
         )
         if final_manifest["status"] == "qa_generated":
             comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"
@@ -272,6 +326,24 @@ def main() -> int:
         collect_run(args.run_dir, args.pdf2zh_bin)
         print("PDF 片段收集完成")
         return 0
+    if args.command == "reference-review":
+        summary = prepare_reference_review_run(args.run_dir)
+        print(
+            f"参考文献复核清单：{summary['review_jsonl']}；"
+            f"确定性自动匹配 {len(summary['automatic_reference_segment_ids'])} 个片段"
+        )
+        return 0
+    if args.command == "confirm-references":
+        mapping = confirm_reference_run(
+            args.run_dir,
+            additional_segment_ids=args.segment_id,
+            confirmed_by=args.confirmed_by,
+        )
+        print(
+            "参考文献映射已确认："
+            f"{len(mapping['reference_segment_ids'])} 个片段"
+        )
+        return 0
     if args.command == "translate":
         pack = load_domain_pack(args.domain)
         reused, translated = translate_run(
@@ -280,6 +352,7 @@ def main() -> int:
             domain=pack,
             max_segments=args.max_segments,
             max_characters=args.max_characters,
+            reference_policy=args.reference_policy,
         )
         print(f"运行翻译完成：复用 {reused}，新译 {translated}")
         return 0
@@ -305,6 +378,14 @@ def main() -> int:
             f"机器 QA 通过：{report['translated_pages']} 页；"
             "请检查 comparisons/ 后再执行 accept"
         )
+        return 0
+    if args.command == "apply-vector-repair":
+        repaired = apply_vector_repair(
+            args.run_dir,
+            repaired_pdf=args.repaired_pdf,
+            description=args.description,
+        )
+        print(f"矢量修复已导入并记录历史：{repaired}；请重新执行 qa 和 accept")
         return 0
     if args.command == "accept":
         accept_run(args.run_dir, reviewed_by=args.reviewed_by)

@@ -24,7 +24,9 @@ from paperlocale.providers import (
 from paperlocale.workflow import (
     _resolve_pdf2zh,
     accept_run,
+    apply_vector_repair,
     collect_run,
+    confirm_reference_run,
     initialize_run,
     load_manifest,
     qa_run,
@@ -46,6 +48,12 @@ class _Provider(TranslationProvider):
 
 
 class WorkflowTest(unittest.TestCase):
+    layout_provenance = {
+        "executable": "/fake/pdf2zh_next",
+        "pdf2zh_next_version": "2.9.0",
+        "babeldoc_version": "0.6.2",
+    }
+
     def _make_qa_ready_run(self, root: Path) -> tuple[Path, Path]:
         """建立一份哈希、路径和 QA 报告完全闭合的最小运行。"""
 
@@ -87,7 +95,9 @@ class WorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source.pdf"
-            source.write_bytes(b"synthetic-pdf-placeholder")
+            document = canvas.Canvas(str(source))
+            document.drawString(40, 780, "Synthetic PDF without references")
+            document.save()
             run_dir = root / "run"
             initialize_run(
                 source_pdf=source,
@@ -105,13 +115,39 @@ class WorkflowTest(unittest.TestCase):
                     [{"id": segment_id(text), "source": text}],
                 )
 
-            with patch("paperlocale.workflow._invoke", side_effect=fake_collect):
+            with (
+                patch("paperlocale.workflow._invoke", side_effect=fake_collect),
+                patch(
+                    "paperlocale.workflow._layout_provenance",
+                    return_value=self.layout_provenance,
+                ),
+            ):
                 collect_run(run_dir, "/fake/pdf2zh_next")
-            self.assertEqual(load_manifest(run_dir)["status"], "collected")
+            collected_manifest = load_manifest(run_dir)
+            self.assertEqual(collected_manifest["status"], "collected")
+            self.assertEqual(collected_manifest["layout_engine"], self.layout_provenance)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="test reviewer",
+            )
 
             self.assertEqual(
                 translate_run(run_dir=run_dir, provider=_Provider(), domain=domain),
                 (0, 1),
+            )
+            translated_manifest = load_manifest(run_dir)
+            self.assertEqual(
+                translated_manifest["domain_pack"]["content_sha256"],
+                domain.content_sha256,
+            )
+            self.assertEqual(translated_manifest["reference_policy"], "preserve")
+            self.assertEqual(translated_manifest["reference_segment_count"], 0)
+            self.assertTrue(translated_manifest["reference_map_sha256"])
+            self.assertTrue(
+                translated_manifest["translation_provider"]["provider"].endswith(
+                    "test_workflow._Provider"
+                )
             )
             validate_run(run_dir, domain)
             self.assertEqual(load_manifest(run_dir)["status"], "validated")
@@ -122,7 +158,13 @@ class WorkflowTest(unittest.TestCase):
                 output.mkdir(parents=True, exist_ok=True)
                 (output / "translated.pdf").write_bytes(b"translated-pdf-placeholder")
 
-            with patch("paperlocale.workflow._invoke", side_effect=fake_render):
+            with (
+                patch("paperlocale.workflow._invoke", side_effect=fake_render),
+                patch(
+                    "paperlocale.workflow._layout_provenance",
+                    return_value=self.layout_provenance,
+                ),
+            ):
                 result = render_run(run_dir, "/fake/pdf2zh_next")
             self.assertEqual(result.name, "translated.pdf")
             rendered_manifest = load_manifest(run_dir)
@@ -174,7 +216,26 @@ class WorkflowTest(unittest.TestCase):
                 output.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, output / "translated.pdf")
 
-            with patch("paperlocale.workflow._invoke", side_effect=fake_layout):
+            with (
+                patch("paperlocale.workflow._invoke", side_effect=fake_layout),
+                patch(
+                    "paperlocale.workflow._layout_provenance",
+                    return_value=self.layout_provenance,
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "参考文献映射尚未人工确认"):
+                    run_to_qa(
+                        run_dir=run_dir,
+                        provider=_Provider(),
+                        domain=domain,
+                        pdf2zh_bin="/fake/pdf2zh_next",
+                        dpi=72,
+                    )
+                confirm_reference_run(
+                    run_dir,
+                    additional_segment_ids=[],
+                    confirmed_by="test reviewer",
+                )
                 manifest = run_to_qa(
                     run_dir=run_dir,
                     provider=_Provider(),
@@ -261,6 +322,48 @@ class WorkflowTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "领域包语言"):
                 translate_run(run_dir=run_dir, provider=_Provider(), domain=domain)
 
+    def test_partial_translation_keeps_run_in_collected_state(self) -> None:
+        """批内部分成功只更新断点证据，不得推进为 translated。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(40, 780, "Synthetic PDF without references")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            sources = ("Soil moisture was 10 mm.", "Air temperature was 20 °C.")
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [{"id": segment_id(text), "source": text} for text in sources],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="test reviewer",
+            )
+
+            with self.assertRaisesRegex(ValueError, "合格译文已保存"):
+                translate_run(run_dir=run_dir, provider=_Provider(), domain=domain)
+
+            failed_manifest = load_manifest(run_dir)
+            self.assertEqual(failed_manifest["status"], "collected")
+            self.assertEqual(failed_manifest["translation_count"], 1)
+            self.assertTrue(Path(str(failed_manifest["rejected_translations"])).is_file())
+            self.assertEqual(
+                failed_manifest["domain_pack"]["content_sha256"],
+                domain.content_sha256,
+            )
+
     def test_validate_rejects_domain_changed_after_translation(self) -> None:
         """断点续跑不得把翻译时记录的领域包换成另一个同语言包。"""
 
@@ -282,6 +385,72 @@ class WorkflowTest(unittest.TestCase):
 
             changed_domain = replace(domain, pack_id="different-domain")
             with self.assertRaisesRegex(ValueError, "与翻译记录不一致"):
+                validate_run(run_dir, changed_domain)
+
+    def test_validate_rejects_reference_map_changed_after_translation(self) -> None:
+        """人工确认映射一旦产生译文就必须由清单哈希锁定。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            document = canvas.Canvas(str(source))
+            document.drawString(40, 780, "Synthetic PDF without references")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            text = "Soil moisture was 10 mm."
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [{"id": segment_id(text), "source": text}],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="test reviewer",
+            )
+            translate_run(run_dir=run_dir, provider=_Provider(), domain=domain)
+
+            map_path = run_dir / "reference_map.json"
+            map_path.write_text(
+                map_path.read_text(encoding="utf-8") + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "映射在翻译后发生变化"):
+                validate_run(run_dir, domain)
+
+    def test_validate_rejects_domain_content_changed_without_version_bump(self) -> None:
+        """相同 id/version 不能掩盖提示词或术语表内容变化。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            source.write_bytes(b"placeholder")
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            manifest["status"] = "translated"
+            manifest["domain_pack"] = {
+                "id": domain.pack_id,
+                "version": domain.version,
+                "content_sha256": domain.content_sha256,
+            }
+            save_manifest(run_dir, manifest)
+
+            changed_domain = replace(domain, content_sha256="0" * 64)
+            with self.assertRaisesRegex(ValueError, "领域包内容"):
                 validate_run(run_dir, changed_domain)
 
     def test_legacy_rendered_run_binds_hash_when_qa_is_regenerated(self) -> None:
@@ -315,7 +484,7 @@ class WorkflowTest(unittest.TestCase):
             with patch("paperlocale.workflow.inspect_pdf_pair", return_value=report):
                 qa_run(run_dir)
             upgraded = load_manifest(run_dir)
-            self.assertEqual(upgraded["schema_version"], 2)
+            self.assertEqual(upgraded["schema_version"], 3)
             self.assertEqual(upgraded["status"], "qa_generated")
             self.assertEqual(upgraded["rendered_sha256"], report["translated_sha256"])
 
@@ -343,6 +512,55 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(manifest["accepted_by"], "reviewer")
             self.assertTrue(report["visual_accepted"])
             self.assertEqual(report["visual_reviewed_by"], "reviewer")
+
+    def test_apply_vector_repair_records_history_and_resets_qa(self) -> None:
+        """修复导入必须保留旧 PDF，并强制重新执行机器和人工 QA。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            rendered = root / "rendered.pdf"
+            repaired = root / "repaired.pdf"
+
+            for path, with_icon in ((source, False), (rendered, False), (repaired, True)):
+                document = canvas.Canvas(str(path))
+                document.drawString(40, 780, "Stable scientific text")
+                if with_icon:
+                    document.ellipse(420, 740, 432, 748, stroke=1, fill=0)
+                document.save()
+
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            manifest["status"] = "accepted"
+            manifest["rendered_pdf"] = str(rendered.resolve())
+            manifest["rendered_sha256"] = hashlib.sha256(rendered.read_bytes()).hexdigest()
+            manifest["qa_report"] = str(root / "old-qa.json")
+            manifest["accepted_by"] = "reviewer"
+            save_manifest(run_dir, manifest)
+
+            result = apply_vector_repair(
+                run_dir,
+                repaired_pdf=repaired,
+                description="恢复首页链接矢量图标",
+            )
+            updated = load_manifest(run_dir)
+            history = updated["repair_history"][0]
+            self.assertEqual(result, rendered.resolve())
+            self.assertEqual(updated["status"], "rendered")
+            self.assertNotIn("qa_report", updated)
+            self.assertNotIn("accepted_by", updated)
+            self.assertEqual(history["type"], "vector")
+            self.assertEqual(history["vector_changes"][0]["page"], 1)
+            self.assertTrue(Path(history["backup_pdf"]).is_file())
+            self.assertEqual(
+                updated["rendered_sha256"],
+                hashlib.sha256(rendered.read_bytes()).hexdigest(),
+            )
 
 
 if __name__ == "__main__":

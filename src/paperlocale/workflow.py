@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -15,11 +17,19 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pymupdf as fitz
+
 from .contracts import read_jsonl, validate_translation_files
 from .domains import DomainPack
 from .pipeline import translate_segment_file
 from .providers import TranslationProvider
 from .qa import inspect_pdf_pair
+from .references import (
+    REFERENCE_POLICIES,
+    confirm_reference_review,
+    load_reference_map,
+    prepare_reference_review,
+)
 
 STATES = (
     "initialized",
@@ -30,6 +40,7 @@ STATES = (
     "qa_generated",
     "accepted",
 )
+SCHEMA_VERSION = 3
 
 
 def _utc_now() -> str:
@@ -110,7 +121,7 @@ def _verify_rendered_pdf(
         if not bind_legacy:
             raise ValueError("运行清单缺少译文 PDF 哈希；请重新执行 qa")
         manifest["rendered_sha256"] = actual
-        manifest["schema_version"] = 2
+        manifest["schema_version"] = SCHEMA_VERSION
         return path
     if actual != expected:
         raise ValueError("译文 PDF 在 render 后发生变化；请重新执行 render 和 qa")
@@ -140,6 +151,155 @@ def _verify_domain_languages(
                 f"run={recorded_identity[0]}@{recorded_identity[1]}, "
                 f"domain={actual_identity[0]}@{actual_identity[1]}"
             )
+        recorded_hash = recorded.get("content_sha256")
+        if isinstance(recorded_hash, str) and recorded_hash != domain.content_sha256:
+            raise ValueError(
+                "领域包内容与翻译记录不一致："
+                f"run={recorded_hash}, domain={domain.content_sha256}"
+            )
+
+
+def _domain_provenance(domain: DomainPack) -> dict[str, str]:
+    """生成运行清单使用的领域包完整身份。"""
+
+    return {
+        "id": domain.pack_id,
+        "version": domain.version,
+        "content_sha256": domain.content_sha256,
+    }
+
+
+def prepare_reference_review_run(run_dir: Path) -> dict[str, object]:
+    """为已收集运行生成全片段复核清单，不自动确认任何不确定片段。"""
+
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] != "collected":
+        raise ValueError(
+            f"reference-review 只接受 collected，当前为 {manifest['status']}"
+        )
+    source = _verify_source_pdf(manifest)
+    return prepare_reference_review(
+        source_pdf=source,
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        output_dir=root,
+    )
+
+
+def confirm_reference_run(
+    run_dir: Path,
+    *,
+    additional_segment_ids: list[str],
+    confirmed_by: str,
+) -> dict[str, object]:
+    """确认自动结果和用户补充 ID；已有断点译文后禁止改写映射。"""
+
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] != "collected":
+        raise ValueError(
+            f"confirm-references 只接受 collected，当前为 {manifest['status']}"
+        )
+    translations = Path(str(manifest["translations_path"]))
+    if translations.exists() and read_jsonl(translations):
+        raise ValueError("已有断点译文，不能改变参考文献映射")
+    source = _verify_source_pdf(manifest)
+    return confirm_reference_review(
+        source_pdf=source,
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        output_dir=root,
+        additional_segment_ids=additional_segment_ids,
+        confirmed_by=confirmed_by,
+    )
+
+
+def _load_reference_configuration(
+    root: Path,
+    manifest: dict[str, object],
+    reference_policy: str,
+) -> tuple[set[str], Path]:
+    """读取人工确认映射；缺失时先生成复核文件，再明确停止。"""
+
+    if reference_policy not in REFERENCE_POLICIES:
+        raise ValueError(
+            "reference_policy 必须是 " + ", ".join(REFERENCE_POLICIES)
+        )
+    recorded_policy = manifest.get("reference_policy")
+    if isinstance(recorded_policy, str) and recorded_policy != reference_policy:
+        raise ValueError(
+            "参考文献策略与已有断点不一致："
+            f"run={recorded_policy}, current={reference_policy}"
+        )
+    map_path = root / "reference_map.json"
+    if not map_path.is_file():
+        summary = prepare_reference_review_run(root)
+        raise ValueError(
+            "参考文献映射尚未人工确认；请检查 "
+            f"{summary['review_jsonl']}，然后执行 paperlocale confirm-references"
+        )
+    mapping = load_reference_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        map_path=map_path,
+    )
+    selected = {str(segment_id) for segment_id in mapping["reference_segment_ids"]}
+    return selected, map_path
+
+
+def _recorded_reference_configuration(
+    manifest: dict[str, object],
+) -> tuple[set[str], str]:
+    """验证阶段读取翻译时绑定的映射；无字段表示 v0.2 旧运行。"""
+
+    policy = manifest.get("reference_policy")
+    if not isinstance(policy, str):
+        return set(), "preserve"
+    map_value = manifest.get("reference_map")
+    if not isinstance(map_value, str):
+        raise ValueError("运行清单缺少翻译时绑定的 reference_map")
+    map_path = Path(map_value)
+    expected_hash = manifest.get("reference_map_sha256")
+    if not isinstance(expected_hash, str) or _sha256(map_path) != expected_hash:
+        raise ValueError("参考文献映射在翻译后发生变化")
+    mapping = load_reference_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        map_path=map_path,
+    )
+    return {str(segment_id) for segment_id in mapping["reference_segment_ids"]}, policy
+
+
+def _layout_provenance(executable: str) -> dict[str, str]:
+    """读取实际 pdf2zh-next 命令版本和同环境 BabelDOC 包版本。"""
+
+    completed = subprocess.run(
+        [executable, "--version"],
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    combined = completed.stdout + "\n" + completed.stderr
+    match = re.search(r"pdf2zh-next version:\s*([^\s]+)", combined)
+    if completed.returncode != 0 or match is None:
+        raise RuntimeError(
+            f"无法读取 pdf2zh-next 版本，exit={completed.returncode}"
+        )
+    try:
+        babeldoc_version = importlib.metadata.version("babeldoc")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RuntimeError("当前 Python 环境无法读取 BabelDOC 版本") from exc
+    resolved_executable = shutil.which(executable) or str(
+        Path(executable).expanduser().resolve()
+    )
+    return {
+        "executable": resolved_executable,
+        "pdf2zh_next_version": match.group(1),
+        "babeldoc_version": babeldoc_version,
+    }
 
 
 def initialize_run(
@@ -159,7 +319,7 @@ def initialize_run(
     if _manifest_path(root).exists():
         raise FileExistsError(f"运行目录已有清单，请继续原运行或使用新目录：{root}")
     manifest: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": SCHEMA_VERSION,
         "created_at": _utc_now(),
         "updated_at": _utc_now(),
         "status": "initialized",
@@ -281,9 +441,11 @@ def collect_run(run_dir: Path, pdf2zh_bin: str | Path | None = None) -> None:
         "--segments",
         segments,
     )
+    layout_executable = _resolve_pdf2zh(pdf2zh_bin)
+    layout_provenance = _layout_provenance(layout_executable)
     command = _common_layout_args(
         manifest,
-        pdf2zh_bin=_resolve_pdf2zh(pdf2zh_bin),
+        pdf2zh_bin=layout_executable,
         output_dir=write_target,
         bridge_command=bridge,
     )
@@ -292,6 +454,8 @@ def collect_run(run_dir: Path, pdf2zh_bin: str | Path | None = None) -> None:
     if not rows:
         raise RuntimeError("版面引擎成功退出但未收集到任何片段")
     manifest["segment_count"] = len(rows)
+    manifest["layout_engine"] = layout_provenance
+    manifest["schema_version"] = SCHEMA_VERSION
     manifest["status"] = "collected"
     save_manifest(root, manifest)
 
@@ -303,6 +467,7 @@ def translate_run(
     domain: DomainPack,
     max_segments: int = 200,
     max_characters: int = 30000,
+    reference_policy: str = "preserve",
 ) -> tuple[int, int]:
     """翻译已收集片段，成功后把运行推进到 ``translated``。"""
 
@@ -312,16 +477,53 @@ def translate_run(
         raise ValueError(f"translate 不接受状态：{manifest['status']}")
     _verify_source_pdf(manifest)
     _verify_domain_languages(manifest, domain)
-    reused, translated = translate_segment_file(
-        segments_path=Path(str(manifest["segments_path"])),
-        translations_path=Path(str(manifest["translations_path"])),
-        provider=provider,
-        domain=domain,
-        max_segments=max_segments,
-        max_characters=max_characters,
+    reference_ids, reference_map_path = _load_reference_configuration(
+        root,
+        manifest,
+        reference_policy,
     )
-    manifest["domain_pack"] = {"id": domain.pack_id, "version": domain.version}
+    provider_provenance = provider.provenance()
+    recorded_provider = manifest.get("translation_provider")
+    if isinstance(recorded_provider, dict) and recorded_provider != provider_provenance:
+        raise ValueError(
+            "Provider 配置与已有断点译文不一致："
+            f"run={recorded_provider!r}, current={provider_provenance!r}"
+        )
+    # 在模型调用前绑定领域包和 Provider；即使本批只有部分译文通过，
+    # 已原子保存的断点也不会变成来源不明的数据。
+    manifest["domain_pack"] = _domain_provenance(domain)
+    manifest["translation_provider"] = provider_provenance
+    manifest["reference_policy"] = reference_policy
+    manifest["reference_map"] = str(reference_map_path.resolve())
+    manifest["reference_map_sha256"] = _sha256(reference_map_path)
+    manifest["reference_segment_count"] = len(reference_ids)
+    manifest["schema_version"] = SCHEMA_VERSION
+    save_manifest(root, manifest)
+    translations_path = Path(str(manifest["translations_path"]))
+    rejected_path = translations_path.with_name("rejected_translations.jsonl")
+    try:
+        reused, translated = translate_segment_file(
+            segments_path=Path(str(manifest["segments_path"])),
+            translations_path=translations_path,
+            provider=provider,
+            domain=domain,
+            max_segments=max_segments,
+            max_characters=max_characters,
+            reference_segment_ids=reference_ids,
+            reference_policy=reference_policy,
+        )
+    except Exception:
+        # translate_segment_file 可能已经保存同批中通过门禁的译文；清单同步记录
+        # 真实断点数量，但状态保持 collected，绝不把部分成功冒充为完成。
+        manifest["translation_count"] = (
+            len(read_jsonl(translations_path)) if translations_path.exists() else 0
+        )
+        if rejected_path.exists():
+            manifest["rejected_translations"] = str(rejected_path.resolve())
+        save_manifest(root, manifest)
+        raise
     manifest["translation_count"] = reused + translated
+    manifest.pop("rejected_translations", None)
     manifest["status"] = "translated"
     save_manifest(root, manifest)
     return reused, translated
@@ -336,10 +538,13 @@ def validate_run(run_dir: Path, domain: DomainPack) -> None:
         raise ValueError(f"validate 不接受状态：{manifest['status']}")
     _verify_source_pdf(manifest)
     _verify_domain_languages(manifest, domain)
+    reference_ids, reference_policy = _recorded_reference_configuration(manifest)
     validate_translation_files(
         Path(str(manifest["segments_path"])),
         Path(str(manifest["translations_path"])),
         domain,
+        reference_segment_ids=reference_ids,
+        reference_policy=reference_policy,
     )
     manifest["validated_count"] = len(read_jsonl(Path(str(manifest["translations_path"]))))
     manifest["status"] = "validated"
@@ -365,9 +570,23 @@ def render_run(run_dir: Path, pdf2zh_bin: str | Path | None = None) -> Path:
         "--translations",
         translations,
     )
+    layout_executable = _resolve_pdf2zh(pdf2zh_bin)
+    layout_provenance = _layout_provenance(layout_executable)
+    recorded_layout = manifest.get("layout_engine")
+    if isinstance(recorded_layout, dict):
+        for field in ("pdf2zh_next_version", "babeldoc_version"):
+            if recorded_layout.get(field) != layout_provenance[field]:
+                raise ValueError(
+                    f"collect 与 render 的版面引擎版本不一致：{field} "
+                    f"run={recorded_layout.get(field)!r}, "
+                    f"current={layout_provenance[field]!r}"
+                )
+    else:
+        # 旧运行没有版面版本；重新 render 时从当前实际环境开始建立记录。
+        manifest["layout_engine"] = layout_provenance
     command = _common_layout_args(
         manifest,
-        pdf2zh_bin=_resolve_pdf2zh(pdf2zh_bin),
+        pdf2zh_bin=layout_executable,
         output_dir=output_dir,
         bridge_command=bridge,
     )
@@ -377,7 +596,7 @@ def render_run(run_dir: Path, pdf2zh_bin: str | Path | None = None) -> Path:
         raise RuntimeError(f"渲染后应有且仅有一个 PDF，实际 {len(candidates)} 个")
     manifest["rendered_pdf"] = str(candidates[0].resolve())
     manifest["rendered_sha256"] = _sha256(candidates[0])
-    manifest["schema_version"] = 2
+    manifest["schema_version"] = SCHEMA_VERSION
     manifest["status"] = "rendered"
     save_manifest(root, manifest)
     return candidates[0].resolve()
@@ -411,10 +630,126 @@ def qa_run(
     if report.get("translated_sha256") != manifest["rendered_sha256"]:
         raise RuntimeError("译文 PDF 在 QA 读取期间发生变化")
     manifest["qa_report"] = str(Path(str(manifest["qa_output_dir"])) / "qa_report.json")
-    manifest["schema_version"] = 2
+    manifest["schema_version"] = SCHEMA_VERSION
     manifest["status"] = "qa_generated"
     save_manifest(root, manifest)
     return report
+
+
+def _verify_vector_repair(before: Path, candidate: Path) -> list[dict[str, int]]:
+    """确认候选只增加矢量绘图，不改变页数、页面尺寸、文字或图片数量。"""
+
+    before_document = fitz.open(before)
+    candidate_document = fitz.open(candidate)
+    changes: list[dict[str, int]] = []
+    try:
+        if before_document.page_count != candidate_document.page_count:
+            raise ValueError("矢量修复候选改变了 PDF 页数")
+        for index in range(before_document.page_count):
+            before_page = before_document[index]
+            candidate_page = candidate_document[index]
+            if any(
+                abs(left - right) > 0.1
+                for left, right in zip(before_page.rect, candidate_page.rect)
+            ):
+                raise ValueError(f"矢量修复候选改变了第{index + 1}页尺寸")
+            if before_page.get_text() != candidate_page.get_text():
+                raise ValueError(f"矢量修复候选改变了第{index + 1}页文字")
+            if len(before_page.get_images(full=True)) != len(
+                candidate_page.get_images(full=True)
+            ):
+                raise ValueError(f"矢量修复候选改变了第{index + 1}页图片数量")
+            before_count = len(before_page.get_drawings())
+            candidate_count = len(candidate_page.get_drawings())
+            if candidate_count < before_count:
+                raise ValueError(f"矢量修复候选减少了第{index + 1}页矢量绘图")
+            if candidate_count > before_count:
+                changes.append(
+                    {
+                        "page": index + 1,
+                        "before": before_count,
+                        "after": candidate_count,
+                    }
+                )
+    finally:
+        candidate_document.close()
+        before_document.close()
+    if not changes:
+        raise ValueError("矢量修复候选没有增加任何矢量绘图")
+    return changes
+
+
+def apply_vector_repair(
+    run_dir: Path,
+    *,
+    repaired_pdf: Path,
+    description: str,
+) -> Path:
+    """受控导入矢量修复候选，并在清单留下可回滚、可审计历史。"""
+
+    if not description.strip():
+        raise ValueError("description 不能为空")
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] not in {"rendered", "qa_generated", "accepted"}:
+        raise ValueError(
+            "apply-vector-repair 只接受 rendered、qa_generated 或 accepted，"
+            f"当前为 {manifest['status']}"
+        )
+    _verify_source_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest)
+    candidate = repaired_pdf.expanduser().resolve()
+    if not candidate.is_file():
+        raise FileNotFoundError(f"矢量修复候选不存在：{candidate}")
+    if candidate == rendered:
+        raise ValueError("矢量修复候选必须是独立文件，不能原地覆盖已绑定 PDF")
+
+    vector_changes = _verify_vector_repair(rendered, candidate)
+    before_hash = str(manifest["rendered_sha256"])
+    after_hash = _sha256(candidate)
+    if after_hash == before_hash:
+        raise ValueError("矢量修复候选与当前 PDF 字节完全相同")
+    history = manifest.setdefault("repair_history", [])
+    if not isinstance(history, list):
+        raise ValueError("运行清单 repair_history 字段非法")
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_dir = root / "repair_backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f"{timestamp}-before-{before_hash[:12]}.pdf"
+    shutil.copy2(rendered, backup)
+
+    temporary = rendered.with_name(rendered.name + ".repair.tmp")
+    shutil.copy2(candidate, temporary)
+    temporary.replace(rendered)
+    try:
+        if _sha256(rendered) != after_hash:
+            raise RuntimeError("矢量修复候选复制后哈希不一致")
+        history.append(
+            {
+                "applied_at": _utc_now(),
+                "type": "vector",
+                "description": description.strip(),
+                "candidate_pdf": str(candidate),
+                "backup_pdf": str(backup.resolve()),
+                "before_sha256": before_hash,
+                "after_sha256": after_hash,
+                "vector_changes": vector_changes,
+            }
+        )
+        manifest["rendered_sha256"] = after_hash
+        manifest["status"] = "rendered"
+        manifest["schema_version"] = SCHEMA_VERSION
+        manifest.pop("qa_report", None)
+        manifest.pop("accepted_by", None)
+        save_manifest(root, manifest)
+    except Exception:
+        # PDF 与清单必须共同成功；清单写入失败时用已生成的备份恢复旧候选。
+        restore = rendered.with_name(rendered.name + ".restore.tmp")
+        shutil.copy2(backup, restore)
+        restore.replace(rendered)
+        raise
+    return rendered
 
 
 def run_to_qa(
@@ -425,6 +760,7 @@ def run_to_qa(
     pdf2zh_bin: str | Path | None = None,
     dpi: int = 144,
     pdftoppm_bin: str | Path | None = None,
+    reference_policy: str = "preserve",
 ) -> dict[str, object]:
     """从当前断点沿唯一生产路径推进到机器 QA，保留人工验收边界。
 
@@ -441,7 +777,12 @@ def run_to_qa(
     if manifest["status"] == "collected":
         if provider is None:
             raise ValueError("运行尚未翻译；请提供 --provider 后重试")
-        translate_run(run_dir=root, provider=provider, domain=domain)
+        translate_run(
+            run_dir=root,
+            provider=provider,
+            domain=domain,
+            reference_policy=reference_policy,
+        )
         manifest = load_manifest(root)
     if manifest["status"] == "translated":
         validate_run(root, domain)

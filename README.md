@@ -56,6 +56,8 @@ to their references:
 ```bash
 paperlocale provider-eval \
   --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
   --domain atmospheric-science \
   --output provider-eval.json
 ```
@@ -79,23 +81,67 @@ paperlocale domain-check atmospheric-science
 
 ## Quick start
 
-Use one resumable command to initialize the run, collect layout segments,
+Use the same resumable command to initialize the run, collect layout segments,
 translate, validate, rebuild, and generate all-page QA:
 
 ```bash
 # Uses the authenticated Codex CLI session on this trusted local machine.
 paperlocale run paper.pdf --run-dir runs/paper \
-  --provider codex-local --domain atmospheric-science
+  --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
+  --domain atmospheric-science
+
+# The first invocation stops after collection for reference review.
+paperlocale confirm-references --run-dir runs/paper \
+  --segment-id manually-confirmed-reference-segment-id \
+  --confirmed-by "Your name"
+
+# Rerun the original paperlocale run command after confirmation.
+paperlocale run paper.pdf --run-dir runs/paper \
+  --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
+  --domain atmospheric-science
 
 # Inspect every image under runs/paper/qa/comparisons/ before acceptance.
 paperlocale accept --run-dir runs/paper --reviewed-by "Your name"
 ```
 
 If a stage fails, rerun the same `paperlocale run` command. The manifest resumes
-from the last completed stage and validated translation batches are reused.
+from the last completed stage and every accepted segment is reused, including
+valid rows from a batch that also produced rejected candidates. Those candidates
+and their contract errors are stored in `rejected_translations.jsonl`.
 The command deliberately stops at `qa_generated`; it never records human
 acceptance. Once translation is complete, a resume command does not need
 `--provider` or API credentials.
+
+The default reference policy is `preserve`. PaperLocale writes every segment to
+`reference_review.jsonl`, automatically selects only long segments that match
+the source PDF's exact `REFERENCES` region, and requires explicit confirmation
+before any model call. Automatically matched IDs do not need to be repeated;
+omit `--segment-id` when no manual additions are needed. The confirmed map is
+bound to the source PDF and `segments.jsonl` hashes. Use
+`--reference-policy translate-titles` to translate work titles only; reference
+rows do not use body-domain glossary gates.
+
+The run manifest binds the domain-pack content hash, provider, model, reasoning
+effort, Codex CLI version, and collect/render layout-engine versions. A Codex
+run therefore requires an explicit `--model`.
+
+When vector objects disappear, QA records their page, bounding box, and area,
+and draws red boxes at the expected locations in both comparison panels. Import
+an independently repaired candidate through the audited path:
+
+```bash
+paperlocale apply-vector-repair --run-dir runs/paper \
+  --repaired-pdf repaired-paper.pdf \
+  --description "Restore page 1 link vector icons"
+```
+
+The command rejects candidates that alter text, page geometry, or image counts,
+backs up the previous PDF, appends `repair_history`, and requires QA and human
+acceptance to run again.
 
 For a BYOK OpenAI-compatible endpoint:
 
@@ -112,7 +158,8 @@ Remote compatible endpoints must use HTTPS. Plain HTTP is accepted only for
 loopback services on `localhost`, `127.0.0.1`, or `::1`.
 
 For explicit stage-by-stage control, the same production path remains available
-as `init-run -> collect -> translate -> validate -> render -> qa -> accept`.
+as `init-run -> collect -> reference-review/confirm-references -> translate ->
+validate -> render -> qa -> accept`.
 
 See the detailed [Chinese guide](README.zh-CN.md), [ROADMAP](docs/ROADMAP.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [domain-pack guide](docs/DOMAIN_PACKS.zh-CN.md), [Codex for Open Source readiness](docs/CODEX_FOR_OSS_READINESS.zh-CN.md), and [PROVENANCE](docs/PROVENANCE.md).
 

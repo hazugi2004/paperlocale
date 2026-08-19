@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paperlocale"
-version = "0.2.0"
+version = "0.3.0"
 description = "Verified, layout-preserving academic PDF translation with pluggable providers and domain packs."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,6 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "PaperLocale contributors" }]
 dependencies = [
   "Pillow>=10",
+  "PyMuPDF>=1.26",
   "pypdf>=6",
 ]
 keywords = [

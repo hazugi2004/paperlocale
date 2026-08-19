@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from dataclasses import dataclass
 from importlib import resources
@@ -31,6 +32,7 @@ class DomainPack:
     version: str
     source_language: str
     target_language: str
+    content_sha256: str
     prompt: str
     glossary: tuple[GlossaryEntry, ...]
     eval_cases: tuple[dict[str, str], ...]
@@ -38,6 +40,18 @@ class DomainPack:
 
 def _read_pack(root: Path) -> DomainPack:
     """从一个已解析目录读取领域包，并拒绝缺少关键文件或重复术语。"""
+
+    required_files = ("manifest.json", "prompt.txt", "glossary.tsv", "eval_cases.jsonl")
+    digest = hashlib.sha256()
+    for name in required_files:
+        path = root / name
+        if not path.is_file():
+            raise FileNotFoundError(f"领域包缺少必需文件：{path}")
+        # 文件名和原始字节共同参与哈希，防止同一 id/version 下静默改写任一内容。
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
 
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     prompt = (root / "prompt.txt").read_text(encoding="utf-8").strip()
@@ -87,6 +101,7 @@ def _read_pack(root: Path) -> DomainPack:
         version=str(manifest["version"]),
         source_language=str(manifest["source_language"]),
         target_language=str(manifest["target_language"]),
+        content_sha256=digest.hexdigest(),
         prompt=prompt,
         glossary=tuple(glossary),
         eval_cases=tuple(eval_cases),

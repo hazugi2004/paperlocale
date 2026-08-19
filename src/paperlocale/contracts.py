@@ -20,8 +20,9 @@ FORMULA_RE = re.compile(r"\{v\d+\}")
 STYLE_RE = re.compile(r"<style\s+id=['\"]\d+['\"]>|</style>", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s)\]}>,;，。；：！？）】》]+", re.IGNORECASE)
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s)\]}>,;，。；：！？）】》]+", re.IGNORECASE)
-NUMBER_RE = re.compile(r"(?<!\d)[-+−]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?")
+NUMBER_RE = re.compile(r"(?<![\dA-Za-z])[-+−]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?")
 ABBREVIATION_RE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Z][A-Z0-9-]{1,})(?![A-Za-z0-9])")
+ABBREVIATION_EXCLUSIONS = frozenset({"ABSTRACT", "KEYWORDS", "REFERENCES"})
 UNIT_RE = re.compile(
     r"(?<![A-Za-z])(?:%|°[CF]?|mm|cm|m|km|Pa|hPa|K|W\s*m-?2|"
     r"g\s*C\s*m-?2(?:\s*d-?1)?|µmol\s*m-?2\s*s-?1)(?![A-Za-z])",
@@ -53,18 +54,28 @@ def _clean_identifiers(values: list[str]) -> Counter[str]:
 def protected_counts(text: str) -> dict[str, Counter[str]]:
     """提取必须保留的标记及出现次数。"""
 
+    abbreviations = (
+        value for value in ABBREVIATION_RE.findall(text)
+        if value not in ABBREVIATION_EXCLUSIONS
+    )
     return {
         "formula": Counter(FORMULA_RE.findall(text)),
         "style": Counter(STYLE_RE.findall(text)),
         "url": _clean_identifiers(URL_RE.findall(text)),
         "doi": _clean_identifiers(DOI_RE.findall(text)),
         "number": Counter(NUMBER_RE.findall(text)),
-        "abbreviation": Counter(ABBREVIATION_RE.findall(text)),
+        "abbreviation": Counter(abbreviations),
         "unit": Counter(match.group(0) for match in UNIT_RE.finditer(text)),
     }
 
 
-def validate_translation(source: str, target: str, domain: DomainPack | None = None) -> list[str]:
+def validate_translation(
+    source: str,
+    target: str,
+    domain: DomainPack | None = None,
+    *,
+    require_cjk: bool = True,
+) -> list[str]:
     """返回全部合同错误；空列表才允许译文进入渲染阶段。"""
 
     errors: list[str] = []
@@ -89,7 +100,7 @@ def validate_translation(source: str, target: str, domain: DomainPack | None = N
     if STYLE_RE.findall(source) != STYLE_RE.findall(target):
         errors.append("style 标签顺序改变")
 
-    if len(ENGLISH_RE.findall(source)) >= 40 and not CJK_RE.search(target):
+    if require_cjk and len(ENGLISH_RE.findall(source)) >= 40 and not CJK_RE.search(target):
         errors.append("长正文片段缺少中文译文")
 
     if domain is not None:
@@ -137,9 +148,14 @@ def validate_translation_files(
     segments_path: Path,
     translations_path: Path,
     domain: DomainPack | None = None,
+    *,
+    reference_segment_ids: set[str] | frozenset[str] = frozenset(),
+    reference_policy: str = "preserve",
 ) -> None:
     """核对两个 JSONL 的身份闭合和逐片段内容合同。"""
 
+    if reference_policy not in {"preserve", "translate-titles"}:
+        raise ValueError(f"参考文献策略非法：{reference_policy}")
     segments = read_jsonl(segments_path)
     translations = read_jsonl(translations_path)
     expected = {str(row.get("id")): row for row in segments}
@@ -159,7 +175,13 @@ def validate_translation_files(
         target_row = actual[sid]
         if str(target_row.get("source", "")) != source:
             raise ValueError(f"译文记录的 source 与片段原文不一致：{sid}")
-        errors = validate_translation(source, str(target_row.get("target", "")), domain)
+        target = str(target_row.get("target", ""))
+        if sid in reference_segment_ids and reference_policy == "preserve":
+            errors = [] if target == source else ["preserve 策略要求参考文献原样保留"]
+        elif sid in reference_segment_ids:
+            errors = validate_translation(source, target, None)
+        else:
+            errors = validate_translation(source, target, domain)
         if errors:
             failures[sid] = errors
     if failures:

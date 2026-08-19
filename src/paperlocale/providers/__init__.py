@@ -4,10 +4,11 @@
 """
 
 from .base import Segment, Translation, TranslationContext, TranslationProvider
-from .codex_local import CodexLocalProvider
+from .codex_local import REASONING_EFFORTS, CodexLocalProvider
 from .openai_compatible import OpenAICompatibleProvider
 
 __all__ = [
+    "REASONING_EFFORTS",
     "CodexLocalProvider",
     "OpenAICompatibleProvider",
     "Segment",

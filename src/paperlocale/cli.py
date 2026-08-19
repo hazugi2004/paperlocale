@@ -16,6 +16,7 @@ from .workflow import (
     accept_run,
     apply_vector_repair,
     collect_run,
+    confirm_passthrough_run,
     confirm_reference_run,
     initialize_run,
     load_manifest,
@@ -170,6 +171,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="补充一个未自动匹配的参考文献片段 ID；可重复使用",
     )
     confirm_references.add_argument("--confirmed-by", required=True)
+
+    confirm_passthrough = subparsers.add_parser(
+        "confirm-passthrough",
+        help="人工确认无需翻译且必须原样保留的片段 ID",
+    )
+    confirm_passthrough.add_argument("--run-dir", type=Path, required=True)
+    confirm_passthrough.add_argument(
+        "--segment-id",
+        action="append",
+        required=True,
+        help="确认一个无需翻译的片段 ID；同一原因可重复使用",
+    )
+    confirm_passthrough.add_argument("--reason", required=True)
+    confirm_passthrough.add_argument("--confirmed-by", required=True)
 
     run_translate = subparsers.add_parser("translate", help="翻译一个已初始化运行")
     run_translate.add_argument("--run-dir", type=Path, required=True)
@@ -343,6 +358,15 @@ def main() -> int:
             "参考文献映射已确认："
             f"{len(mapping['reference_segment_ids'])} 个片段"
         )
+        return 0
+    if args.command == "confirm-passthrough":
+        mapping = confirm_passthrough_run(
+            args.run_dir,
+            segment_ids=args.segment_id,
+            reason=args.reason,
+            confirmed_by=args.confirmed_by,
+        )
+        print(f"人工透传映射已确认：{len(mapping['entries'])} 个片段")
         return 0
     if args.command == "translate":
         pack = load_domain_pack(args.domain)

@@ -28,6 +28,7 @@ from paperlocale.workflow import (
     accept_run,
     apply_vector_repair,
     collect_run,
+    confirm_passthrough_run,
     confirm_reference_run,
     initialize_run,
     load_manifest,
@@ -47,6 +48,21 @@ class _Provider(TranslationProvider):
         context: TranslationContext,
     ) -> list[Translation]:
         return [Translation(segment.id, "土壤湿度为10 mm。") for segment in segments]
+
+
+class _IdentityProvider(TranslationProvider):
+    """模拟模型正确原样保留非正文，但因此触发全局中文门禁。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def translate(
+        self,
+        segments: list[Segment],
+        context: TranslationContext,
+    ) -> list[Translation]:
+        self.calls += 1
+        return [Translation(segment.id, segment.source) for segment in segments]
 
 
 class WorkflowTest(unittest.TestCase):
@@ -462,6 +478,68 @@ class WorkflowTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "映射在翻译后发生变化"):
                 validate_run(run_dir, domain)
 
+    def test_partial_failure_can_be_confirmed_as_hash_bound_passthrough(self) -> None:
+        """失败片段可经人工确认后透传，且不能绕过清单哈希改写映射。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(40, 780, "Synthetic PDF without references")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            source = (
+                "Alice Smith, Bob Jones, Carol White, David Brown, "
+                "Edward Green, and Frances Black"
+            )
+            sid = segment_id(source)
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [{"id": sid, "source": source}],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="reviewer",
+            )
+
+            provider = _IdentityProvider()
+            with self.assertRaisesRegex(ValueError, "未通过门禁"):
+                translate_run(run_dir=run_dir, provider=provider, domain=domain)
+            confirm_passthrough_run(
+                run_dir,
+                segment_ids=[sid],
+                reason="作者姓名串没有可翻译正文",
+                confirmed_by="reviewer",
+            )
+            self.assertEqual(
+                translate_run(run_dir=run_dir, provider=provider, domain=domain),
+                (0, 1),
+            )
+            self.assertEqual(provider.calls, 1)
+            translated_manifest = load_manifest(run_dir)
+            self.assertEqual(translated_manifest["schema_version"], 4)
+            self.assertEqual(translated_manifest["passthrough_segment_count"], 1)
+            self.assertTrue(translated_manifest["passthrough_map_sha256"])
+            validate_run(run_dir, domain)
+
+            map_path = run_dir / "passthrough_map.json"
+            map_path.write_text(
+                map_path.read_text(encoding="utf-8") + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "透传映射在翻译后发生变化"):
+                validate_run(run_dir, domain)
+
     def test_validate_rejects_domain_content_changed_without_version_bump(self) -> None:
         """相同 id/version 不能掩盖提示词或术语表内容变化。"""
 
@@ -520,7 +598,7 @@ class WorkflowTest(unittest.TestCase):
             with patch("paperlocale.workflow.inspect_pdf_pair", return_value=report):
                 qa_run(run_dir)
             upgraded = load_manifest(run_dir)
-            self.assertEqual(upgraded["schema_version"], 3)
+            self.assertEqual(upgraded["schema_version"], 4)
             self.assertEqual(upgraded["status"], "qa_generated")
             self.assertEqual(upgraded["rendered_sha256"], report["translated_sha256"])
 

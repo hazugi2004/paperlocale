@@ -200,6 +200,63 @@ class PipelineTest(unittest.TestCase):
                 reference_policy="translate-titles",
             )
 
+    def test_rejected_nontranslatable_segment_can_resume_as_passthrough(self) -> None:
+        """人工透传不能放宽门禁，但可接管尚未保存的真实失败片段。"""
+
+        source = (
+            "Alice Smith, Bob Jones, Carol White, David Brown, "
+            "Edward Green, and Frances Black"
+        )
+        sid = segment_id(source)
+        provider = _MappingProvider({source: source})
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            segments = root / "segments.jsonl"
+            translations = root / "translations.jsonl"
+            write_jsonl_atomic(segments, [{"id": sid, "source": source}])
+
+            with self.assertRaisesRegex(ValueError, "未通过门禁"):
+                translate_segment_file(
+                    segments_path=segments,
+                    translations_path=translations,
+                    provider=provider,
+                    domain=domain,
+                )
+            rejected = root / "rejected_translations.jsonl"
+            self.assertTrue(rejected.is_file())
+
+            self.assertEqual(
+                translate_segment_file(
+                    segments_path=segments,
+                    translations_path=translations,
+                    provider=provider,
+                    domain=domain,
+                    passthrough_segment_ids={sid},
+                ),
+                (0, 1),
+            )
+            self.assertEqual(provider.calls, 1)
+            self.assertFalse(rejected.exists())
+            self.assertEqual(read_jsonl(translations)[0]["target"], source)
+            validate_translation_files(
+                segments,
+                translations,
+                domain,
+                passthrough_segment_ids={sid},
+            )
+            write_jsonl_atomic(
+                translations,
+                [{"id": sid, "source": source, "target": "作者名单"}],
+            )
+            with self.assertRaisesRegex(ValueError, "必须与原文完全相同"):
+                validate_translation_files(
+                    segments,
+                    translations,
+                    domain,
+                    passthrough_segment_ids={sid},
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

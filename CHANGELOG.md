@@ -7,6 +7,7 @@
 ### Added
 
 - macOS CI 在源码目录和虚拟环境都含中文与空格时执行非 editable 安装、`pip check`、领域包检查和 CLI 入口验证，覆盖普通用户推荐安装路径。
+- 增加绑定源 PDF、`segments.jsonl` 哈希及逐条确认原因的 `passthrough_map.json`；纯公式、作者姓名串等非正文片段可在人工确认后严格原样保留，无需削弱全局中文门禁，部分批次失败后也可安全续跑。
 
 ### Fixed
 

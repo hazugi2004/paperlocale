@@ -52,6 +52,7 @@ def translate_segment_file(
     max_characters: int = 30000,
     reference_segment_ids: set[str] | frozenset[str] = frozenset(),
     reference_policy: str = "preserve",
+    passthrough_segment_ids: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[int, int]:
     """翻译尚未通过门禁的片段，并在每批成功后原子写入断点。
 
@@ -77,6 +78,12 @@ def translate_segment_file(
     unknown_reference_ids = set(reference_segment_ids) - seen
     if unknown_reference_ids:
         raise ValueError(f"参考文献映射包含未知片段 ID：{sorted(unknown_reference_ids)}")
+    unknown_passthrough_ids = set(passthrough_segment_ids) - seen
+    if unknown_passthrough_ids:
+        raise ValueError(f"透传映射包含未知片段 ID：{sorted(unknown_passthrough_ids)}")
+    overlap = set(reference_segment_ids) & set(passthrough_segment_ids)
+    if overlap:
+        raise ValueError(f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}")
 
     existing_rows = read_jsonl(translations_path) if translations_path.exists() else []
     rejected_path = translations_path.with_name("rejected_translations.jsonl")
@@ -89,7 +96,9 @@ def translate_segment_file(
         target = str(row.get("target", ""))
         if sid not in seen or source != next(item.source for item in segments if item.id == sid):
             raise ValueError(f"既有译文不属于当前片段集合：{sid}")
-        if sid in reference_segment_ids and reference_policy == "preserve":
+        if sid in passthrough_segment_ids:
+            errors = [] if target == source else ["人工透传片段必须与原文完全相同"]
+        elif sid in reference_segment_ids and reference_policy == "preserve":
             errors = [] if target == source else ["preserve 策略要求参考文献原样保留"]
         elif sid in reference_segment_ids:
             errors = validate_translation(source, target, None)
@@ -101,16 +110,20 @@ def translate_segment_file(
 
     reused_count = len(existing)
     ordered = list(existing.values())
-    preserved_count = 0
+    # 参考文献 preserve 和人工透传都不应进入 Provider。先原子保存原文，
+    # 即使后续模型批次失败，这些人工决定也可在断点中稳定复用。
+    preserved_ids = set(passthrough_segment_ids)
     if reference_policy == "preserve":
-        for segment in segments:
-            if segment.id in reference_segment_ids and segment.id not in existing:
-                row = {"id": segment.id, "source": segment.source, "target": segment.source}
-                existing[segment.id] = row
-                ordered.append(row)
-                preserved_count += 1
-        if preserved_count:
-            write_jsonl_atomic(translations_path, ordered)
+        preserved_ids.update(reference_segment_ids)
+    preserved_count = 0
+    for segment in segments:
+        if segment.id in preserved_ids and segment.id not in existing:
+            row = {"id": segment.id, "source": segment.source, "target": segment.source}
+            existing[segment.id] = row
+            ordered.append(row)
+            preserved_count += 1
+    if preserved_count:
+        write_jsonl_atomic(translations_path, ordered)
 
     pending = [segment for segment in segments if segment.id not in existing]
     context = TranslationContext(
@@ -165,4 +178,8 @@ def translate_segment_file(
         if rejected_path.exists():
             # 成功重试后清除已经解决的诊断文件，避免把旧失败误认为当前状态。
             rejected_path.unlink()
+    # 失败片段后来被人工确认为透传时，pending 可能为空，不会进入上方模型循环；
+    # 此时也必须清除已经失效的 rejected_translations.jsonl。
+    if rejected_path.exists():
+        rejected_path.unlink()
     return reused_count, preserved_count + len(pending)

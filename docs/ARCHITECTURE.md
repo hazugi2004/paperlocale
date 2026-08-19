@@ -7,6 +7,7 @@ PDF
   -> 版面解析与片段收集
   -> segments.jsonl
   -> 参考文献复核与确认映射
+  -> 可选的非正文人工透传确认
   -> 领域包 + 单一 Provider
   -> translations.jsonl
   -> 科学信息硬门禁
@@ -21,6 +22,11 @@ PDF 精确定位唯一 `REFERENCES` 区域，只自动接受完整规范化文�
 长片段，并把全部片段写入 `reference_review.jsonl`。人工确认后的
 `reference_map.json` 同时绑定源 PDF 与 `segments.jsonl` 哈希；没有确认映射时
 不得调用模型。`translate-titles` 复用同一映射，参考文献不执行正文术语门禁。
+
+纯公式、作者姓名串等非正文片段不能通过削弱全局中文门禁解决。用户可用
+`confirm-passthrough` 按稳定 ID 显式确认；`passthrough_map.json` 绑定源 PDF 与
+`segments.jsonl` 哈希，并逐条记录原因、确认人和时间。此类片段必须严格
+`target == source` 且不会进入 Provider；映射文件由 schema 4 清单哈希锁定。
 
 `paperlocale run` 只是上述单一生产路径的状态编排器：它读取清单后依次调用现有阶段函数，从最后成功状态推进到 `qa_generated`。它不实现第二套翻译或渲染逻辑，也不会自动执行必须由人完成的 `accept`。
 
@@ -37,7 +43,7 @@ PDF 机器 QA 将页数、页面框、图片对象和直接页面内容流中的
 `run_manifest.json`，避免在每条片段中重复。每个后续阶段都会重新核对源 PDF
 身份；源文件变化后必须创建新运行。
 
-schema 3 还会记录领域包内容 SHA-256、Provider/模型/推理强度、Codex CLI 与
+schema 4 还会记录领域包内容 SHA-256、Provider/模型/推理强度、Codex CLI 与
 collect/render 版面引擎版本，并在 `render` 后记录候选 PDF 的 SHA-256。
 `qa_report.json` 同时记录
 源文件和候选文件的路径与哈希；`accept` 只有在四者仍与运行清单闭合时才记录

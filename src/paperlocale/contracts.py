@@ -151,6 +151,7 @@ def validate_translation_files(
     *,
     reference_segment_ids: set[str] | frozenset[str] = frozenset(),
     reference_policy: str = "preserve",
+    passthrough_segment_ids: set[str] | frozenset[str] = frozenset(),
 ) -> None:
     """核对两个 JSONL 的身份闭合和逐片段内容合同。"""
 
@@ -166,6 +167,12 @@ def validate_translation_files(
         missing = sorted(set(expected) - set(actual))
         unexpected = sorted(set(actual) - set(expected))
         raise ValueError(f"ID 集合不闭合：missing={missing}, unexpected={unexpected}")
+    unknown_passthrough_ids = set(passthrough_segment_ids) - set(expected)
+    if unknown_passthrough_ids:
+        raise ValueError(f"透传映射包含未知片段 ID：{sorted(unknown_passthrough_ids)}")
+    overlap = set(reference_segment_ids) & set(passthrough_segment_ids)
+    if overlap:
+        raise ValueError(f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}")
 
     failures: dict[str, list[str]] = {}
     for sid, source_row in expected.items():
@@ -176,7 +183,9 @@ def validate_translation_files(
         if str(target_row.get("source", "")) != source:
             raise ValueError(f"译文记录的 source 与片段原文不一致：{sid}")
         target = str(target_row.get("target", ""))
-        if sid in reference_segment_ids and reference_policy == "preserve":
+        if sid in passthrough_segment_ids:
+            errors = [] if target == source else ["人工透传片段必须与原文完全相同"]
+        elif sid in reference_segment_ids and reference_policy == "preserve":
             errors = [] if target == source else ["preserve 策略要求参考文献原样保留"]
         elif sid in reference_segment_ids:
             errors = validate_translation(source, target, None)

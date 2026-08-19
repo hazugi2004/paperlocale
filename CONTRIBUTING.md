@@ -2,6 +2,10 @@
 
 欢迎贡献解析兼容性、Provider、领域包、测试和文档。
 
+参与 Issue、PR、评审或其他项目空间即表示同意遵守
+[PaperLocale Code of Conduct](CODE_OF_CONDUCT.md)。行为问题请按其中说明私密
+报告，不要在公开 Issue 中披露个人敏感信息。
+
 提交前请：
 
 1. 不添加受版权限制的论文或译文；

@@ -195,6 +195,13 @@ confirm-passthrough -> translate -> validate -> render -> qa -> accept`.
 
 See the detailed [Chinese guide](README.zh-CN.md), [ROADMAP](docs/ROADMAP.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [domain-pack guide](docs/DOMAIN_PACKS.zh-CN.md), [Codex for Open Source readiness](docs/CODEX_FOR_OSS_READINESS.zh-CN.md), and [PROVENANCE](docs/PROVENANCE.md).
 
+## Citation and community
+
+Research and teaching users can cite the software through
+[`CITATION.cff`](CITATION.cff); GitHub exposes the same metadata through its
+“Cite this repository” control. Participation in issues, pull requests, and
+reviews follows the [PaperLocale Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Development
 
 Unit tests do not call a model or require the layout engine:

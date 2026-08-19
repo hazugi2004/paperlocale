@@ -190,6 +190,12 @@ paperlocale domain-check /path/to/your-domain
 
 四个文件的原始字节与文件名共同生成内容 SHA-256；只修改内容而不提高版本号，也不会绕过运行清单的续跑身份检查。字段、门禁和贡献要求见 [领域包指南](docs/DOMAIN_PACKS.zh-CN.md)。实施进度见 [路线图](docs/ROADMAP.md)，申请证据边界见 [Codex for Open Source 准备清单](docs/CODEX_FOR_OSS_READINESS.zh-CN.md) 与 [申请草稿](docs/CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md)，安全与订阅边界见 [安全策略](SECURITY.md)。
 
+## 引用与社区规范
+
+在研究或教学中使用本项目时，可通过 [`CITATION.cff`](CITATION.cff) 获取机器可读
+引用元数据；合并到默认分支后，GitHub 仓库侧栏也会显示 “Cite this repository”。
+参与 Issue、PR 和评审须遵守 [PaperLocale Code of Conduct](CODE_OF_CONDUCT.md)。
+
 ## 当前证据边界
 
 - 63 项单元测试不联网运行，覆盖内容合同、Provider 评估、一键断点续跑、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、页面 QA、隔离环境入口和演示产物；

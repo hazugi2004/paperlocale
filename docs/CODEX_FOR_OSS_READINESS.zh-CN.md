@@ -24,6 +24,7 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 |---|---|---|
 | 明确的公共开源价值 | 学术 PDF 保版翻译、科学信息硬门禁、可扩展领域术语包 | 已实现 |
 | 核心维护者与写权限 | `MAINTAINERS.md` 与 GitHub `hazugi2004/paperlocale` 管理权限 | 已验证 |
+| 社区治理与学术引用 | Contributor Covenant 3.0 社区准则、私密行为问题报告、CFF 1.2.0 软件引用元数据 | 已实现；合并到默认分支后由 GitHub 展示 Code of Conduct 与 “Cite this repository” 入口 |
 | 可运行项目 | 一键断点续跑 CLI、两种 Provider、Provider 评估、参考文献与非正文人工确认、碎词安全审查、单向状态机、63 项不联网测试 | [PR #17](https://github.com/hazugi2004/paperlocale/pull/17)、[#18](https://github.com/hazugi2004/paperlocale/pull/18)、[#19](https://github.com/hazugi2004/paperlocale/pull/19) 的 Python 3.10–3.13 矩阵、macOS 中文/空格路径及 `[layout]` 求解均通过 |
 | 可复现质量证据 | 合成双栏 PDF、公式合同、人工透传与碎词安全清单、图片与矢量绘图硬门禁、逐页 QA；[v0.3.2 永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip)保留日志、映射、清单与对照图 | [公开兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32234356256)为 0 errors / 0 warnings；附件 SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7` |
 | 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考、[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)与 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 公开 | 初步证据，等待非维护者领域人员提交复核 |

@@ -7,6 +7,7 @@ CLITranslator 返回的片段没有页码，而且顺序不等于 PDF 阅读顺�
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -18,8 +19,22 @@ import pymupdf as fitz
 from .contracts import read_jsonl, write_jsonl_atomic
 
 REFERENCE_POLICIES = ("preserve", "translate-titles")
-REFERENCE_HEADING_RE = re.compile(r"^\s*REFERENCES\s*$", re.IGNORECASE)
+# 投稿手稿常把章节号和边栏行号并入同一 PDF 文本块，例如
+# ``6 Reference\n353``。只允许标题词前后各一个整数，并坚持 fullmatch，
+# 避免把正文里的 ``see Reference 353`` 或书目内容误判为区域标题。
+REFERENCE_HEADING_RE = re.compile(
+    r"^\s*(?:\d+\s+)?REFERENCES?(?:\s+\d+)?\s*$",
+    re.IGNORECASE,
+)
+# 参考文献之后可能还有独立的图表章节。只把“章节号 + 简短英文标题”的完整
+# 文本块视为下一个章节边界；年份、页码和普通参考文献条目都不满足该结构。
+NUMBERED_SECTION_HEADING_RE = re.compile(
+    r"^\s*\d+\s+[A-Za-z][A-Za-z ]{0,80}\s*$",
+    re.IGNORECASE,
+)
 MINIMUM_EXACT_MATCH_CHARACTERS = 80
+MINIMUM_IN_ORDER_EXACT_COVERAGE = 0.99
+FORMULA_PLACEHOLDER_RE = re.compile(r"\{v\d+\}", re.IGNORECASE)
 
 
 def _utc_now() -> str:
@@ -34,10 +49,60 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _normalized_match_text(text: str) -> str:
-    """仅用于确定性包含判断；删除排版空白和标点，不改字母数字顺序。"""
+def _normalized_match_text(
+    text: str,
+    *,
+    ignored_tokens: tuple[str, ...] = (),
+) -> str:
+    """为确定性区域比对删除排版差异，不改其余字母数字顺序。
 
-    return re.sub(r"[^a-z0-9]+", "", text.casefold())
+    CLITranslator 用 ``{vN}`` 代替源 PDF 中的公式或富文本对象；投稿手稿还会
+    把左侧行号混入片段。两者都由当前 PDF 本身确定，因此可从区域和候选中
+    同步移除，而不使用作者、年份或 DOI 等内容猜测。
+    """
+
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        FORMULA_PLACEHOLDER_RE.sub("", text).casefold(),
+    )
+    for token in ignored_tokens:
+        normalized = normalized.replace(token.casefold(), "")
+    return normalized
+
+
+def _in_order_exact_coverage(candidate: str, region: str) -> float:
+    """返回候选中按原顺序落入区域的精确字符比例。"""
+
+    if not candidate or not region:
+        return 0.0
+    matcher = difflib.SequenceMatcher(None, candidate, region, autojunk=False)
+    matched = sum(block.size for block in matcher.get_matching_blocks())
+    return matched / len(candidate)
+
+
+def _block_without_line_numbers(text: str, line_numbers: list[str]) -> str:
+    """删除由页面坐标确认的边栏行号，并保留其余文本顺序。"""
+
+    known_line_numbers = set(line_numbers)
+    return " ".join(
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and line.strip() not in known_line_numbers
+    )
+
+
+def _heading_block_matches(text: str, line_numbers: list[str]) -> bool:
+    """判断文本块是否仅由参考文献标题和已定位的边栏行号组成。
+
+    PyMuPDF 对同一视觉行的抽取顺序并不固定：标题块可能是
+    ``6 Reference\n353``，也可能是 ``353\n6 Reference``。这里只删除已经由
+    页面左侧坐标确认的纯数字行，再对剩余完整文本应用严格标题正则；正文中的
+    年份或编号不会因为内容相同而被忽略。
+    """
+
+    cleaned = _block_without_line_numbers(text, line_numbers)
+    return REFERENCE_HEADING_RE.fullmatch(cleaned) is not None
 
 
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
@@ -50,12 +115,15 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     temporary.replace(path)
 
 
-def _reference_region(source_pdf: Path) -> tuple[list[int], str | None]:
-    """返回精确标题页列表；仅在标题唯一时提取标题之后的参考文献区域。"""
+def _reference_region(
+    source_pdf: Path,
+) -> tuple[list[int], str | None, tuple[str, ...]]:
+    """返回标题页、标题后区域和由 PDF 坐标确定的左侧稿件行号。"""
 
     document = fitz.open(source_pdf)
     headings: list[tuple[int, float]] = []
     page_blocks: list[list[tuple[float, float, float, float, str]]] = []
+    page_line_entries: list[list[tuple[float, float, str]]] = []
     try:
         for page_index, page in enumerate(document):
             blocks = [
@@ -69,25 +137,72 @@ def _reference_region(source_pdf: Path) -> tuple[list[int], str | None]:
                 for block in page.get_text("blocks")
             ]
             page_blocks.append(blocks)
+            line_entries: list[tuple[float, float, str]] = []
+            for block in page.get_text("dict")["blocks"]:
+                for line in block.get("lines", []):
+                    line_text = "".join(
+                        str(span.get("text", "")) for span in line.get("spans", [])
+                    ).strip()
+                    # 投稿手稿边栏行号位于页面最左侧；页脚页码在页面中部，
+                    # 不满足这个坐标边界。只记录纯数字行，避免删除正文数字。
+                    if (
+                        line_text.isdigit()
+                        and float(line["bbox"][2]) <= float(page.rect.width) * 0.12
+                    ):
+                        line_entries.append(
+                            (
+                                float(line["bbox"][1]),
+                                float(line["bbox"][3]),
+                                line_text,
+                            )
+                        )
+            page_line_entries.append(line_entries)
+            line_numbers = [entry[2] for entry in line_entries]
             for block in blocks:
-                if REFERENCE_HEADING_RE.fullmatch(block[4]):
+                if _heading_block_matches(block[4], line_numbers):
                     headings.append((page_index, block[3]))
     finally:
         document.close()
 
     heading_pages = [page_index + 1 for page_index, _bottom in headings]
     if len(headings) != 1:
-        return heading_pages, None
+        return heading_pages, None, ()
 
     heading_page, heading_bottom = headings[0]
-    region_parts = [
-        block[4]
-        for block in page_blocks[heading_page]
-        if block[1] >= heading_bottom
-    ]
-    for blocks in page_blocks[heading_page + 1 :]:
-        region_parts.extend(block[4] for block in blocks)
-    return heading_pages, "\n".join(region_parts)
+    region_parts: list[str] = []
+    region_boundary: tuple[int, float] | None = None
+    for page_index in range(heading_page, len(page_blocks)):
+        for block in page_blocks[page_index]:
+            if page_index == heading_page and block[1] < heading_bottom:
+                continue
+            cleaned = _block_without_line_numbers(
+                block[4],
+                [entry[2] for entry in page_line_entries[page_index]],
+            )
+            # 参考文献必须止于下一个编号章节，不能把其后的 Figure 或 Table
+            # 章节误标为参考文献。标题自身已经在上方排除，不会触发此边界。
+            if NUMBERED_SECTION_HEADING_RE.fullmatch(cleaned):
+                region_boundary = (page_index, block[1])
+                break
+            region_parts.append(block[4])
+        if region_boundary is not None:
+            break
+
+    last_region_page = (
+        region_boundary[0] if region_boundary is not None else len(page_blocks) - 1
+    )
+    boundary_top = region_boundary[1] if region_boundary is not None else None
+    line_numbers = tuple(
+        text
+        for page_index in range(heading_page, last_region_page + 1)
+        for top, _bottom, text in page_line_entries[page_index]
+        # 边界页只纳入下一个章节标题上方的行号，避免 Figure 章节的行号
+        # 参与候选归一化；其余参考文献页全部纳入。
+        if boundary_top is None
+        or page_index < last_region_page
+        or top < boundary_top
+    )
+    return heading_pages, "\n".join(region_parts), line_numbers
 
 
 def prepare_reference_review(
@@ -106,9 +221,14 @@ def prepare_reference_review(
         raise ValueError("源 PDF 哈希与运行清单不一致")
 
     rows = read_jsonl(segments)
-    heading_pages, region_text = _reference_region(source)
+    heading_pages, region_text, manuscript_line_numbers = _reference_region(source)
     normalized_region = (
-        _normalized_match_text(region_text) if region_text is not None else ""
+        _normalized_match_text(
+            region_text,
+            ignored_tokens=manuscript_line_numbers,
+        )
+        if region_text is not None
+        else ""
     )
     review_rows: list[dict[str, object]] = []
     automatic_ids: list[str] = []
@@ -116,24 +236,29 @@ def prepare_reference_review(
     for index, row in enumerate(rows, 1):
         segment_id = str(row.get("id", ""))
         source_text = str(row.get("source", ""))
-        normalized = _normalized_match_text(source_text)
+        normalized = _normalized_match_text(
+            source_text,
+            ignored_tokens=manuscript_line_numbers,
+        )
         heading_match = REFERENCE_HEADING_RE.fullmatch(source_text) is not None
+        exact_coverage = _in_order_exact_coverage(normalized, normalized_region)
         region_match = (
             len(normalized) >= MINIMUM_EXACT_MATCH_CHARACTERS
             and bool(normalized_region)
-            and normalized in normalized_region
+            and exact_coverage >= MINIMUM_IN_ORDER_EXACT_COVERAGE
         )
         automatic = heading_match or region_match
         if automatic:
             automatic_ids.append(segment_id)
             if region_match:
-                automatic_characters += len(normalized)
+                automatic_characters += round(len(normalized) * exact_coverage)
         review_rows.append(
             {
                 "index": index,
                 "id": segment_id,
                 "source": source_text,
                 "automatic_exact_match": automatic,
+                "in_order_exact_coverage": round(exact_coverage, 6),
             }
         )
 
@@ -147,6 +272,8 @@ def prepare_reference_review(
         "segments_sha256": _sha256(segments),
         "heading_pages": heading_pages,
         "automatic_region_available": region_text is not None,
+        "manuscript_line_number_count": len(manuscript_line_numbers),
+        "minimum_in_order_exact_coverage": MINIMUM_IN_ORDER_EXACT_COVERAGE,
         "reference_region_sha256": (
             hashlib.sha256(normalized_region.encode("utf-8")).hexdigest()
             if normalized_region

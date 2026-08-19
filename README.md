@@ -75,7 +75,7 @@ git clone https://github.com/hazugi2004/paperlocale.git
 cd paperlocale
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[layout]"
+python -m pip install ".[layout]"
 paperlocale domain-check atmospheric-science
 ```
 

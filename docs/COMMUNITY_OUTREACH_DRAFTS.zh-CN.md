@@ -47,7 +47,7 @@
 >
 > 重点保护公式占位符、富文本标签、数字、单位、缩写、URL、DOI 和固定专业术语；源 PDF、候选 PDF 与 QA 报告通过 SHA-256 绑定。候选文件在 QA 后被替换时，验收会直接失败。
 >
-> 当前版本为 v0.3.1，已有 54 项测试覆盖 Python 3.10–3.13，并提供断点续跑、参考文献人工确认、真实 Provider 领域案例评估和逐页机器 QA；图片或矢量绘图少于原文时 QA 会失败并红框定位。v0.3.1 已在干净 Linux Runner 上从 `[layout]` 安装完成真实版面冒烟，覆盖双栏、公式、矢量表格和嵌入图片，并提供由自有合成论文生成的演示 GIF。项目不会分发受版权限制的论文或完整译本。
+> 当前版本为 v0.3.2，已有 63 项测试覆盖 Python 3.10–3.13，并提供断点续跑、参考文献与非正文人工确认、跨对象碎词安全审查、真实 Provider 领域案例评估和逐页机器 QA；图片或矢量绘图少于原文时 QA 会失败并红框定位。v0.3.2 的自有合成 PDF 已跑通安全确认、翻译、重建和 QA，覆盖双栏、公式、矢量表格和嵌入图片。项目不会分发受版权限制的论文或完整译本。
 >
 > 目前最需要的不是单纯 Star，而是实际试用反馈、Linux 安装复核、新领域术语包和可复现的版面问题。仓库中已经准备了 3 个 good first issues。
 
@@ -57,7 +57,7 @@
 >
 > It supports an authenticated local Codex session and BYOK OpenAI-compatible endpoints, while enforcing hard gates for formulas, style placeholders, numbers, units, abbreviations, URLs, DOIs, and domain terminology. The source PDF, rendered candidate, and QA report are SHA-256 bound, and every page must be reviewed before acceptance.
 >
-> v0.3.1 has 54 model-free tests across Python 3.10–3.13, resumable translation, hash-bound human reference confirmation, reproducible Provider evaluation, vector-loss localization, and a clean-Linux PDFMathTranslate-next/BabelDOC smoke path covering two columns, formulas, a vector table, and an embedded image. No copyrighted research paper or full translation is distributed.
+> v0.3.2 has 63 model-free tests across Python 3.10–3.13, resumable translation, hash-bound reference and non-translatable-segment confirmation, split-token safety review, reproducible Provider evaluation, vector-loss localization, and a synthetic PDF smoke path covering two columns, formulas, a vector table, and an embedded image. No copyrighted research paper or full translation is distributed.
 >
 > I am looking for reproducible feedback, Linux installation verification, and contributors for additional scientific domain packs. Three scoped good first issues are open.
 

@@ -14,7 +14,7 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 - Project: PaperLocale
 - Repository: https://github.com/hazugi2004/paperlocale
 - Core maintainer: `hazugi2004`
-- Role evidence: 仓库管理员、提交者和 `v0.1.0` / `v0.1.1` / `v0.2.0` / `v0.3.0` / `v0.3.1` 发布者
+- Role evidence: 仓库管理员、提交者和 `v0.1.0` / `v0.1.1` / `v0.2.0` / `v0.3.0` / `v0.3.1` / `v0.3.2` 发布者
 - License: AGPL-3.0-only
 
 ## 英文项目简介
@@ -31,7 +31,12 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 
 ## 已有证据链接
 
-- Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.1
+- Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2
+- v0.3.2 reference-section PR: https://github.com/hazugi2004/paperlocale/pull/17
+- v0.3.2 audited passthrough PR: https://github.com/hazugi2004/paperlocale/pull/18
+- v0.3.2 segment-safety PR: https://github.com/hazugi2004/paperlocale/pull/19
+- BabelDOC object-preserve issue: https://github.com/funstory-ai/BabelDOC/issues/610
+- BabelDOC object-preserve PR: https://github.com/funstory-ai/BabelDOC/pull/611
 - v0.3.1 hotfix PR: https://github.com/hazugi2004/paperlocale/pull/11
 - v0.3.1 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32221420406
 - v0.3.1 layout compatibility run: https://github.com/hazugi2004/paperlocale/actions/runs/32221715819
@@ -50,7 +55,7 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 
 ## 提交前仍需补强
 
-项目已发布五个版本，完成第二个主要功能 Release，并在公开失败证据后交付安装兼容性热修复；首个非维护者 fork 与 Draft PR 也已经出现，但仍不能代替真实使用或已合并贡献。以下再完成任意两类外部证据后，申请说服力会显著提高：
+项目已发布六个版本，完成第三个主要功能 Release，并在公开失败证据后交付安装兼容性热修复；首个非维护者 fork 与 Draft PR 也已经出现，但仍不能代替真实使用或已合并贡献。以下再完成任意两类外部证据后，申请说服力会显著提高：
 
 1. 将外部 [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) 或后续外部 PR 完成合并；
 2. 至少一个非维护者提交的真实试用反馈或可复现问题报告；

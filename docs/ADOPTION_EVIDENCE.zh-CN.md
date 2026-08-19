@@ -17,13 +17,27 @@
 
 发布后的干净 Runner 检查发现 v0.3.0 的 `PyMuPDF>=1.26` 与 `pdf2zh-next 2.9.x` 约束冲突。维护者先公开保留[失败运行](https://github.com/hazugi2004/paperlocale/actions/runs/32219957135)，再通过 [PR #10](https://github.com/hazugi2004/paperlocale/pull/10) 修复依赖和增加独立 `[layout]` 求解门禁，并发布 [v0.3.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.1)。[v0.3.1 标签兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32221715819)完成真实两阶段版面流程且 QA 错误为 0；[标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32221420406)从确切 wheel 复核了 `[layout]`。公开重新下载附件的 SHA-256 为 `3c590e16a62419e07025f6f4ccc246d029f8345de2fff7a17ca2069c47aef873`（wheel）和 `f91b41a736944cde17fdc2386115fd807bee6a139180085aaaa5dec8746bd355`（sdist）。原始标签兼容性审计产物另以[永久 Release 附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.1/paperlocale-v0.3.1-layout-compatibility.zip)保存，SHA-256 为 `cac1e404b2317316551c98c060ca3649fdd4353f58502bb04442799fcba6781f`。这些仍是维护者维护能力与可复现性证据，不是外部采用。
 
+[v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) 根据第二次
+本地 27 页、79 片段真实论文试运行，把行号参考文献识别、非正文人工透传、碎词
+安全审查和 schema 4 溯源分别通过 [PR #17](https://github.com/hazugi2004/paperlocale/pull/17)、
+[#18](https://github.com/hazugi2004/paperlocale/pull/18) 与
+[#19](https://github.com/hazugi2004/paperlocale/pull/19) 交付，并由 63 项测试和
+自有合成 PDF 完整版面闭环验证。真实论文及完整译本未上传或分发；该证据仍是
+维护者测试，不是外部用户采用。
+
 维护者还在 PDFMathTranslate-next 上游发布了
 [CLITranslator 两阶段集成讨论 #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)，并在 v0.2.0 发布后补充了[真实兼容性与标签构建证据](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545)。它证明上游沟通和可复现跟进已经开始；在上游维护者或其他参与者回复前，它仍不构成外部认可或采用。
+
+针对同文返回仍触发重排的 BabelDOC 核心错误，维护者另提交了
+[Issue #610](https://github.com/funstory-ai/BabelDOC/issues/610) 和一行修复及回归
+测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)。本地测试和 Ruff
+通过，但上游首次 fork Actions 仍等待维护者批准运行；在获得审查或合并前，它只
+证明主动上游协作，不属于外部认可。
 
 非维护者 `icecold009` 已公开 fork 仓库，并针对 good first issue #2 提交
 [两页 PDF QA 回归 PR #4](https://github.com/hazugi2004/paperlocale/pull/4)。维护者已在隔离工作树中将该提交与最新 `main` 组合验证，36 项测试全部通过，并公开提交批准评审和[最新主线兼容性说明](https://github.com/hazugi2004/paperlocale/pull/4#issuecomment-5330379908)；GitHub 的[首次贡献者 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)也已通过。该 PR 仍由作者标记为 Draft，尚未合并，因此它可以证明贡献入口已吸引首个外部参与者，但不能写成已采用、已发布或已合并贡献。
 
-截至目前，尚无可验证的非维护者真实翻译反馈、外部问题报告、下游引用或 PyPI 下载数据。
+截至目前，尚无可验证的非维护者真实翻译反馈、外部问题报告、下游引用或 PyPI 下载数据。v0.3.1 三个 Release 附件各有 1 次无法归因的下载，不能据此声称外部采用。
 
 ## 记录格式
 
@@ -35,8 +49,10 @@
 | 2026-08-18 | 功能 Release | [v0.2.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.2.0) | 一键运行、结构门禁、Provider 评估、37 项测试与发行构建 | 否 |
 | 2026-08-19 | 功能 Release | [v0.3.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.0) / [构建](https://github.com/hazugi2004/paperlocale/actions/runs/32219122015) | 真实试运行反向校准、参考文献审计、53 项测试、发行附件哈希 | 否 |
 | 2026-08-19 | 维护者兼容性热修复 | [v0.3.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.1) / [构建](https://github.com/hazugi2004/paperlocale/actions/runs/32221420406) / [标签兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32221715819) / [永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.1/paperlocale-v0.3.1-layout-compatibility.zip) | 公开保留失败证据后修复 `[layout]` 安装；54 项测试、确切 wheel 依赖求解、真实版面 QA 0 错误、附件哈希复核 | 否 |
+| 2026-08-19 | 功能 Release | [v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) / [PR #17](https://github.com/hazugi2004/paperlocale/pull/17) / [#18](https://github.com/hazugi2004/paperlocale/pull/18) / [#19](https://github.com/hazugi2004/paperlocale/pull/19) | 第二次真实试运行反向校准、schema 4、人工透传、碎词安全审查与 63 项测试 | 否 |
 | 2026-08-18 | 维护者发起的上游讨论 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) | 两阶段 CLITranslator 接口稳定性与文档协作请求 | 否，等待外部回复 |
 | 2026-08-19 | 维护者上游跟进 | [v0.2.0 兼容性证据](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545) | 真实兼容性运行、标签构建和结构 QA 证据 | 否，等待外部回复 |
+| 2026-08-19 | 维护者上游修复 | [BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) / [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 同文返回保持原版面对象的一行修复和回归测试 | 否，等待上游审查 |
 | 2026-08-18 | 外部 fork 与 Draft PR | [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) / [CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274) | 非维护者响应 good first issue；贡献分支 CI 通过，维护者将其与最新主线组合验证 36 项测试并批准 | 是，尚未合并 |
 | 待记录 | 真实试用反馈 / Issue / 引用 / 下游项目 / 下载统计 | 待记录 | 待记录 | 是 / 否 |
 

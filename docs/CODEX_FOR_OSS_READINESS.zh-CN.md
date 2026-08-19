@@ -18,12 +18,12 @@ OpenAI 官方页面说明，该计划面向开源维护者，权益包括：
 |---|---|---|
 | 明确的公共开源价值 | 学术 PDF 保版翻译、科学信息硬门禁、可扩展领域术语包 | 已实现 |
 | 核心维护者与写权限 | `MAINTAINERS.md` 与 GitHub `hazugi2004/paperlocale` 管理权限 | 已验证 |
-| 可运行项目 | 一键断点续跑 CLI、两种 Provider、Provider 评估、参考文献人工确认、单向状态机、53 项不联网测试 | [v0.3.0 PR #6](https://github.com/hazugi2004/paperlocale/pull/6) 与 Python 3.10–3.13 矩阵已通过 |
+| 可运行项目 | 一键断点续跑 CLI、两种 Provider、Provider 评估、参考文献人工确认、单向状态机、54 项不联网测试 | [v0.3.1 PR #11](https://github.com/hazugi2004/paperlocale/pull/11) 的 Python 3.10–3.13 矩阵及 `[layout]` 依赖求解门禁已通过 |
 | 可复现质量证据 | 合成双栏 PDF、公式合同、图片与矢量绘图硬门禁、逐页 QA | 已实现 |
 | 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考、[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)与 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 公开 | 初步证据，等待非维护者领域人员提交复核 |
 | 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
-| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建和上游兼容性工作流 | v0.1.0–v0.3.0、[v0.3.0 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32219122015)与[首次真实兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32152325669)已通过 |
-| 公开版本 | [GitHub v0.3.0](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.0) | 已发布，wheel 与 sdist 附件哈希已复核 |
+| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建和上游兼容性工作流 | v0.1.0–v0.3.1、[v0.3.1 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32221420406)与[标签级真实兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32221715819)已通过 |
+| 公开版本 | [GitHub v0.3.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.1) | 已发布；确切 wheel 的 `[layout]` 求解通过，wheel 与 sdist 附件哈希已复核 |
 | 外部贡献 | 非维护者 fork 与 [两页 PDF QA Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 36 项测试均通过，维护者已批准 | 初步证据，等待作者标记 Ready 并合并 |
 | 广泛使用或真实用户采用 | 尚无非维护者真实翻译反馈、问题报告或下游引用 | 未证明 |
 | 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 与 [v0.2.0 证据跟进](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545) 已发出 | 已持续跟进，尚无外部回应 |

@@ -29,7 +29,7 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 | 可复现质量证据 | 合成双栏 PDF、公式合同、人工透传与碎词安全清单、图片与矢量绘图硬门禁、逐页 QA；[v0.3.2 永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip)保留日志、映射、清单与对照图 | [公开兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32234356256)为 0 errors / 0 warnings；附件 SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7` |
 | 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考、[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)与 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 公开 | 初步证据，等待非维护者领域人员提交复核 |
 | 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
-| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建和上游兼容性工作流 | v0.1.0–v0.3.2；[v0.3.2 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32234314229)验证发行元数据、确切 wheel 与 `[layout]` 求解 |
+| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建、上游兼容性工作流及受控 PyPI Trusted Publishing 工作流 | v0.1.0–v0.3.2；[v0.3.2 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32234314229)验证发行元数据、确切 wheel 与 `[layout]` 求解；PyPI 尚未配置或发布 |
 | 公开版本 | [GitHub v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) | 已发布并设为 latest，三个附件已公开重下载复核；参考文献默认仍为 `preserve` |
 | 外部贡献 | 非维护者 fork 与 [两页 PDF QA Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 36 项测试均通过，维护者已批准 | 初步证据，等待作者标记 Ready 并合并 |
 | 广泛使用或真实用户采用 | 尚无非维护者真实翻译反馈、问题报告或下游引用 | 未证明 |

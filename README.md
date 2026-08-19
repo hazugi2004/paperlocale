@@ -69,6 +69,9 @@ every candidate remains marked for manual domain review.
 ## Install
 
 Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workflow.
+PaperLocale is not published on PyPI yet, so the verified installation path is
+currently from the repository source. The maintainer-only Trusted Publishing
+procedure is documented in [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
 
 ```bash
 git clone https://github.com/hazugi2004/paperlocale.git

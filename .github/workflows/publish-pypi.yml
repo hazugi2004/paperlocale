@@ -1,0 +1,123 @@
+name: publish-pypi
+
+# PyPI 发布会产生不可撤销的公开版本，因此这里只允许维护者手动触发。
+# 创建 GitHub Release 或推送标签仍由 release-build.yml 验证，但不会自动上传 PyPI。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已公开并通过审计的稳定 GitHub Release 标签，例如 v0.3.2"
+        required: true
+        type: string
+
+# 准备作业只需读取公开仓库；发布作业会覆盖此处权限，仅获得 OIDC 令牌权限。
+permissions:
+  contents: read
+
+jobs:
+  prepare-distributions:
+    name: Verify published distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the exact release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # 显式限定 refs/tags，避免同名分支被误当作发布来源。
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Validate tag and package metadata
+        id: metadata
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          # 所有外部输入先通过环境变量传给 Python，避免把输入拼接为 shell 代码。
+          python - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          release_tag = os.environ["RELEASE_TAG"]
+          if re.fullmatch(r"v\d+\.\d+\.\d+", release_tag) is None:
+              raise SystemExit("tag 必须是稳定版本格式 vX.Y.Z")
+
+          with Path("pyproject.toml").open("rb") as stream:
+              project = tomllib.load(stream)["project"]
+          if project["name"] != "paperlocale":
+              raise SystemExit("pyproject.toml 的项目名不是 paperlocale")
+
+          version = project["version"]
+          if release_tag != f"v{version}":
+              raise SystemExit(
+                  f"标签 {release_tag} 与 pyproject.toml 版本 {version} 不一致"
+              )
+
+          # 文件名来自当前纯 Python 通用 wheel 合同；Release 缺少任一文件都会硬失败。
+          outputs = {
+              "version": version,
+              "wheel-name": f"paperlocale-{version}-py3-none-any.whl",
+              "sdist-name": f"paperlocale-{version}.tar.gz",
+          }
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
+              for key, value in outputs.items():
+                  stream.write(f"{key}={value}\n")
+          PY
+      - name: Download the exact GitHub Release assets
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WHEEL_NAME: ${{ steps.metadata.outputs.wheel-name }}
+          SDIST_NAME: ${{ steps.metadata.outputs.sdist-name }}
+        run: |
+          set -euo pipefail
+          mkdir dist
+          release_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+          # 只下载标签发行中已经公开复核的两个包，避免重新构建出另一套字节。
+          curl --fail --location --retry 3 \
+            --output "dist/${WHEEL_NAME}" "${release_url}/${WHEEL_NAME}"
+          curl --fail --location --retry 3 \
+            --output "dist/${SDIST_NAME}" "${release_url}/${SDIST_NAME}"
+      - name: Validate and install the exact wheel
+        env:
+          WHEEL_PATH: dist/${{ steps.metadata.outputs.wheel-name }}
+        run: |
+          python -m pip install "twine==7.0.0"
+          python -m twine check dist/*
+          python -m pip install --force-reinstall "${WHEEL_PATH}"
+          paperlocale domain-check atmospheric-science
+          # 完整求解 layout extra，但不在发布准备作业中下载大型版面依赖。
+          python -m pip install --dry-run "${WHEEL_PATH}[layout]"
+      - name: Preserve the verified distributions for the publish job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-package-distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-to-pypi:
+    name: Publish verified distributions to PyPI
+    needs: prepare-distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # 仓库中的 pypi Environment 必须配置维护者人工批准；配置步骤见项目文档。
+    environment:
+      name: pypi
+      url: https://pypi.org/p/paperlocale
+    # 本作业不检出或执行仓库代码，只获得 PyPI Trusted Publishing 所需的 OIDC 权限。
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the verified distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/

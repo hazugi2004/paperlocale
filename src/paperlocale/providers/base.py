@@ -33,6 +33,8 @@ class TranslationContext:
     source_language: str
     target_language: str
     domain: DomainPack
+    reference_policy: str = "preserve"
+    reference_segment_ids: frozenset[str] = frozenset()
 
 
 class TranslationProvider(ABC):
@@ -93,7 +95,24 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
         f"- {entry.source} => {entry.target}"
         for entry in context.domain.glossary
     )
-    payload = [{"id": segment.id, "source": segment.source} for segment in segments]
+    payload = [
+        {
+            "id": segment.id,
+            "kind": (
+                "reference"
+                if segment.id in context.reference_segment_ids
+                else "body"
+            ),
+            "source": segment.source,
+        }
+        for segment in segments
+    ]
+    reference_instruction = ""
+    if context.reference_policy == "translate-titles":
+        reference_instruction = """
+5. 对 kind=reference 的条目，只把作品标题译为目标语言；作者、年份、期刊或出版社、
+   卷期页码、DOI、URL 和其他书目信息必须保持原样，不套用正文固定术语。
+"""
     return f"""{context.domain.prompt}
 
 硬性输出合同：
@@ -101,8 +120,9 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
 2. 原样、原次数、原顺序保留所有 {{vN}} 公式占位符和 <style id='N'>...</style> 标签。
 3. 保留所有数字、正负号、单位、变量缩写、数据集名、URL、DOI 和引文标记。
 4. 只返回符合约定结构的 JSON，不添加解释、Markdown 或原文之外的信息。
+{reference_instruction}
 
-固定术语：
+固定术语（仅适用于 kind=body）：
 {glossary}
 
 源语言：{context.source_language}

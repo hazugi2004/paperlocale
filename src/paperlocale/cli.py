@@ -11,12 +11,15 @@ from .domains import load_domain_pack
 from .evaluation import evaluate_provider, write_evaluation_report
 from .pipeline import translate_segment_file
 from .providers import REASONING_EFFORTS, CodexLocalProvider, OpenAICompatibleProvider
+from .references import REFERENCE_POLICIES
 from .workflow import (
     accept_run,
     apply_vector_repair,
     collect_run,
+    confirm_reference_run,
     initialize_run,
     load_manifest,
+    prepare_reference_review_run,
     qa_run,
     render_run,
     run_to_qa,
@@ -128,6 +131,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--target-language", default="zh-CN")
     run.add_argument("--pages")
     run.add_argument("--domain", default="atmospheric-science")
+    run.add_argument(
+        "--reference-policy",
+        choices=REFERENCE_POLICIES,
+        default="preserve",
+    )
     run.add_argument("--provider", choices=("codex-local", "openai-compatible"))
     run.add_argument("--model")
     run.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
@@ -144,9 +152,33 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--run-dir", type=Path, required=True)
     collect.add_argument("--pdf2zh-bin")
 
+    reference_review = subparsers.add_parser(
+        "reference-review",
+        help="生成参考文献片段人工复核清单",
+    )
+    reference_review.add_argument("--run-dir", type=Path, required=True)
+
+    confirm_references = subparsers.add_parser(
+        "confirm-references",
+        help="确认自动匹配结果并补充参考文献片段 ID",
+    )
+    confirm_references.add_argument("--run-dir", type=Path, required=True)
+    confirm_references.add_argument(
+        "--segment-id",
+        action="append",
+        default=[],
+        help="补充一个未自动匹配的参考文献片段 ID；可重复使用",
+    )
+    confirm_references.add_argument("--confirmed-by", required=True)
+
     run_translate = subparsers.add_parser("translate", help="翻译一个已初始化运行")
     run_translate.add_argument("--run-dir", type=Path, required=True)
     run_translate.add_argument("--domain", default="atmospheric-science")
+    run_translate.add_argument(
+        "--reference-policy",
+        choices=REFERENCE_POLICIES,
+        default="preserve",
+    )
     run_translate.add_argument(
         "--provider",
         choices=("codex-local", "openai-compatible"),
@@ -281,6 +313,7 @@ def main() -> int:
             pdf2zh_bin=args.pdf2zh_bin,
             dpi=args.dpi,
             pdftoppm_bin=args.pdftoppm_bin,
+            reference_policy=args.reference_policy,
         )
         if final_manifest["status"] == "qa_generated":
             comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"
@@ -293,6 +326,24 @@ def main() -> int:
         collect_run(args.run_dir, args.pdf2zh_bin)
         print("PDF 片段收集完成")
         return 0
+    if args.command == "reference-review":
+        summary = prepare_reference_review_run(args.run_dir)
+        print(
+            f"参考文献复核清单：{summary['review_jsonl']}；"
+            f"确定性自动匹配 {len(summary['automatic_reference_segment_ids'])} 个片段"
+        )
+        return 0
+    if args.command == "confirm-references":
+        mapping = confirm_reference_run(
+            args.run_dir,
+            additional_segment_ids=args.segment_id,
+            confirmed_by=args.confirmed_by,
+        )
+        print(
+            "参考文献映射已确认："
+            f"{len(mapping['reference_segment_ids'])} 个片段"
+        )
+        return 0
     if args.command == "translate":
         pack = load_domain_pack(args.domain)
         reused, translated = translate_run(
@@ -301,6 +352,7 @@ def main() -> int:
             domain=pack,
             max_segments=args.max_segments,
             max_characters=args.max_characters,
+            reference_policy=args.reference_policy,
         )
         print(f"运行翻译完成：复用 {reused}，新译 {translated}")
         return 0

@@ -7,11 +7,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from paperlocale import cli
+from paperlocale import __version__, cli
 from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_parser
 
 
 class CliTest(unittest.TestCase):
+    def test_package_version_matches_v030_release_line(self) -> None:
+        self.assertEqual(__version__, "0.3.0")
+
     def test_run_parser_accepts_single_command_workflow_options(self) -> None:
         """一键命令必须同时接收源 PDF、运行目录和明确 Provider。"""
 
@@ -35,6 +38,26 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.provider, "codex-local")
         self.assertEqual(args.domain, "atmospheric-science")
         self.assertEqual(args.reasoning_effort, "high")
+        self.assertEqual(args.reference_policy, "preserve")
+
+    def test_confirm_references_accepts_repeated_manual_ids(self) -> None:
+        """人工复核命令应把多个乱序参考文献片段明确传给工作流。"""
+
+        args = build_parser().parse_args(
+            [
+                "confirm-references",
+                "--run-dir",
+                "run",
+                "--segment-id",
+                "first",
+                "--segment-id",
+                "second",
+                "--confirmed-by",
+                "reviewer",
+            ]
+        )
+        self.assertEqual(args.segment_id, ["first", "second"])
+        self.assertEqual(args.confirmed_by, "reviewer")
 
     def test_codex_provider_requires_explicit_model_for_auditing(self) -> None:
         """忽略用户配置后不能把未知默认模型写成可审计运行。"""

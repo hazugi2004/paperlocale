@@ -67,9 +67,9 @@ paperlocale domain-check atmospheric-science
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-## 五分钟开始翻译
+## 开始翻译
 
-使用一条可断点续跑的命令完成初始化、片段收集、翻译、内容门禁、PDF 重建和全页 QA。使用本机 Codex 登录态：
+使用同一条可断点续跑命令推进初始化、片段收集、翻译、内容门禁、PDF 重建和全页 QA。使用本机 Codex 登录态：
 
 ```bash
 codex login
@@ -80,6 +80,27 @@ paperlocale run paper.pdf \
   --reasoning-effort high \
   --domain atmospheric-science
 ```
+
+默认参考文献策略是 `preserve`。首次运行会在收集片段后生成
+`reference_review.jsonl` 并明确停止，不会根据片段顺序、作者年份或 DOI 密度
+猜测参考文献。检查清单后，把没有被确定性匹配、但经你确认属于参考文献的
+片段 ID 逐个补充：
+
+```bash
+paperlocale confirm-references \
+  --run-dir runs/paper \
+  --segment-id 需要补充的片段ID \
+  --segment-id 另一个片段ID \
+  --confirmed-by "你的名字"
+```
+
+已经确定性匹配的 ID 会自动纳入，不需要重复填写；没有额外片段时可省略所有
+`--segment-id`。确认后重新执行原来的 `paperlocale run` 命令即可继续。映射会
+绑定源 PDF 与 `segments.jsonl` 的哈希，翻译开始后不能静默修改。
+
+如需只翻译参考文献中的作品标题，在原运行命令中显式添加
+`--reference-policy translate-titles`。作者、年份、期刊、卷期页码、DOI 和 URL
+仍受保留约束，参考文献不会套用正文专业术语门禁。
 
 或者使用自备密钥的 OpenAI-compatible 接口。`--base-url` 应包含服务的 API 版本前缀，但不要包含 `/chat/completions`：
 
@@ -118,7 +139,7 @@ paperlocale apply-vector-repair \
 
 该命令拒绝改变文字、页尺寸或图片数量的候选，备份修复前 PDF 并写入 `repair_history`；导入后必须重新执行 `qa` 和 `accept`。
 
-需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> translate -> validate -> render -> qa -> accept` 命令序列。
+需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> reference-review/confirm-references -> translate -> validate -> render -> qa -> accept` 命令序列。
 
 ## 领域包扩展
 
@@ -142,7 +163,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 47 项单元测试不联网运行，覆盖内容合同、Provider 评估、一键断点续跑、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、页面 QA、隔离环境入口和演示产物；
+- 53 项单元测试不联网运行，覆盖内容合同、Provider 评估、一键断点续跑、参考文献人工确认映射、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 合成页包含公式占位、矢量表格与嵌入图片；最新 QA 报告中源文/译文均为 1 个图片对象和 8 次矢量绘制，不提交任何受版权限制的论文；
 - “保版”不等于像素完全一致。中文长度变化会改变行内断行，因此最终候选必须人工逐页核对。

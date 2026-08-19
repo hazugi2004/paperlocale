@@ -40,7 +40,7 @@ def _build_pdf(path: Path, *, pagesize: tuple[float, float], label: str, image: 
 def _build_link_icon_pdf(path: Path, *, include_icons: bool) -> None:
     """生成含两个小型链接矢量图标的自有回归夹具。"""
 
-    width, height = A4
+    _width, height = A4
     document = canvas.Canvas(str(path), pagesize=A4)
     document.setFont("Helvetica", 9)
     for row in range(24):

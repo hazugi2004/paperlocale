@@ -6,6 +6,7 @@
 PDF
   -> 版面解析与片段收集
   -> segments.jsonl
+  -> 参考文献复核与确认映射
   -> 领域包 + 单一 Provider
   -> translations.jsonl
   -> 科学信息硬门禁
@@ -14,6 +15,12 @@ PDF
 ```
 
 同一次运行不得静默切换 Provider。失败必须保留断点并明确退出，避免一篇论文混用多个模型后无法追溯。
+
+CLITranslator 片段没有页码且顺序不等于阅读顺序。默认 `preserve` 因此先从源
+PDF 精确定位唯一 `REFERENCES` 区域，只自动接受完整规范化文本落入该区域的
+长片段，并把全部片段写入 `reference_review.jsonl`。人工确认后的
+`reference_map.json` 同时绑定源 PDF 与 `segments.jsonl` 哈希；没有确认映射时
+不得调用模型。`translate-titles` 复用同一映射，参考文献不执行正文术语门禁。
 
 `paperlocale run` 只是上述单一生产路径的状态编排器：它读取清单后依次调用现有阶段函数，从最后成功状态推进到 `qa_generated`。它不实现第二套翻译或渲染逻辑，也不会自动执行必须由人完成的 `accept`。
 

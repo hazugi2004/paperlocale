@@ -50,6 +50,8 @@ def translate_segment_file(
     domain: DomainPack,
     max_segments: int = 200,
     max_characters: int = 30000,
+    reference_segment_ids: set[str] | frozenset[str] = frozenset(),
+    reference_policy: str = "preserve",
 ) -> tuple[int, int]:
     """翻译尚未通过门禁的片段，并在每批成功后原子写入断点。
 
@@ -57,6 +59,8 @@ def translate_segment_file(
     覆盖人工修订或把错误缓存继续带入 PDF。
     """
 
+    if reference_policy not in {"preserve", "translate-titles"}:
+        raise ValueError(f"参考文献策略非法：{reference_policy}")
     raw_segments = read_jsonl(segments_path)
     segments: list[Segment] = []
     seen: set[str] = set()
@@ -70,6 +74,10 @@ def translate_segment_file(
         seen.add(sid)
         segments.append(Segment(id=sid, source=source))
 
+    unknown_reference_ids = set(reference_segment_ids) - seen
+    if unknown_reference_ids:
+        raise ValueError(f"参考文献映射包含未知片段 ID：{sorted(unknown_reference_ids)}")
+
     existing_rows = read_jsonl(translations_path) if translations_path.exists() else []
     rejected_path = translations_path.with_name("rejected_translations.jsonl")
     existing: dict[str, dict[str, object]] = {}
@@ -81,18 +89,37 @@ def translate_segment_file(
         target = str(row.get("target", ""))
         if sid not in seen or source != next(item.source for item in segments if item.id == sid):
             raise ValueError(f"既有译文不属于当前片段集合：{sid}")
-        errors = validate_translation(source, target, domain)
+        if sid in reference_segment_ids and reference_policy == "preserve":
+            errors = [] if target == source else ["preserve 策略要求参考文献原样保留"]
+        elif sid in reference_segment_ids:
+            errors = validate_translation(source, target, None)
+        else:
+            errors = validate_translation(source, target, domain)
         if errors:
             raise ValueError(f"既有译文未通过门禁：{sid}: {errors}")
         existing[sid] = row
+
+    reused_count = len(existing)
+    ordered = list(existing.values())
+    preserved_count = 0
+    if reference_policy == "preserve":
+        for segment in segments:
+            if segment.id in reference_segment_ids and segment.id not in existing:
+                row = {"id": segment.id, "source": segment.source, "target": segment.source}
+                existing[segment.id] = row
+                ordered.append(row)
+                preserved_count += 1
+        if preserved_count:
+            write_jsonl_atomic(translations_path, ordered)
 
     pending = [segment for segment in segments if segment.id not in existing]
     context = TranslationContext(
         source_language=domain.source_language,
         target_language=domain.target_language,
         domain=domain,
+        reference_policy=reference_policy,
+        reference_segment_ids=frozenset(reference_segment_ids),
     )
-    ordered = list(existing.values())
     for batch in make_batches(
         pending,
         max_segments=max_segments,
@@ -104,7 +131,10 @@ def translate_segment_file(
         accepted: list[dict[str, object]] = []
         rejected: list[dict[str, object]] = []
         for source_segment, result in zip(batch, translated):
-            errors = validate_translation(source_segment.source, result.target, domain)
+            if source_segment.id in reference_segment_ids:
+                errors = validate_translation(source_segment.source, result.target, None)
+            else:
+                errors = validate_translation(source_segment.source, result.target, domain)
             if errors:
                 rejected.append(
                     {
@@ -135,4 +165,4 @@ def translate_segment_file(
         if rejected_path.exists():
             # 成功重试后清除已经解决的诊断文件，避免把旧失败误认为当前状态。
             rejected_path.unlink()
-    return len(existing), len(pending)
+    return reused_count, preserved_count + len(pending)

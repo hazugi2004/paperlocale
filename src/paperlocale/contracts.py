@@ -69,7 +69,13 @@ def protected_counts(text: str) -> dict[str, Counter[str]]:
     }
 
 
-def validate_translation(source: str, target: str, domain: DomainPack | None = None) -> list[str]:
+def validate_translation(
+    source: str,
+    target: str,
+    domain: DomainPack | None = None,
+    *,
+    require_cjk: bool = True,
+) -> list[str]:
     """返回全部合同错误；空列表才允许译文进入渲染阶段。"""
 
     errors: list[str] = []
@@ -94,7 +100,7 @@ def validate_translation(source: str, target: str, domain: DomainPack | None = N
     if STYLE_RE.findall(source) != STYLE_RE.findall(target):
         errors.append("style 标签顺序改变")
 
-    if len(ENGLISH_RE.findall(source)) >= 40 and not CJK_RE.search(target):
+    if require_cjk and len(ENGLISH_RE.findall(source)) >= 40 and not CJK_RE.search(target):
         errors.append("长正文片段缺少中文译文")
 
     if domain is not None:
@@ -142,9 +148,14 @@ def validate_translation_files(
     segments_path: Path,
     translations_path: Path,
     domain: DomainPack | None = None,
+    *,
+    reference_segment_ids: set[str] | frozenset[str] = frozenset(),
+    reference_policy: str = "preserve",
 ) -> None:
     """核对两个 JSONL 的身份闭合和逐片段内容合同。"""
 
+    if reference_policy not in {"preserve", "translate-titles"}:
+        raise ValueError(f"参考文献策略非法：{reference_policy}")
     segments = read_jsonl(segments_path)
     translations = read_jsonl(translations_path)
     expected = {str(row.get("id")): row for row in segments}
@@ -164,7 +175,13 @@ def validate_translation_files(
         target_row = actual[sid]
         if str(target_row.get("source", "")) != source:
             raise ValueError(f"译文记录的 source 与片段原文不一致：{sid}")
-        errors = validate_translation(source, str(target_row.get("target", "")), domain)
+        target = str(target_row.get("target", ""))
+        if sid in reference_segment_ids and reference_policy == "preserve":
+            errors = [] if target == source else ["preserve 策略要求参考文献原样保留"]
+        elif sid in reference_segment_ids:
+            errors = validate_translation(source, target, None)
+        else:
+            errors = validate_translation(source, target, domain)
         if errors:
             failures[sid] = errors
     if failures:

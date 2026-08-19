@@ -17,13 +17,19 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 from .contracts import read_jsonl, validate_translation_files
 from .domains import DomainPack
 from .pipeline import translate_segment_file
 from .providers import TranslationProvider
 from .qa import inspect_pdf_pair
+from .references import (
+    REFERENCE_POLICIES,
+    confirm_reference_review,
+    load_reference_map,
+    prepare_reference_review,
+)
 
 STATES = (
     "initialized",
@@ -161,6 +167,108 @@ def _domain_provenance(domain: DomainPack) -> dict[str, str]:
         "version": domain.version,
         "content_sha256": domain.content_sha256,
     }
+
+
+def prepare_reference_review_run(run_dir: Path) -> dict[str, object]:
+    """为已收集运行生成全片段复核清单，不自动确认任何不确定片段。"""
+
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] != "collected":
+        raise ValueError(
+            f"reference-review 只接受 collected，当前为 {manifest['status']}"
+        )
+    source = _verify_source_pdf(manifest)
+    return prepare_reference_review(
+        source_pdf=source,
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        output_dir=root,
+    )
+
+
+def confirm_reference_run(
+    run_dir: Path,
+    *,
+    additional_segment_ids: list[str],
+    confirmed_by: str,
+) -> dict[str, object]:
+    """确认自动结果和用户补充 ID；已有断点译文后禁止改写映射。"""
+
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] != "collected":
+        raise ValueError(
+            f"confirm-references 只接受 collected，当前为 {manifest['status']}"
+        )
+    translations = Path(str(manifest["translations_path"]))
+    if translations.exists() and read_jsonl(translations):
+        raise ValueError("已有断点译文，不能改变参考文献映射")
+    source = _verify_source_pdf(manifest)
+    return confirm_reference_review(
+        source_pdf=source,
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        output_dir=root,
+        additional_segment_ids=additional_segment_ids,
+        confirmed_by=confirmed_by,
+    )
+
+
+def _load_reference_configuration(
+    root: Path,
+    manifest: dict[str, object],
+    reference_policy: str,
+) -> tuple[set[str], Path]:
+    """读取人工确认映射；缺失时先生成复核文件，再明确停止。"""
+
+    if reference_policy not in REFERENCE_POLICIES:
+        raise ValueError(
+            "reference_policy 必须是 " + ", ".join(REFERENCE_POLICIES)
+        )
+    recorded_policy = manifest.get("reference_policy")
+    if isinstance(recorded_policy, str) and recorded_policy != reference_policy:
+        raise ValueError(
+            "参考文献策略与已有断点不一致："
+            f"run={recorded_policy}, current={reference_policy}"
+        )
+    map_path = root / "reference_map.json"
+    if not map_path.is_file():
+        summary = prepare_reference_review_run(root)
+        raise ValueError(
+            "参考文献映射尚未人工确认；请检查 "
+            f"{summary['review_jsonl']}，然后执行 paperlocale confirm-references"
+        )
+    mapping = load_reference_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        map_path=map_path,
+    )
+    selected = {str(segment_id) for segment_id in mapping["reference_segment_ids"]}
+    return selected, map_path
+
+
+def _recorded_reference_configuration(
+    manifest: dict[str, object],
+) -> tuple[set[str], str]:
+    """验证阶段读取翻译时绑定的映射；无字段表示 v0.2 旧运行。"""
+
+    policy = manifest.get("reference_policy")
+    if not isinstance(policy, str):
+        return set(), "preserve"
+    map_value = manifest.get("reference_map")
+    if not isinstance(map_value, str):
+        raise ValueError("运行清单缺少翻译时绑定的 reference_map")
+    map_path = Path(map_value)
+    expected_hash = manifest.get("reference_map_sha256")
+    if not isinstance(expected_hash, str) or _sha256(map_path) != expected_hash:
+        raise ValueError("参考文献映射在翻译后发生变化")
+    mapping = load_reference_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        map_path=map_path,
+    )
+    return {str(segment_id) for segment_id in mapping["reference_segment_ids"]}, policy
 
 
 def _layout_provenance(executable: str) -> dict[str, str]:
@@ -359,6 +467,7 @@ def translate_run(
     domain: DomainPack,
     max_segments: int = 200,
     max_characters: int = 30000,
+    reference_policy: str = "preserve",
 ) -> tuple[int, int]:
     """翻译已收集片段，成功后把运行推进到 ``translated``。"""
 
@@ -368,6 +477,11 @@ def translate_run(
         raise ValueError(f"translate 不接受状态：{manifest['status']}")
     _verify_source_pdf(manifest)
     _verify_domain_languages(manifest, domain)
+    reference_ids, reference_map_path = _load_reference_configuration(
+        root,
+        manifest,
+        reference_policy,
+    )
     provider_provenance = provider.provenance()
     recorded_provider = manifest.get("translation_provider")
     if isinstance(recorded_provider, dict) and recorded_provider != provider_provenance:
@@ -379,6 +493,10 @@ def translate_run(
     # 已原子保存的断点也不会变成来源不明的数据。
     manifest["domain_pack"] = _domain_provenance(domain)
     manifest["translation_provider"] = provider_provenance
+    manifest["reference_policy"] = reference_policy
+    manifest["reference_map"] = str(reference_map_path.resolve())
+    manifest["reference_map_sha256"] = _sha256(reference_map_path)
+    manifest["reference_segment_count"] = len(reference_ids)
     manifest["schema_version"] = SCHEMA_VERSION
     save_manifest(root, manifest)
     translations_path = Path(str(manifest["translations_path"]))
@@ -391,6 +509,8 @@ def translate_run(
             domain=domain,
             max_segments=max_segments,
             max_characters=max_characters,
+            reference_segment_ids=reference_ids,
+            reference_policy=reference_policy,
         )
     except Exception:
         # translate_segment_file 可能已经保存同批中通过门禁的译文；清单同步记录
@@ -418,10 +538,13 @@ def validate_run(run_dir: Path, domain: DomainPack) -> None:
         raise ValueError(f"validate 不接受状态：{manifest['status']}")
     _verify_source_pdf(manifest)
     _verify_domain_languages(manifest, domain)
+    reference_ids, reference_policy = _recorded_reference_configuration(manifest)
     validate_translation_files(
         Path(str(manifest["segments_path"])),
         Path(str(manifest["translations_path"])),
         domain,
+        reference_segment_ids=reference_ids,
+        reference_policy=reference_policy,
     )
     manifest["validated_count"] = len(read_jsonl(Path(str(manifest["translations_path"]))))
     manifest["status"] = "validated"
@@ -637,6 +760,7 @@ def run_to_qa(
     pdf2zh_bin: str | Path | None = None,
     dpi: int = 144,
     pdftoppm_bin: str | Path | None = None,
+    reference_policy: str = "preserve",
 ) -> dict[str, object]:
     """从当前断点沿唯一生产路径推进到机器 QA，保留人工验收边界。
 
@@ -653,7 +777,12 @@ def run_to_qa(
     if manifest["status"] == "collected":
         if provider is None:
             raise ValueError("运行尚未翻译；请提供 --provider 后重试")
-        translate_run(run_dir=root, provider=provider, domain=domain)
+        translate_run(
+            run_dir=root,
+            provider=provider,
+            domain=domain,
+            reference_policy=reference_policy,
+        )
         manifest = load_manifest(root)
     if manifest["status"] == "translated":
         validate_run(root, domain)

@@ -22,7 +22,10 @@ from paperlocale.providers import (
     TranslationProvider,
 )
 from paperlocale.workflow import (
+    collect_run,
+    confirm_reference_run,
     initialize_run,
+    prepare_reference_review_run,
     run_to_qa,
 )
 
@@ -187,6 +190,19 @@ def main() -> int:
         run_dir=run_dir,
         source_language="en",
         target_language="zh-CN",
+    )
+    collect_run(run_dir, args.pdf2zh_bin)
+    reference_review = prepare_reference_review_run(run_dir)
+    automatic_reference_ids = reference_review["automatic_reference_segment_ids"]
+    if automatic_reference_ids:
+        raise RuntimeError(
+            "合成版面夹具不应包含参考文献片段："
+            f"{automatic_reference_ids}"
+        )
+    confirm_reference_run(
+        run_dir,
+        additional_segment_ids=[],
+        confirmed_by="PaperLocale synthetic layout smoke fixture",
     )
     manifest = run_to_qa(
         run_dir=run_dir,

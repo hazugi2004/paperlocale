@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### Added
+
+- macOS CI 在源码目录和虚拟环境都含中文与空格时执行非 editable 安装、`pip check`、领域包检查和 CLI 入口验证，覆盖普通用户推荐安装路径。
+
 ## 0.3.1 - 2026-08-19
 
 ### Fixed

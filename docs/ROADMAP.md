@@ -61,6 +61,7 @@
 - [x] GitHub Actions
 - [x] Wheel 构建与隔离安装验证
 - [x] 贡献指南、Issue/PR 模板与标签构建工作流
+- [x] Contributor Covenant 3.0 社区准则与 `CITATION.cff` 学术引用元数据
 - [ ] 发布到 PyPI
 - [x] GitHub `v0.1.0` Release
 - [x] GitHub `v0.2.0` 一键运行、结构门禁与 Provider 评估 Release

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### Added
+
+- 增加 Contributor Covenant 3.0 社区准则和 CFF 1.2.0 学术软件引用元数据，完善私密行为问题报告与 GitHub “Cite this repository” 入口。
+
 ## 0.3.2 - 2026-08-19
 
 ### Added

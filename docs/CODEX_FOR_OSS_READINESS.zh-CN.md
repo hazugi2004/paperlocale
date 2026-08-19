@@ -25,14 +25,14 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 | 明确的公共开源价值 | 学术 PDF 保版翻译、科学信息硬门禁、可扩展领域术语包 | 已实现 |
 | 核心维护者与写权限 | `MAINTAINERS.md` 与 GitHub `hazugi2004/paperlocale` 管理权限 | 已验证 |
 | 可运行项目 | 一键断点续跑 CLI、两种 Provider、Provider 评估、参考文献与非正文人工确认、碎词安全审查、单向状态机、63 项不联网测试 | [PR #17](https://github.com/hazugi2004/paperlocale/pull/17)、[#18](https://github.com/hazugi2004/paperlocale/pull/18)、[#19](https://github.com/hazugi2004/paperlocale/pull/19) 的 Python 3.10–3.13 矩阵、macOS 中文/空格路径及 `[layout]` 求解均通过 |
-| 可复现质量证据 | 合成双栏 PDF、公式合同、人工透传与碎词安全清单、图片与矢量绘图硬门禁、逐页 QA；[v0.3.1 永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.1/paperlocale-v0.3.1-layout-compatibility.zip)保留既有版面证据 | v0.3.2 合成版面闭环为 0 errors / 0 warnings；既有附件 SHA-256 为 `cac1e404b2317316551c98c060ca3649fdd4353f58502bb04442799fcba6781f` |
+| 可复现质量证据 | 合成双栏 PDF、公式合同、人工透传与碎词安全清单、图片与矢量绘图硬门禁、逐页 QA；[v0.3.2 永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip)保留日志、映射、清单与对照图 | [公开兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32234356256)为 0 errors / 0 warnings；附件 SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7` |
 | 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考、[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)与 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 公开 | 初步证据，等待非维护者领域人员提交复核 |
 | 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
-| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建和上游兼容性工作流 | v0.1.0–v0.3.2；[标签构建工作流](https://github.com/hazugi2004/paperlocale/actions/workflows/release-build.yml)验证发行元数据、确切 wheel 与 `[layout]` 求解 |
-| 公开版本 | [GitHub v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) | 已发布；参考文献默认仍为 `preserve`，BabelDOC 对象级修复等待上游合并 |
+| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建和上游兼容性工作流 | v0.1.0–v0.3.2；[v0.3.2 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32234314229)验证发行元数据、确切 wheel 与 `[layout]` 求解 |
+| 公开版本 | [GitHub v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) | 已发布并设为 latest，三个附件已公开重下载复核；参考文献默认仍为 `preserve` |
 | 外部贡献 | 非维护者 fork 与 [两页 PDF QA Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 36 项测试均通过，维护者已批准 | 初步证据，等待作者标记 Ready 并合并 |
 | 广泛使用或真实用户采用 | 尚无非维护者真实翻译反馈、问题报告或下游引用 | 未证明 |
-| 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)、[BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与一行修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 维护者已主动提交；尚无上游回应或合并，首次 fork Actions 等待上游批准运行 |
+| 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)、[BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与最小修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 两条自动审查意见已在[提交 `735c381`](https://github.com/hazugi2004/BabelDOC/commit/735c3815869af78ed1b1c6cdf416a70cf958e4a5)中处理；尚无上游维护者回应或合并，首次 fork Actions 等待批准运行 |
 
 在 #354 获得回复前，项目临时按当前 `CLITranslator` 契约继续开发，并由每周真实版面冒烟工作流验证依赖范围内最新 2.x 版本。该策略降低等待成本，但不等同于上游兼容性承诺。
 

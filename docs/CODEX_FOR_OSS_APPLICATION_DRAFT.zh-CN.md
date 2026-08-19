@@ -32,6 +32,9 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 ## 已有证据链接
 
 - Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2
+- v0.3.2 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32234314229
+- v0.3.2 layout compatibility run: https://github.com/hazugi2004/paperlocale/actions/runs/32234356256
+- Durable v0.3.2 compatibility artifact: https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip
 - v0.3.2 reference-section PR: https://github.com/hazugi2004/paperlocale/pull/17
 - v0.3.2 audited passthrough PR: https://github.com/hazugi2004/paperlocale/pull/18
 - v0.3.2 segment-safety PR: https://github.com/hazugi2004/paperlocale/pull/19

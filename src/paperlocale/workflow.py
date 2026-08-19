@@ -35,6 +35,10 @@ from .references import (
     load_reference_map,
     prepare_reference_review,
 )
+from .segment_safety import (
+    load_segment_safety_summary,
+    prepare_segment_safety_review,
+)
 
 STATES = (
     "initialized",
@@ -395,6 +399,69 @@ def _recorded_passthrough_configuration(
     return passthrough_segment_ids(mapping)
 
 
+def _prepare_segment_safety_configuration(
+    root: Path,
+    manifest: dict[str, object],
+    passthrough_ids: set[str],
+) -> set[str]:
+    """生成确定性安全清单，并阻止未确认的碎词或不可见短片段进入模型。"""
+
+    summary = prepare_segment_safety_review(
+        source_pdf=Path(str(manifest["source_pdf"])),
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        output_dir=root,
+    )
+    summary_path = root / "segment_safety_summary.json"
+    manifest["segment_safety_summary"] = str(summary_path.resolve())
+    manifest["segment_safety_summary_sha256"] = _sha256(summary_path)
+    manifest["segment_safety_required_count"] = summary[
+        "required_passthrough_count"
+    ]
+    manifest["schema_version"] = SCHEMA_VERSION
+    save_manifest(root, manifest)
+
+    required = {
+        str(sid) for sid in summary["required_passthrough_segment_ids"]
+    }
+    missing = sorted(required - passthrough_ids)
+    if missing:
+        raise ValueError(
+            "检测到不可安全独立翻译的片段；请检查 "
+            f"{summary['review_jsonl']}，再用 confirm-passthrough 确认全部 ID："
+            f"{missing}"
+        )
+    return required
+
+
+def _recorded_segment_safety_configuration(
+    manifest: dict[str, object],
+    passthrough_ids: set[str],
+) -> set[str]:
+    """验证阶段核对翻译前生成的安全清单及其人工透传闭合关系。"""
+
+    summary_value = manifest.get("segment_safety_summary")
+    if not isinstance(summary_value, str):
+        # v0.3.1 和早期 schema 4 运行没有安全清单，仍允许按原证据验证。
+        return set()
+    summary_path = Path(summary_value)
+    expected_hash = manifest.get("segment_safety_summary_sha256")
+    if not isinstance(expected_hash, str) or _sha256(summary_path) != expected_hash:
+        raise ValueError("片段安全复核摘要在翻译后发生变化")
+    summary = load_segment_safety_summary(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        summary_path=summary_path,
+    )
+    required = {
+        str(sid) for sid in summary["required_passthrough_segment_ids"]
+    }
+    missing = sorted(required - passthrough_ids)
+    if missing:
+        raise ValueError(f"片段安全复核所需透传映射不闭合：{missing}")
+    return required
+
+
 def _layout_provenance(executable: str) -> dict[str, str]:
     """读取实际 pdf2zh-next 命令版本和同环境 BabelDOC 包版本。"""
 
@@ -626,6 +693,7 @@ def translate_run(
         raise ValueError(
             f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}"
         )
+    _prepare_segment_safety_configuration(root, manifest, passthrough_ids)
     provider_provenance = provider.provenance()
     recorded_provider = manifest.get("translation_provider")
     if isinstance(recorded_provider, dict) and recorded_provider != provider_provenance:
@@ -692,6 +760,7 @@ def validate_run(run_dir: Path, domain: DomainPack) -> None:
     _verify_domain_languages(manifest, domain)
     reference_ids, reference_policy = _recorded_reference_configuration(manifest)
     passthrough_ids = _recorded_passthrough_configuration(manifest)
+    _recorded_segment_safety_configuration(manifest, passthrough_ids)
     validate_translation_files(
         Path(str(manifest["segments_path"])),
         Path(str(manifest["translations_path"])),

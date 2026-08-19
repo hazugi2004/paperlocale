@@ -65,6 +65,23 @@ class _IdentityProvider(TranslationProvider):
         return [Translation(segment.id, segment.source) for segment in segments]
 
 
+class _SafetyProvider(TranslationProvider):
+    """记录实际收到的片段，验证危险片段不会进入 Provider。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.sources: list[str] = []
+
+    def translate(
+        self,
+        segments: list[Segment],
+        context: TranslationContext,
+    ) -> list[Translation]:
+        self.calls += 1
+        self.sources.extend(segment.source for segment in segments)
+        return [Translation(segment.id, "土壤湿度为10 mm。") for segment in segments]
+
+
 class WorkflowTest(unittest.TestCase):
     layout_provenance = {
         "executable": "/fake/pdf2zh_next",
@@ -539,6 +556,65 @@ class WorkflowTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "透传映射在翻译后发生变化"):
                 validate_run(run_dir, domain)
+
+    def test_split_token_review_blocks_provider_until_passthrough_confirmation(self) -> None:
+        """碎词和不可见短文本必须先人工透传，普通正文才可调用模型。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(
+                40,
+                780,
+                "Figure 5 Assessments of agricultural drought for the period",
+            )
+            normal = "Soil moisture was 10 mm."
+            document.drawString(40, 740, normal)
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            split = "re 5 Assessments of agricultural drought for the perio"
+            hidden = "Hello"
+            rows = [
+                {"id": segment_id(text), "source": text}
+                for text in (split, hidden, normal)
+            ]
+            write_jsonl_atomic(Path(str(manifest["segments_path"])), rows)
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="reviewer",
+            )
+
+            provider = _SafetyProvider()
+            with self.assertRaisesRegex(ValueError, "不可安全独立翻译"):
+                translate_run(run_dir=run_dir, provider=provider, domain=domain)
+            self.assertEqual(provider.calls, 0)
+            confirm_passthrough_run(
+                run_dir,
+                segment_ids=[segment_id(split), segment_id(hidden)],
+                reason="源 PDF 显示碎词边界或不可见短文本",
+                confirmed_by="reviewer",
+            )
+            self.assertEqual(
+                translate_run(run_dir=run_dir, provider=provider, domain=domain),
+                (0, 3),
+            )
+            self.assertEqual(provider.calls, 1)
+            self.assertEqual(provider.sources, [normal])
+            translated = load_manifest(run_dir)
+            self.assertEqual(translated["segment_safety_required_count"], 2)
+            self.assertTrue(translated["segment_safety_summary_sha256"])
+            validate_run(run_dir, domain)
 
     def test_validate_rejects_domain_content_changed_without_version_bump(self) -> None:
         """相同 id/version 不能掩盖提示词或术语表内容变化。"""

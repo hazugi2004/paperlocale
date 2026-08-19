@@ -102,6 +102,11 @@ paperlocale confirm-references \
 `--reference-policy translate-titles`。作者、年份、期刊、卷期页码、DOI 和 URL
 仍受保留约束，参考文献不会套用正文专业术语门禁。
 
+当前已发布 BabelDOC 仍可能对“译文等于原文”的参考文献重新排版。对象级修复已
+提交到上游 [Issue #610](https://github.com/funstory-ai/BabelDOC/issues/610) 和
+[PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)；等待上游审查期间，
+PaperLocale 不用本地 PDF 区域覆盖伪装成真正的 preserve。
+
 或者使用自备密钥的 OpenAI-compatible 接口。`--base-url` 应包含服务的 API 版本前缀，但不要包含 `/chat/completions`：
 
 ```bash
@@ -140,6 +145,13 @@ paperlocale confirm-passthrough \
 `passthrough_map.json` 会绑定源 PDF 和 `segments.jsonl` 哈希，并逐条记录原因、
 确认人和时间。透传片段必须与原文逐字相同、不会发送给 Provider；部分批次失败后
 补充确认时，已保存的其他译文仍会复用。
+
+每次调用 Provider 前，PaperLocale 还会把片段与源 PDF 的精确可见页文本比较。
+若片段首尾落在同一个 ASCII 单词内部（例如固定 `Figu` + 待译 `re…perio` +
+固定 `d`），或短 ASCII 片段完全不在可见页文本中，运行会把证据写入
+`segment_safety_review.jsonl` 并停止。逐条检查后，用上面的
+`confirm-passthrough` 确认清单中全部 ID。v0.3.2 选择原样保留这些对象；完整翻译
+需要上游提供相邻对象上下文或合并能力，不能靠提示词猜测。
 
 schema 4 运行清单会记录领域包内容哈希、Provider、模型、推理强度、Codex CLI
 版本、collect/render 使用的版面引擎版本，以及人工透传映射的哈希。`codex-local`

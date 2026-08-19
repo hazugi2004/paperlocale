@@ -28,6 +28,12 @@ PDF 精确定位唯一 `REFERENCES` 区域，只自动接受完整规范化文�
 `segments.jsonl` 哈希，并逐条记录原因、确认人和时间。此类片段必须严格
 `target == source` 且不会进入 Provider；映射文件由 schema 4 清单哈希锁定。
 
+Provider 调用前还会生成 `segment_safety_review.jsonl`：片段必须在源 PDF 可见
+文本中逐字命中，且不得从同一个 ASCII 单词内部开始或结束；短 ASCII 片段若在
+全部可见页文本中均不存在，也进入复核。命中的危险片段必须出现在人工透传映射
+中，否则状态保持 `collected`。该规则只阻止不安全的独立翻译，不尝试推断前后
+固定对象或自动拼接译文。
+
 `paperlocale run` 只是上述单一生产路径的状态编排器：它读取清单后依次调用现有阶段函数，从最后成功状态推进到 `qa_generated`。它不实现第二套翻译或渲染逻辑，也不会自动执行必须由人完成的 `accept`。
 
 PDF 机器 QA 将页数、页面框、图片对象和直接页面内容流中的矢量绘制数量逐页对照。译文少于原文时视为硬错误，以捕获图片、矢量表格或图形丢失；矢量缺失还会记录边界框与面积，并在对照图两侧红框定位。复杂内容流无法解析时记录警告并保留全页人工视觉复核，不能据此自动验收。
@@ -68,6 +74,11 @@ Codex Provider 只在本机调用官方 CLI 或 SDK，并使用只读沙箱。AP
 ## 上游版面接口边界
 
 当前生产路径以 `pdf2zh-next 2.x` 的 `CLITranslator` 标准输入/输出契约为兼容基线，并已经在 `2.9.0` 上完成真实双阶段冒烟。等待上游讨论确认期间，PaperLocale 按该契约继续开发，但不把当前行为表述为上游长期承诺。
+
+参考文献真正保持原版面对象依赖 BabelDOC 对“译文等于输入”返回值的正确识别。
+PaperLocale 已提交 [BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610)
+和 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)，但在上游合并并发布前
+仍把重新排版风险列为已知边界，不在下游复制或覆盖 PDF 区域。
 
 依赖范围暂时固定为 `pdf2zh-next>=2.9,<3`。每周兼容性工作流会安装该范围内的最新版本，实际执行 `collect -> translate -> validate -> render -> qa`；失败时保留日志和 QA 产物，由维护者判断是上游接口变化还是运行环境问题，不静默切换版面引擎。
 

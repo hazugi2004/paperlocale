@@ -116,6 +116,22 @@ The command deliberately stops at `qa_generated`; it never records human
 acceptance. Once translation is complete, a resume command does not need
 `--provider` or API credentials.
 
+If a rejected segment is genuinely non-translatable, such as a pure formula or
+an author-name list, confirm it explicitly instead of adding artificial Chinese
+text or weakening the global CJK gate:
+
+```bash
+paperlocale confirm-passthrough --run-dir runs/paper \
+  --segment-id confirmed-nontranslatable-segment-id \
+  --reason "Pure formula with no translatable prose" \
+  --confirmed-by "Your name"
+```
+
+The audited map binds the source PDF and `segments.jsonl` hashes. Confirmed
+segments must remain byte-for-byte equal to their source, never reach the
+Provider, and can safely resolve a rejected partial batch without repeating
+already accepted model calls.
+
 The default reference policy is `preserve`. PaperLocale writes every segment to
 `reference_review.jsonl`, automatically selects only long segments that match
 the source PDF's exact `REFERENCES` region, and requires explicit confirmation
@@ -125,9 +141,10 @@ bound to the source PDF and `segments.jsonl` hashes. Use
 `--reference-policy translate-titles` to translate work titles only; reference
 rows do not use body-domain glossary gates.
 
-The run manifest binds the domain-pack content hash, provider, model, reasoning
-effort, Codex CLI version, and collect/render layout-engine versions. A Codex
-run therefore requires an explicit `--model`.
+The schema 4 run manifest binds the domain-pack content hash, provider, model,
+reasoning effort, Codex CLI version, collect/render layout-engine versions, and
+any human-confirmed passthrough map. A Codex run therefore requires an explicit
+`--model`.
 
 When vector objects disappear, QA records their page, bounding box, and area,
 and draws red boxes at the expected locations in both comparison panels. Import
@@ -158,8 +175,8 @@ Remote compatible endpoints must use HTTPS. Plain HTTP is accepted only for
 loopback services on `localhost`, `127.0.0.1`, or `::1`.
 
 For explicit stage-by-stage control, the same production path remains available
-as `init-run -> collect -> reference-review/confirm-references -> translate ->
-validate -> render -> qa -> accept`.
+as `init-run -> collect -> reference-review/confirm-references -> optional
+confirm-passthrough -> translate -> validate -> render -> qa -> accept`.
 
 See the detailed [Chinese guide](README.zh-CN.md), [ROADMAP](docs/ROADMAP.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [domain-pack guide](docs/DOMAIN_PACKS.zh-CN.md), [Codex for Open Source readiness](docs/CODEX_FOR_OSS_READINESS.zh-CN.md), and [PROVENANCE](docs/PROVENANCE.md).
 

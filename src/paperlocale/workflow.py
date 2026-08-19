@@ -22,6 +22,11 @@ import pymupdf as fitz
 from .contracts import read_jsonl, validate_translation_files
 from .domains import DomainPack
 from .pipeline import translate_segment_file
+from .passthrough import (
+    confirm_passthrough_map,
+    load_passthrough_map,
+    passthrough_segment_ids,
+)
 from .providers import TranslationProvider
 from .qa import inspect_pdf_pair
 from .references import (
@@ -40,7 +45,7 @@ STATES = (
     "qa_generated",
     "accepted",
 )
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _utc_now() -> str:
@@ -215,6 +220,75 @@ def confirm_reference_run(
     )
 
 
+def confirm_passthrough_run(
+    run_dir: Path,
+    *,
+    segment_ids: list[str],
+    reason: str,
+    confirmed_by: str,
+) -> dict[str, object]:
+    """确认无需翻译的片段，并把映射哈希立即绑定到运行清单。
+
+    部分批次失败后运行状态仍为 ``collected``，因此可以把失败但确实不应翻译的
+    片段加入映射。若该片段已有与原文不同的合格译文，则拒绝改变其既有语义。
+    """
+
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] != "collected":
+        raise ValueError(
+            f"confirm-passthrough 只接受 collected，当前为 {manifest['status']}"
+        )
+    _verify_source_pdf(manifest)
+    segments_path = Path(str(manifest["segments_path"]))
+    translations_path = Path(str(manifest["translations_path"]))
+    translation_rows = (
+        read_jsonl(translations_path) if translations_path.is_file() else []
+    )
+    existing_translations = {
+        str(row.get("id", "")): row for row in translation_rows
+    }
+    if len(existing_translations) != len(translation_rows):
+        raise ValueError("既有译文包含重复 ID，不能确认人工透传")
+    for sid in set(segment_ids):
+        row = existing_translations.get(sid)
+        if row is not None and row.get("target") != row.get("source"):
+            raise ValueError(f"片段已有非透传译文，不能改为人工透传：{sid}")
+    reference_map_path = root / "reference_map.json"
+    if not reference_map_path.is_file():
+        raise ValueError("请先执行 confirm-references，再确认人工透传片段")
+    reference_mapping = load_reference_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=segments_path,
+        map_path=reference_map_path,
+    )
+    reference_ids = {
+        str(segment_id)
+        for segment_id in reference_mapping["reference_segment_ids"]
+    }
+    overlap = set(segment_ids) & reference_ids
+    if overlap:
+        raise ValueError(
+            f"参考文献片段不能重复确认为人工透传：{sorted(overlap)}"
+        )
+
+    mapping = confirm_passthrough_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=segments_path,
+        output_dir=root,
+        segment_ids=segment_ids,
+        reason=reason,
+        confirmed_by=confirmed_by,
+    )
+    map_path = root / "passthrough_map.json"
+    manifest["passthrough_map"] = str(map_path.resolve())
+    manifest["passthrough_map_sha256"] = _sha256(map_path)
+    manifest["passthrough_segment_count"] = len(passthrough_segment_ids(mapping))
+    manifest["schema_version"] = SCHEMA_VERSION
+    save_manifest(root, manifest)
+    return mapping
+
+
 def _load_reference_configuration(
     root: Path,
     manifest: dict[str, object],
@@ -248,6 +322,34 @@ def _load_reference_configuration(
     return selected, map_path
 
 
+def _load_passthrough_configuration(
+    root: Path,
+    manifest: dict[str, object],
+) -> tuple[set[str], Path | None]:
+    """读取可选人工透传映射，并拒绝绕过确认命令的字节改写。"""
+
+    map_path = root / "passthrough_map.json"
+    if not map_path.is_file():
+        if (
+            "passthrough_map" in manifest
+            or "passthrough_map_sha256" in manifest
+            or manifest.get("passthrough_segment_count") not in {None, 0}
+        ):
+            raise FileNotFoundError("运行清单已绑定透传映射，但映射文件不存在")
+        return set(), None
+    recorded_hash = manifest.get("passthrough_map_sha256")
+    if not isinstance(recorded_hash, str):
+        raise ValueError("透传映射未由 confirm-passthrough 绑定到运行清单")
+    if _sha256(map_path) != recorded_hash:
+        raise ValueError("透传映射在人工确认后发生变化")
+    mapping = load_passthrough_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        map_path=map_path,
+    )
+    return passthrough_segment_ids(mapping), map_path
+
+
 def _recorded_reference_configuration(
     manifest: dict[str, object],
 ) -> tuple[set[str], str]:
@@ -269,6 +371,28 @@ def _recorded_reference_configuration(
         map_path=map_path,
     )
     return {str(segment_id) for segment_id in mapping["reference_segment_ids"]}, policy
+
+
+def _recorded_passthrough_configuration(
+    manifest: dict[str, object],
+) -> set[str]:
+    """验证阶段重新核对翻译时绑定的透传映射。"""
+
+    map_value = manifest.get("passthrough_map")
+    if not isinstance(map_value, str):
+        if manifest.get("passthrough_segment_count") not in {None, 0}:
+            raise ValueError("运行清单缺少翻译时绑定的 passthrough_map")
+        return set()
+    map_path = Path(map_value)
+    expected_hash = manifest.get("passthrough_map_sha256")
+    if not isinstance(expected_hash, str) or _sha256(map_path) != expected_hash:
+        raise ValueError("透传映射在翻译后发生变化")
+    mapping = load_passthrough_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        map_path=map_path,
+    )
+    return passthrough_segment_ids(mapping)
 
 
 def _layout_provenance(executable: str) -> dict[str, str]:
@@ -493,6 +617,15 @@ def translate_run(
         manifest,
         reference_policy,
     )
+    passthrough_ids, passthrough_map_path = _load_passthrough_configuration(
+        root,
+        manifest,
+    )
+    overlap = reference_ids & passthrough_ids
+    if overlap:
+        raise ValueError(
+            f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}"
+        )
     provider_provenance = provider.provenance()
     recorded_provider = manifest.get("translation_provider")
     if isinstance(recorded_provider, dict) and recorded_provider != provider_provenance:
@@ -508,6 +641,13 @@ def translate_run(
     manifest["reference_map"] = str(reference_map_path.resolve())
     manifest["reference_map_sha256"] = _sha256(reference_map_path)
     manifest["reference_segment_count"] = len(reference_ids)
+    if passthrough_map_path is not None:
+        manifest["passthrough_map"] = str(passthrough_map_path.resolve())
+        manifest["passthrough_map_sha256"] = _sha256(passthrough_map_path)
+    else:
+        manifest.pop("passthrough_map", None)
+        manifest.pop("passthrough_map_sha256", None)
+    manifest["passthrough_segment_count"] = len(passthrough_ids)
     manifest["schema_version"] = SCHEMA_VERSION
     save_manifest(root, manifest)
     translations_path = Path(str(manifest["translations_path"]))
@@ -522,6 +662,7 @@ def translate_run(
             max_characters=max_characters,
             reference_segment_ids=reference_ids,
             reference_policy=reference_policy,
+            passthrough_segment_ids=passthrough_ids,
         )
     except Exception:
         # translate_segment_file 可能已经保存同批中通过门禁的译文；清单同步记录
@@ -550,12 +691,14 @@ def validate_run(run_dir: Path, domain: DomainPack) -> None:
     _verify_source_pdf(manifest)
     _verify_domain_languages(manifest, domain)
     reference_ids, reference_policy = _recorded_reference_configuration(manifest)
+    passthrough_ids = _recorded_passthrough_configuration(manifest)
     validate_translation_files(
         Path(str(manifest["segments_path"])),
         Path(str(manifest["translations_path"])),
         domain,
         reference_segment_ids=reference_ids,
         reference_policy=reference_policy,
+        passthrough_segment_ids=passthrough_ids,
     )
     manifest["validated_count"] = len(read_jsonl(Path(str(manifest["translations_path"]))))
     manifest["status"] = "validated"

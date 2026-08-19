@@ -59,6 +59,26 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.segment_id, ["first", "second"])
         self.assertEqual(args.confirmed_by, "reviewer")
 
+    def test_confirm_passthrough_requires_reason_and_reviewer(self) -> None:
+        """透传命令必须留下片段、原因和确认人三类审计信息。"""
+
+        args = build_parser().parse_args(
+            [
+                "confirm-passthrough",
+                "--run-dir",
+                "run",
+                "--segment-id",
+                "formula-id",
+                "--reason",
+                "pure formula",
+                "--confirmed-by",
+                "reviewer",
+            ]
+        )
+        self.assertEqual(args.segment_id, ["formula-id"])
+        self.assertEqual(args.reason, "pure formula")
+        self.assertEqual(args.confirmed_by, "reviewer")
+
     def test_codex_provider_requires_explicit_model_for_auditing(self) -> None:
         """忽略用户配置后不能把未知默认模型写成可审计运行。"""
 

@@ -126,7 +126,24 @@ paperlocale status --run-dir runs/paper
 
 运行中断后，重新执行同一条 `paperlocale run` 命令即可：清单会从最后完成的阶段继续，已通过门禁的译文会从 `translations.jsonl` 复用。同批个别译文失败时，其他合格结果仍会原子保存，失败候选和具体原因写入 `rejected_translations.jsonl`。翻译完成后的续跑可以省略 `--provider` 和 API 凭据。`run` 只推进到 `qa_generated`，不会自动记录人工验收；项目也不会在同一次运行中静默切换 Provider。
 
-运行清单会记录领域包内容哈希、Provider、模型、推理强度、Codex CLI 版本以及 collect/render 使用的版面引擎版本。`codex-local` 因此要求显式提供 `--model`；没有填写推理强度时会如实记录为空，不伪造实际设置。
+如果失败片段确实不是可翻译正文，例如纯公式或作者姓名串，不要添加“公式：”
+等虚构中文，也不要放宽全局中文门禁。人工检查原文和失败候选后，显式确认透传：
+
+```bash
+paperlocale confirm-passthrough \
+  --run-dir runs/paper \
+  --segment-id 已确认无需翻译的片段ID \
+  --reason "纯公式，没有可翻译正文" \
+  --confirmed-by "你的名字"
+```
+
+`passthrough_map.json` 会绑定源 PDF 和 `segments.jsonl` 哈希，并逐条记录原因、
+确认人和时间。透传片段必须与原文逐字相同、不会发送给 Provider；部分批次失败后
+补充确认时，已保存的其他译文仍会复用。
+
+schema 4 运行清单会记录领域包内容哈希、Provider、模型、推理强度、Codex CLI
+版本、collect/render 使用的版面引擎版本，以及人工透传映射的哈希。`codex-local`
+因此要求显式提供 `--model`；没有填写推理强度时会如实记录为空，不伪造实际设置。
 
 若机器 QA 报告矢量对象减少，报告会列出缺失对象的页码、边界框和面积，并在对照图两侧用红框标出位置。完成独立文件形式的矢量修复后，使用受控导入命令：
 
@@ -139,7 +156,7 @@ paperlocale apply-vector-repair \
 
 该命令拒绝改变文字、页尺寸或图片数量的候选，备份修复前 PDF 并写入 `repair_history`；导入后必须重新执行 `qa` 和 `accept`。
 
-需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> reference-review/confirm-references -> translate -> validate -> render -> qa -> accept` 命令序列。
+需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> reference-review/confirm-references -> 可选 confirm-passthrough -> translate -> validate -> render -> qa -> accept` 命令序列。
 
 ## 领域包扩展
 

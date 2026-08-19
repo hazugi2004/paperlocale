@@ -25,7 +25,7 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 | 明确的公共开源价值 | 学术 PDF 保版翻译、科学信息硬门禁、可扩展领域术语包 | 已实现 |
 | 核心维护者与写权限 | `MAINTAINERS.md` 与 GitHub `hazugi2004/paperlocale` 管理权限 | 已验证 |
 | 可运行项目 | 一键断点续跑 CLI、两种 Provider、Provider 评估、参考文献人工确认、单向状态机、54 项不联网测试 | [v0.3.1 PR #11](https://github.com/hazugi2004/paperlocale/pull/11) 的 Python 3.10–3.13 矩阵及 `[layout]` 依赖求解门禁已通过 |
-| 可复现质量证据 | 合成双栏 PDF、公式合同、图片与矢量绘图硬门禁、逐页 QA | 已实现 |
+| 可复现质量证据 | 合成双栏 PDF、公式合同、图片与矢量绘图硬门禁、逐页 QA；[v0.3.1 永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.1/paperlocale-v0.3.1-layout-compatibility.zip)保留清单、参考文献映射、日志、对照图与演示 GIF | 已实现，附件 SHA-256 为 `cac1e404b2317316551c98c060ca3649fdd4353f58502bb04442799fcba6781f` |
 | 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考、[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)与 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 公开 | 初步证据，等待非维护者领域人员提交复核 |
 | 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
 | 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建和上游兼容性工作流 | v0.1.0–v0.3.1、[v0.3.1 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32221420406)与[标签级真实兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32221715819)已通过 |

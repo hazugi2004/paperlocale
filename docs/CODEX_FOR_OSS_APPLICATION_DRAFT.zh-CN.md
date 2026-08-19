@@ -35,6 +35,7 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 - v0.3.1 hotfix PR: https://github.com/hazugi2004/paperlocale/pull/11
 - v0.3.1 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32221420406
 - v0.3.1 layout compatibility run: https://github.com/hazugi2004/paperlocale/actions/runs/32221715819
+- Durable v0.3.1 compatibility artifact: https://github.com/hazugi2004/paperlocale/releases/download/v0.3.1/paperlocale-v0.3.1-layout-compatibility.zip
 - v0.3.0 implementation PR: https://github.com/hazugi2004/paperlocale/pull/6
 - v0.3.0 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32219122015
 - Initial release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0

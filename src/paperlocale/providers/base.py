@@ -38,6 +38,19 @@ class TranslationContext:
 class TranslationProvider(ABC):
     """所有真实 Provider 必须实现的同步批量接口。"""
 
+    def provenance(self) -> dict[str, object]:
+        """返回可写入运行清单的非敏感 Provider 身份。
+
+        第三方 Provider 即使尚未实现专用元数据，也会留下明确的 Python 类型；
+        内置 Provider 会覆盖此方法并记录稳定名称、模型和运行时版本。
+        """
+
+        provider_type = type(self)
+        return {
+            "provider": f"{provider_type.__module__}.{provider_type.__qualname__}",
+            "model": None,
+        }
+
     @abstractmethod
     def translate(
         self,

@@ -44,10 +44,20 @@ class OpenAICompatibleProvider(TranslationProvider):
             raise ValueError("api_key 不能为空")
         if not model:
             raise ValueError("model 不能为空")
-        self.endpoint = base_url.rstrip("/") + "/chat/completions"
+        self.base_url = base_url.rstrip("/")
+        self.endpoint = self.base_url + "/chat/completions"
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
+
+    def provenance(self) -> dict[str, object]:
+        """只记录不含凭据的端点、Provider 和模型身份。"""
+
+        return {
+            "provider": "openai-compatible",
+            "model": self.model,
+            "base_url": self.base_url,
+        }
 
     def translate(
         self,

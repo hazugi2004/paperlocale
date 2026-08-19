@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from paperlocale import cli
-from paperlocale.cli import _initialize_or_load_run, build_parser
+from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_parser
 
 
 class CliTest(unittest.TestCase):
@@ -23,6 +23,10 @@ class CliTest(unittest.TestCase):
                 "runs/paper",
                 "--provider",
                 "codex-local",
+                "--model",
+                "gpt-5.6-sol",
+                "--reasoning-effort",
+                "high",
                 "--domain",
                 "atmospheric-science",
             ]
@@ -30,6 +34,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.command, "run")
         self.assertEqual(args.provider, "codex-local")
         self.assertEqual(args.domain, "atmospheric-science")
+        self.assertEqual(args.reasoning_effort, "high")
+
+    def test_codex_provider_requires_explicit_model_for_auditing(self) -> None:
+        """忽略用户配置后不能把未知默认模型写成可审计运行。"""
+
+        args = build_parser().parse_args(
+            ["translate", "--run-dir", "run", "--provider", "codex-local"]
+        )
+        with self.assertRaisesRegex(ValueError, "显式提供 --model"):
+            _provider_from_args(args)
 
     def test_existing_run_rejects_a_different_source_pdf(self) -> None:
         """复用运行目录时不能把新论文误接到旧片段、译文和 QA 证据上。"""

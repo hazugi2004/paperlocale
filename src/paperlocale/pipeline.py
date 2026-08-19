@@ -71,6 +71,7 @@ def translate_segment_file(
         segments.append(Segment(id=sid, source=source))
 
     existing_rows = read_jsonl(translations_path) if translations_path.exists() else []
+    rejected_path = translations_path.with_name("rejected_translations.jsonl")
     existing: dict[str, dict[str, object]] = {}
     for row in existing_rows:
         sid = str(row.get("id", ""))
@@ -101,10 +102,19 @@ def translate_segment_file(
         if [item.id for item in translated] != [item.id for item in batch]:
             raise ValueError("Provider 返回顺序或 ID 与输入批次不一致")
         accepted: list[dict[str, object]] = []
+        rejected: list[dict[str, object]] = []
         for source_segment, result in zip(batch, translated):
             errors = validate_translation(source_segment.source, result.target, domain)
             if errors:
-                raise ValueError(f"新译文未通过门禁：{result.id}: {errors}")
+                rejected.append(
+                    {
+                        "id": result.id,
+                        "source": source_segment.source,
+                        "target": result.target,
+                        "errors": errors,
+                    }
+                )
+                continue
             accepted.append(
                 {
                     "id": result.id,
@@ -112,6 +122,17 @@ def translate_segment_file(
                     "target": result.target,
                 }
             )
-        ordered.extend(accepted)
-        write_jsonl_atomic(translations_path, ordered)
+        if accepted:
+            # 即使同批另有失败项，也先保存已通过门禁的结果，避免重复消耗模型额度。
+            ordered.extend(accepted)
+            write_jsonl_atomic(translations_path, ordered)
+        if rejected:
+            write_jsonl_atomic(rejected_path, rejected)
+            raise ValueError(
+                f"本批有 {len(rejected)} 条新译文未通过门禁；"
+                f"合格译文已保存，失败候选见 {rejected_path}"
+            )
+        if rejected_path.exists():
+            # 成功重试后清除已经解决的诊断文件，避免把旧失败误认为当前状态。
+            rejected_path.unlink()
     return len(existing), len(pending)

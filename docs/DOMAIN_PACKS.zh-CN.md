@@ -14,6 +14,9 @@ your-domain/
 
 `manifest.json` 必须声明唯一 `id`、语义化 `version`、`source_language` 和 `target_language`。运行语言必须与领域包一致，否则 PaperLocale 会拒绝翻译。
 
+加载时会用固定文件名和四个文件的原始字节生成内容 SHA-256，并写入运行清单。
+因此相同 `id/version` 下修改提示词、术语或案例也会改变身份，旧断点会明确拒绝续跑。
+
 `prompt.txt` 只写本领域的消歧规则和表达要求。公式、数字、单位等通用完整性要求由核心合同统一注入，不需要复制。
 
 `glossary.tsv` 必须恰好有四列：
@@ -45,6 +48,8 @@ paperlocale domain-check /tmp/your-domain
 ```bash
 paperlocale provider-eval \
   --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
   --domain /tmp/your-domain \
   --output tmp/your-domain-provider-eval.json
 ```

@@ -10,9 +10,10 @@ from .contracts import validate_translation, validate_translation_files
 from .domains import load_domain_pack
 from .evaluation import evaluate_provider, write_evaluation_report
 from .pipeline import translate_segment_file
-from .providers import CodexLocalProvider, OpenAICompatibleProvider
+from .providers import REASONING_EFFORTS, CodexLocalProvider, OpenAICompatibleProvider
 from .workflow import (
     accept_run,
+    apply_vector_repair,
     collect_run,
     initialize_run,
     load_manifest,
@@ -85,6 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     provider_eval.add_argument("--model")
+    provider_eval.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     provider_eval.add_argument("--codex-bin")
     provider_eval.add_argument("--base-url")
     provider_eval.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -105,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     translate.add_argument("--model")
+    translate.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     translate.add_argument("--codex-bin")
     translate.add_argument("--base-url")
     translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -127,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--domain", default="atmospheric-science")
     run.add_argument("--provider", choices=("codex-local", "openai-compatible"))
     run.add_argument("--model")
+    run.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     run.add_argument("--codex-bin")
     run.add_argument("--base-url")
     run.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -149,6 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     run_translate.add_argument("--model")
+    run_translate.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     run_translate.add_argument("--codex-bin")
     run_translate.add_argument("--base-url")
     run_translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -171,6 +176,14 @@ def build_parser() -> argparse.ArgumentParser:
     qa.add_argument("--dpi", type=int, default=144)
     qa.add_argument("--pdftoppm-bin")
 
+    repair = subparsers.add_parser(
+        "apply-vector-repair",
+        help="导入只增加矢量绘图的候选 PDF，并记录修复历史",
+    )
+    repair.add_argument("--run-dir", type=Path, required=True)
+    repair.add_argument("--repaired-pdf", type=Path, required=True)
+    repair.add_argument("--description", required=True)
+
     accept = subparsers.add_parser("accept", help="记录人工逐页视觉验收")
     accept.add_argument("--run-dir", type=Path, required=True)
     accept.add_argument("--reviewed-by", required=True)
@@ -181,7 +194,15 @@ def _provider_from_args(args: argparse.Namespace):
     """根据明确命令行选择构造唯一 Provider，不做自动回退。"""
 
     if args.provider == "codex-local":
-        return CodexLocalProvider(model=args.model, codex_bin=args.codex_bin)
+        if not args.model:
+            raise ValueError("codex-local 必须显式提供 --model，才能审计实际模型")
+        return CodexLocalProvider(
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+            codex_bin=args.codex_bin,
+        )
+    if args.reasoning_effort:
+        raise ValueError("--reasoning-effort 当前只适用于 codex-local")
     if not args.base_url or not args.model:
         raise ValueError("openai-compatible 必须提供 --base-url 和 --model")
     api_key = os.environ.get(args.api_key_env, "")
@@ -305,6 +326,14 @@ def main() -> int:
             f"机器 QA 通过：{report['translated_pages']} 页；"
             "请检查 comparisons/ 后再执行 accept"
         )
+        return 0
+    if args.command == "apply-vector-repair":
+        repaired = apply_vector_repair(
+            args.run_dir,
+            repaired_pdf=args.repaired_pdf,
+            description=args.description,
+        )
+        print(f"矢量修复已导入并记录历史：{repaired}；请重新执行 qa 和 accept")
         return 0
     if args.command == "accept":
         accept_run(args.run_dir, reviewed_by=args.reviewed_by)

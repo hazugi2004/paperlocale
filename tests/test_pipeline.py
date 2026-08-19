@@ -64,6 +64,58 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(provider.calls, 1)
             self.assertEqual(len(read_jsonl(translations)), 1)
 
+    def test_batch_failure_saves_valid_rows_and_rejected_candidate(self) -> None:
+        """单条失败不能迫使同批其他合格译文再次调用高成本模型。"""
+
+        sources = (
+            "Soil moisture was 10 mm.",
+            "Air temperature was 20 °C.",
+            "Precipitation was 30 mm.",
+        )
+        mapping = {
+            sources[0]: "土壤湿度为10 mm。",
+            sources[1]: "气温发生变化。",
+            sources[2]: "降水量为30 mm。",
+        }
+        provider = _MappingProvider(mapping)
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            segments = root / "segments.jsonl"
+            translations = root / "translations.jsonl"
+            write_jsonl_atomic(
+                segments,
+                [{"id": segment_id(source), "source": source} for source in sources],
+            )
+
+            with self.assertRaisesRegex(ValueError, "合格译文已保存"):
+                translate_segment_file(
+                    segments_path=segments,
+                    translations_path=translations,
+                    provider=provider,
+                    domain=domain,
+                )
+
+            accepted = read_jsonl(translations)
+            rejected_path = root / "rejected_translations.jsonl"
+            rejected = read_jsonl(rejected_path)
+            self.assertEqual([row["source"] for row in accepted], [sources[0], sources[2]])
+            self.assertEqual(rejected[0]["source"], sources[1])
+            self.assertTrue(rejected[0]["errors"])
+
+            provider.mapping[sources[1]] = "气温为20 °C。"
+            self.assertEqual(
+                translate_segment_file(
+                    segments_path=segments,
+                    translations_path=translations,
+                    provider=provider,
+                    domain=domain,
+                ),
+                (2, 1),
+            )
+            self.assertEqual(len(read_jsonl(translations)), 3)
+            self.assertFalse(rejected_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

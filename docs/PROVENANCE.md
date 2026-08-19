@@ -12,6 +12,8 @@ PaperLocale 的质量门禁来自一个已经完成多篇大气科学论文保�
 
 当前仓库不内嵌或分发 BabelDOC/PDFMathTranslate-next 源码。正式接入时固定兼容版本、记录上游提交，并遵守对应许可证和网络服务源码义务。
 
+schema 3 运行清单记录领域包内容 SHA-256、Provider、显式模型、推理强度、Codex CLI、pdf2zh-next 与 BabelDOC 版本。矢量修复必须通过 `apply-vector-repair` 导入；清单保存修复前后哈希、旧 PDF 备份、修复说明和逐页矢量数量变化，并要求重新完成机器与人工 QA。
+
 ## 数据与版权
 
 仓库不提交受版权限制的论文 PDF 或完整译本。自动化测试使用项目自行生成的合成 PDF；真实论文只在用户本地运行。

@@ -4,6 +4,19 @@
 
 ## Unreleased
 
+### Added
+
+- Codex 本地 Provider 增加 `--reasoning-effort`，运行清单记录 Provider、模型、推理强度、Codex CLI、pdf2zh-next 与 BabelDOC 版本。
+- 领域包四个数据文件生成统一内容 SHA-256；相同 id/version 下的静默改写会被续跑门禁拒绝。
+- 同批单条失败时保留其他合格译文，并把失败候选与具体合同错误写入 `rejected_translations.jsonl`。
+- 矢量绘图减少时报告缺失对象的页码、边界框和面积，并在逐页对照图的源文与译文位置绘制红框。
+- 增加 `apply-vector-repair`：只接受文字、页尺寸和图片不变且矢量数量增加的候选，备份旧 PDF、记录 `repair_history`，并强制重新 QA 与人工验收。
+
+### Fixed
+
+- `ABSTRACT`、`KEYWORDS`、`REFERENCES` 不再被误判为必须原样保留的科学缩写。
+- `mid-1960s` 继续保护年代 `1960`，但不再把连接号误判为负号。
+
 ### Documentation
 
 - 发布 v0.2.0 后，在 PDFMathTranslate-next #354 补充真实兼容性与标签发行构建证据，继续等待外部回应。

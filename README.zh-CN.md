@@ -44,6 +44,8 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 ```bash
 paperlocale provider-eval \
   --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
   --domain atmospheric-science \
   --output provider-eval.json
 ```
@@ -74,6 +76,8 @@ codex login
 paperlocale run paper.pdf \
   --run-dir runs/paper \
   --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
   --domain atmospheric-science
 ```
 
@@ -99,7 +103,20 @@ paperlocale accept --run-dir runs/paper --reviewed-by "你的名字"
 paperlocale status --run-dir runs/paper
 ```
 
-运行中断后，重新执行同一条 `paperlocale run` 命令即可：清单会从最后完成的阶段继续，已通过门禁的译文会从 `translations.jsonl` 复用。翻译完成后的续跑可以省略 `--provider` 和 API 凭据。`run` 只推进到 `qa_generated`，不会自动记录人工验收；项目也不会在同一次运行中静默切换 Provider。
+运行中断后，重新执行同一条 `paperlocale run` 命令即可：清单会从最后完成的阶段继续，已通过门禁的译文会从 `translations.jsonl` 复用。同批个别译文失败时，其他合格结果仍会原子保存，失败候选和具体原因写入 `rejected_translations.jsonl`。翻译完成后的续跑可以省略 `--provider` 和 API 凭据。`run` 只推进到 `qa_generated`，不会自动记录人工验收；项目也不会在同一次运行中静默切换 Provider。
+
+运行清单会记录领域包内容哈希、Provider、模型、推理强度、Codex CLI 版本以及 collect/render 使用的版面引擎版本。`codex-local` 因此要求显式提供 `--model`；没有填写推理强度时会如实记录为空，不伪造实际设置。
+
+若机器 QA 报告矢量对象减少，报告会列出缺失对象的页码、边界框和面积，并在对照图两侧用红框标出位置。完成独立文件形式的矢量修复后，使用受控导入命令：
+
+```bash
+paperlocale apply-vector-repair \
+  --run-dir runs/paper \
+  --repaired-pdf repaired-paper.pdf \
+  --description "恢复第 1 页链接矢量图标"
+```
+
+该命令拒绝改变文字、页尺寸或图片数量的候选，备份修复前 PDF 并写入 `repair_history`；导入后必须重新执行 `qa` 和 `accept`。
 
 需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> translate -> validate -> render -> qa -> accept` 命令序列。
 
@@ -121,11 +138,11 @@ your-domain/
 paperlocale domain-check /path/to/your-domain
 ```
 
-字段、门禁和贡献要求见 [领域包指南](docs/DOMAIN_PACKS.zh-CN.md)。实施进度见 [路线图](docs/ROADMAP.md)，申请证据边界见 [Codex for Open Source 准备清单](docs/CODEX_FOR_OSS_READINESS.zh-CN.md) 与 [申请草稿](docs/CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md)，安全与订阅边界见 [安全策略](SECURITY.md)。
+四个文件的原始字节与文件名共同生成内容 SHA-256；只修改内容而不提高版本号，也不会绕过运行清单的续跑身份检查。字段、门禁和贡献要求见 [领域包指南](docs/DOMAIN_PACKS.zh-CN.md)。实施进度见 [路线图](docs/ROADMAP.md)，申请证据边界见 [Codex for Open Source 准备清单](docs/CODEX_FOR_OSS_READINESS.zh-CN.md) 与 [申请草稿](docs/CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md)，安全与订阅边界见 [安全策略](SECURITY.md)。
 
 ## 当前证据边界
 
-- 37 项单元测试不联网运行，覆盖内容合同、Provider 评估、一键断点续跑、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、页面 QA、隔离环境入口和演示产物；
+- 47 项单元测试不联网运行，覆盖内容合同、Provider 评估、一键断点续跑、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 合成页包含公式占位、矢量表格与嵌入图片；最新 QA 报告中源文/译文均为 1 个图片对象和 8 次矢量绘制，不提交任何受版权限制的论文；
 - “保版”不等于像素完全一致。中文长度变化会改变行内断行，因此最终候选必须人工逐页核对。

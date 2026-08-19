@@ -37,6 +37,26 @@ def _build_pdf(path: Path, *, pagesize: tuple[float, float], label: str, image: 
     document.save()
 
 
+def _build_link_icon_pdf(path: Path, *, include_icons: bool) -> None:
+    """生成含两个小型链接矢量图标的自有回归夹具。"""
+
+    width, height = A4
+    document = canvas.Canvas(str(path), pagesize=A4)
+    document.setFont("Helvetica", 9)
+    for row in range(24):
+        document.drawString(
+            40,
+            height - 50 - row * 22,
+            f"Synthetic article paragraph {row + 1}: DOI and supplementary link.",
+        )
+    if include_icons:
+        # 两个相邻椭圆模拟论文首页常见的链接图标，尺寸刻意保持很小。
+        document.ellipse(420, height - 92, 432, height - 84, stroke=1, fill=0)
+        document.ellipse(429, height - 92, 441, height - 84, stroke=1, fill=0)
+    document.showPage()
+    document.save()
+
+
 class PdfQaTest(unittest.TestCase):
     def test_cmap_warnings_are_counted_without_console_noise(self) -> None:
         """可恢复字体日志应进入报告计数，且调用后恢复原 logger 配置。"""
@@ -137,6 +157,37 @@ class PdfQaTest(unittest.TestCase):
             page = report["pages"][0]
             self.assertGreater(page["source_vector_drawings"], 0)
             self.assertEqual(page["translated_vector_drawings"], 0)
+            self.assertTrue(page["missing_vector_drawings"])
+            self.assertTrue(all("bbox" in item and "area" in item for item in page["missing_vector_drawings"]))
+
+    def test_missing_link_icons_report_bbox_area_and_red_boxes(self) -> None:
+        """真实论文暴露的小型链接图标缺失必须可定位，而不只报告数量。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            translated = root / "translated.pdf"
+            _build_link_icon_pdf(source, include_icons=True)
+            _build_link_icon_pdf(translated, include_icons=False)
+
+            report = inspect_pdf_pair(
+                source_pdf=source,
+                translated_pdf=translated,
+                output_dir=root / "qa",
+                dpi=72,
+            )
+            page = report["pages"][0]
+            missing = page["missing_vector_drawings"]
+            self.assertEqual(len(missing), 2)
+            self.assertTrue(all(item["area"] > 0 for item in missing))
+
+            comparison_path = Path(str(page["comparison"]))
+            with Image.open(comparison_path).convert("RGB") as comparison:
+                red_pixels = sum(
+                    red > 200 and green < 80 and blue < 80
+                    for red, green, blue in comparison.getdata()
+                )
+            self.assertGreater(red_pixels, 0)
 
 
 if __name__ == "__main__":

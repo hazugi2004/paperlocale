@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from paperlocale.contracts import (
+    protected_counts,
     segment_id,
     validate_translation,
     validate_translation_files,
@@ -47,6 +48,21 @@ class TranslationContractTest(unittest.TestCase):
         source = "Gross primary productivity (GPP) changed by 2.5% under {v1}."
         target = "总初级生产力（GPP）在{v1}条件下变化2.5%。"
         self.assertEqual(validate_translation(source, target, self.domain), [])
+
+    def test_section_headings_are_not_treated_as_abbreviations(self) -> None:
+        """论文结构标题不是必须原样保留的科学缩写。"""
+
+        for heading in ("ABSTRACT", "KEYWORDS", "REFERENCES"):
+            with self.subTest(heading=heading):
+                self.assertEqual(protected_counts(heading)["abbreviation"], {})
+
+    def test_hyphenated_decade_keeps_year_without_false_negative_sign(self) -> None:
+        """mid-1960s 应保护年代 1960，但连字符不是负号。"""
+
+        source = "Compound events increased in the mid-1960s."
+        target = "复合事件在20世纪60年代（1960年代中期）有所增加。"
+        self.assertEqual(protected_counts(source)["number"], {"1960": 1})
+        self.assertEqual(validate_translation(source, target), [])
 
     def test_atomic_jsonl_and_file_closure(self) -> None:
         source = "Soil moisture was 10 mm."

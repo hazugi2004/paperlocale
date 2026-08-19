@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import fitz
 from PIL import Image, ImageDraw
 from pypdf import PdfReader
 
@@ -60,6 +61,49 @@ def _vector_paint_count(page: object) -> int:
         operator in VECTOR_PAINT_OPERATORS
         for _operands, operator in contents.operations
     )
+
+
+def _vector_objects(pdf_path: Path) -> list[list[dict[str, object]]]:
+    """读取每页矢量绘图的边界框与面积，用于定位数量减少的具体对象。"""
+
+    document = fitz.open(pdf_path)
+    pages: list[list[dict[str, object]]] = []
+    try:
+        for page in document:
+            objects: list[dict[str, object]] = []
+            for drawing in page.get_drawings():
+                rectangle = fitz.Rect(drawing["rect"])
+                objects.append(
+                    {
+                        "bbox": [round(float(value), 3) for value in rectangle],
+                        "area": round(float(rectangle.get_area()), 3),
+                    }
+                )
+            pages.append(objects)
+    finally:
+        document.close()
+    return pages
+
+
+def _missing_vector_objects(
+    source: list[dict[str, object]],
+    translated: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """按 0.01 PDF 点坐标匹配对象，返回只在源页出现的矢量绘图。"""
+
+    translated_counts: dict[tuple[float, ...], int] = {}
+    for item in translated:
+        key = tuple(round(float(value), 2) for value in item["bbox"])
+        translated_counts[key] = translated_counts.get(key, 0) + 1
+
+    missing: list[dict[str, object]] = []
+    for item in source:
+        key = tuple(round(float(value), 2) for value in item["bbox"])
+        if translated_counts.get(key, 0):
+            translated_counts[key] -= 1
+        else:
+            missing.append(item)
+    return missing
 
 
 def _extract_text(page: object) -> tuple[str, int]:
@@ -140,7 +184,39 @@ def _nonwhite_ratio(image: Image.Image) -> float:
     return 1.0 - white_like / (image.width * image.height)
 
 
-def _comparison(source: Image.Image, target: Image.Image, page_number: int) -> Image.Image:
+def _draw_missing_vector_boxes(
+    draw: ImageDraw.ImageDraw,
+    *,
+    objects: list[dict[str, object]],
+    image_size: tuple[int, int],
+    page_size: tuple[float, float],
+    offset: tuple[int, int],
+) -> None:
+    """把 PDF 点坐标映射到渲染图，在缺失位置绘制醒目的红框。"""
+
+    if not objects or page_size[0] <= 0 or page_size[1] <= 0:
+        return
+    scale_x = image_size[0] / page_size[0]
+    scale_y = image_size[1] / page_size[1]
+    for item in objects:
+        left, top, right, bottom = (float(value) for value in item["bbox"])
+        box = (
+            offset[0] + left * scale_x - 4,
+            offset[1] + top * scale_y - 4,
+            offset[0] + right * scale_x + 4,
+            offset[1] + bottom * scale_y + 4,
+        )
+        draw.rectangle(box, outline="red", width=3)
+
+
+def _comparison(
+    source: Image.Image,
+    target: Image.Image,
+    page_number: int,
+    *,
+    missing_vectors: list[dict[str, object]] | None = None,
+    page_size: tuple[float, float] | None = None,
+) -> Image.Image:
     """生成一张明确标注左右来源的逐页复核图。"""
 
     header = 42
@@ -155,6 +231,22 @@ def _comparison(source: Image.Image, target: Image.Image, page_number: int) -> I
     draw = ImageDraw.Draw(canvas)
     draw.text((12, 12), f"Page {page_number} - SOURCE", fill="black")
     draw.text((source.width + gap + 12, 12), f"Page {page_number} - TRANSLATED", fill="black")
+    if missing_vectors and page_size:
+        # 源图框出实际对象，译文图框出其应出现的位置，方便人工并排定位。
+        _draw_missing_vector_boxes(
+            draw,
+            objects=missing_vectors,
+            image_size=source.size,
+            page_size=page_size,
+            offset=(0, header),
+        )
+        _draw_missing_vector_boxes(
+            draw,
+            objects=missing_vectors,
+            image_size=target.size,
+            page_size=page_size,
+            offset=(source.width + gap, header),
+        )
     return canvas
 
 
@@ -181,6 +273,12 @@ def inspect_pdf_pair(
     errors: list[str] = []
     warnings: list[str] = []
     pages: list[dict[str, object]] = []
+    try:
+        source_vector_objects = _vector_objects(source_path)
+        target_vector_objects = _vector_objects(target_path)
+    except Exception as exc:  # noqa: BLE001  # PyMuPDF 对异常 PDF 的错误类型不固定。
+        source_vector_objects = target_vector_objects = []
+        warnings.append(f"矢量边界框无法提取：{exc}")
     if len(source_reader.pages) != len(target_reader.pages):
         errors.append(
             f"页数不一致：source={len(source_reader.pages)}, translated={len(target_reader.pages)}"
@@ -229,8 +327,7 @@ def inspect_pdf_pair(
                 f"第{index + 1}页矢量绘图减少："
                 f"source={source_vectors}, translated={target_vectors}"
             )
-        pages.append(
-            {
+        page_record: dict[str, object] = {
                 "page": index + 1,
                 "source_media_box": source_media,
                 "translated_media_box": target_media,
@@ -242,7 +339,16 @@ def inspect_pdf_pair(
                 "translated_vector_drawings": target_vectors,
                 "translated_text_characters": len(target_text),
             }
-        )
+        if (
+            target_vectors < source_vectors
+            and index < len(source_vector_objects)
+            and index < len(target_vector_objects)
+        ):
+            page_record["missing_vector_drawings"] = _missing_vector_objects(
+                source_vector_objects[index],
+                target_vector_objects[index],
+            )
+        pages.append(page_record)
 
     source_images = _render(
         source_path,
@@ -271,7 +377,21 @@ def inspect_pdf_pair(
             ratio = _nonwhite_ratio(target_image)
             if ratio < 0.01:
                 errors.append(f"第{index}页疑似空白，非白像素比例={ratio:.4f}")
-            comparison = _comparison(source_image.convert("RGB"), target_image.convert("RGB"), index)
+            page_record = pages[index - 1] if index <= len(pages) else {}
+            source_media = page_record.get("source_media_box")
+            page_size = None
+            if isinstance(source_media, tuple):
+                page_size = (
+                    float(source_media[2]) - float(source_media[0]),
+                    float(source_media[3]) - float(source_media[1]),
+                )
+            comparison = _comparison(
+                source_image.convert("RGB"),
+                target_image.convert("RGB"),
+                index,
+                missing_vectors=page_record.get("missing_vector_drawings"),
+                page_size=page_size,
+            )
             comparison_path = comparison_dir / f"page-{index:03d}.png"
             comparison.save(comparison_path)
             if index <= len(pages):

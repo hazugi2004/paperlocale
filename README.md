@@ -56,6 +56,8 @@ to their references:
 ```bash
 paperlocale provider-eval \
   --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
   --domain atmospheric-science \
   --output provider-eval.json
 ```
@@ -85,17 +87,40 @@ translate, validate, rebuild, and generate all-page QA:
 ```bash
 # Uses the authenticated Codex CLI session on this trusted local machine.
 paperlocale run paper.pdf --run-dir runs/paper \
-  --provider codex-local --domain atmospheric-science
+  --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
+  --domain atmospheric-science
 
 # Inspect every image under runs/paper/qa/comparisons/ before acceptance.
 paperlocale accept --run-dir runs/paper --reviewed-by "Your name"
 ```
 
 If a stage fails, rerun the same `paperlocale run` command. The manifest resumes
-from the last completed stage and validated translation batches are reused.
+from the last completed stage and every accepted segment is reused, including
+valid rows from a batch that also produced rejected candidates. Those candidates
+and their contract errors are stored in `rejected_translations.jsonl`.
 The command deliberately stops at `qa_generated`; it never records human
 acceptance. Once translation is complete, a resume command does not need
 `--provider` or API credentials.
+
+The run manifest binds the domain-pack content hash, provider, model, reasoning
+effort, Codex CLI version, and collect/render layout-engine versions. A Codex
+run therefore requires an explicit `--model`.
+
+When vector objects disappear, QA records their page, bounding box, and area,
+and draws red boxes at the expected locations in both comparison panels. Import
+an independently repaired candidate through the audited path:
+
+```bash
+paperlocale apply-vector-repair --run-dir runs/paper \
+  --repaired-pdf repaired-paper.pdf \
+  --description "Restore page 1 link vector icons"
+```
+
+The command rejects candidates that alter text, page geometry, or image counts,
+backs up the previous PDF, appends `repair_history`, and requires QA and human
+acceptance to run again.
 
 For a BYOK OpenAI-compatible endpoint:
 

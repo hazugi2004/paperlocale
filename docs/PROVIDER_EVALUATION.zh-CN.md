@@ -30,6 +30,8 @@
 ```bash
 paperlocale provider-eval \
   --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
   --domain atmospheric-science \
   --output tmp/codex-local-atmospheric-eval.json
 ```

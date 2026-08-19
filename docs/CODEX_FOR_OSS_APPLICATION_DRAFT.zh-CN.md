@@ -4,6 +4,11 @@
 
 本文件不保存邮箱、ChatGPT 账号或其他私人申请信息。提交时只在 OpenAI 官方表单中填写这些内容。
 
+官方入口：[Codex for Open Source application](https://openai.com/form/codex-for-oss/)。
+提交前应确认使用有效 ChatGPT 账号、仓库与维护权限信息准确完整，并且材料不包含
+API Key、登录凭据、未公开论文或其他机密信息。申请和提交材料不保证入选；权益
+种类、范围和时长以 OpenAI 最终批准结果为准。
+
 ## 项目与维护者
 
 - Project: PaperLocale
@@ -52,3 +57,7 @@
 4. 与 BabelDOC/PDFMathTranslate-next 的公开 Issue 或 PR；
 
 如果在这些证据出现前申请，应明确写“new public project”，并依照官方说明解释其生态重要性，不能把维护者创建的 Issue、测试调用、自己的 Star 或未合并 Draft PR 描述为真实用户采用。
+
+提交时可诚实强调的选择因素是：维护者拥有管理员权限、发布后连续修复真实问题、
+保留失败与成功证据、提供上游兼容性工作流，以及项目服务于科学文献可访问性。
+当前最弱的选择因素是 repository usage，不能用维护者自己的运行或下载补齐。

@@ -9,7 +9,7 @@
 - Project: PaperLocale
 - Repository: https://github.com/hazugi2004/paperlocale
 - Core maintainer: `hazugi2004`
-- Role evidence: 仓库管理员、提交者和 `v0.1.0` / `v0.1.1` / `v0.2.0` 发布者
+- Role evidence: 仓库管理员、提交者和 `v0.1.0` / `v0.1.1` / `v0.2.0` / `v0.3.0` 发布者
 - License: AGPL-3.0-only
 
 ## 英文项目简介
@@ -26,7 +26,9 @@
 
 ## 已有证据链接
 
-- Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.2.0
+- Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.0
+- v0.3.0 implementation PR: https://github.com/hazugi2004/paperlocale/pull/6
+- v0.3.0 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32219122015
 - Initial release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0
 - CI: https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml
 - Security policy: https://github.com/hazugi2004/paperlocale/security/policy
@@ -39,12 +41,11 @@
 
 ## 提交前仍需补强
 
-首个非维护者 fork 与 Draft PR 已经出现，但尚不能代替真实使用或已合并贡献。以下再完成任意两类证据后，申请说服力会显著提高：
+项目已连续发布四个版本，并完成第二个主要功能 Release；首个非维护者 fork 与 Draft PR 也已经出现，但仍不能代替真实使用或已合并贡献。以下再完成任意两类外部证据后，申请说服力会显著提高：
 
 1. 将外部 [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) 或后续外部 PR 完成合并；
 2. 至少一个非维护者提交的真实试用反馈或可复现问题报告；
 3. 一个公开下游使用、课程、研究方法说明或工具清单引用；
 4. 与 BabelDOC/PDFMathTranslate-next 的公开 Issue 或 PR；
-5. 第二个经过 CI 和变更记录验证的 Release。
 
 如果在这些证据出现前申请，应明确写“new public project”，并依照官方说明解释其生态重要性，不能把维护者创建的 Issue、测试调用、自己的 Star 或未合并 Draft PR 描述为真实用户采用。

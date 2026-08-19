@@ -63,5 +63,8 @@ jobs:
             tmp/upstream-compatibility/run/reference_review.jsonl
             tmp/upstream-compatibility/run/reference_review_summary.json
             tmp/upstream-compatibility/run/reference_map.json
+            tmp/upstream-compatibility/run/segment_safety_review.jsonl
+            tmp/upstream-compatibility/run/segment_safety_summary.json
+            tmp/upstream-compatibility/run/passthrough_map.json
           if-no-files-found: warn
           retention-days: 14

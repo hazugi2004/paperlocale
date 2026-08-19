@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.3.0 - 2026-08-19
+
 ### Added
 
 - Codex 本地 Provider 增加 `--reasoning-effort`，运行清单记录 Provider、模型、推理强度、Codex CLI、pdf2zh-next 与 BabelDOC 版本。

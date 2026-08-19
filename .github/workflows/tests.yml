@@ -8,6 +8,21 @@ permissions:
   contents: read
 
 jobs:
+  layout-dependency-resolution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Resolve layout dependencies
+        # 单元测试只安装 test extra，无法发现核心依赖与 pdf2zh-next 的版本冲突；
+        # dry-run 会执行完整依赖求解，但不会下载并安装体积较大的版面工具链。
+        run: python -m pip install --dry-run ".[layout]"
+
   unit-tests:
     strategy:
       matrix:

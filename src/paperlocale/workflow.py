@@ -274,14 +274,25 @@ def _recorded_reference_configuration(
 def _layout_provenance(executable: str) -> dict[str, str]:
     """读取实际 pdf2zh-next 命令版本和同环境 BabelDOC 包版本。"""
 
-    completed = subprocess.run(
-        [executable, "--version"],
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        timeout=60,
-        check=False,
-    )
+    completed: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(2):
+        try:
+            completed = subprocess.run(
+                [executable, "--version"],
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+            break
+        except subprocess.TimeoutExpired as exc:
+            # pdf2zh-next 干净安装后的首次启动可能超过 60 秒；被终止后第二次会复用
+            # 已建立的本地缓存。只对这个已观察到的冷启动超时重试一次。
+            if attempt == 1:
+                raise RuntimeError("读取 pdf2zh-next 版本连续两次超时") from exc
+    if completed is None:  # pragma: no cover - 循环只会成功赋值或抛出异常。
+        raise RuntimeError("无法启动 pdf2zh-next 版本探测")
     combined = completed.stdout + "\n" + completed.stderr
     match = re.search(r"pdf2zh-next version:\s*([^\s]+)", combined)
     if completed.returncode != 0 or match is None:

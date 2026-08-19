@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -22,6 +23,7 @@ from paperlocale.providers import (
     TranslationProvider,
 )
 from paperlocale.workflow import (
+    _layout_provenance,
     _resolve_pdf2zh,
     accept_run,
     apply_vector_repair,
@@ -300,6 +302,40 @@ class WorkflowTest(unittest.TestCase):
                 patch("paperlocale.workflow.sys.executable", str(interpreter)),
             ):
                 self.assertEqual(_resolve_pdf2zh(None), str(layout_cli))
+
+    def test_layout_version_probe_retries_one_cold_start_timeout(self) -> None:
+        """干净安装的首次版本探测超时后，只重试一次并保留实际版本。"""
+
+        successful_probe = subprocess.CompletedProcess(
+            args=["/fake/pdf2zh_next", "--version"],
+            returncode=0,
+            stdout="pdf2zh-next version: 2.9.0\n",
+            stderr="",
+        )
+        with (
+            patch(
+                "paperlocale.workflow.subprocess.run",
+                side_effect=[
+                    subprocess.TimeoutExpired(
+                        cmd=["/fake/pdf2zh_next", "--version"],
+                        timeout=60,
+                    ),
+                    successful_probe,
+                ],
+            ) as run_probe,
+            patch(
+                "paperlocale.workflow.importlib.metadata.version",
+                return_value="0.6.2",
+            ),
+            patch(
+                "paperlocale.workflow.shutil.which",
+                return_value="/fake/pdf2zh_next",
+            ),
+        ):
+            provenance = _layout_provenance("/fake/pdf2zh_next")
+
+        self.assertEqual(run_probe.call_count, 2)
+        self.assertEqual(provenance, self.layout_provenance)
 
     def test_domain_language_mismatch_is_rejected(self) -> None:
         """运行语言必须和领域包声明一致，不能静默套用错误提示。"""

@@ -32,7 +32,7 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 | 公开版本 | [GitHub v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) | 已发布并设为 latest，三个附件已公开重下载复核；参考文献默认仍为 `preserve` |
 | 外部贡献 | 非维护者 fork 与 [两页 PDF QA Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 36 项测试均通过，维护者已批准 | 初步证据，等待作者标记 Ready 并合并 |
 | 广泛使用或真实用户采用 | 尚无非维护者真实翻译反馈、问题报告或下游引用 | 未证明 |
-| 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)、[BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与最小修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 两条自动审查意见已在[提交 `735c381`](https://github.com/hazugi2004/BabelDOC/commit/735c3815869af78ed1b1c6cdf416a70cf958e4a5)中处理；尚无上游维护者回应或合并，首次 fork Actions 等待批准运行 |
+| 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)、[BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与最小修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 三条自动审查意见均已处理，最新为[提交 `be8b888`](https://github.com/hazugi2004/BabelDOC/commit/be8b88895f1e432d6bdaa97d3192d874f6f67732)；尚无上游维护者回应或合并，首次 fork Actions 等待批准运行 |
 
 在 #354 获得回复前，项目临时按当前 `CLITranslator` 契约继续开发，并由每周真实版面冒烟工作流验证依赖范围内最新 2.x 版本。该策略降低等待成本，但不等同于上游兼容性承诺。
 

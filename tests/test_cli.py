@@ -12,7 +12,7 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 
 class CliTest(unittest.TestCase):
-    def test_package_version_matches_v030_release_line(self) -> None:
+    def test_package_version_matches_v031_release_line(self) -> None:
         self.assertEqual(__version__, "0.3.1")
 
     def test_run_parser_accepts_single_command_workflow_options(self) -> None:

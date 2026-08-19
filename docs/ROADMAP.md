@@ -38,9 +38,10 @@
 - [x] 复用同一状态机、只推进到机器 QA 的一键断点续跑命令
 - [x] PDFMathTranslate-next/BabelDOC CLI 桥接
 - [x] 运行清单与断点续跑
-- [x] schema 3 Provider/模型/推理强度、工具版本和领域包内容哈希溯源
+- [x] schema 4 Provider/模型/推理强度、工具版本、领域包及人工映射内容哈希溯源
 - [x] 批内部分成功保存与失败候选留档
 - [x] 默认 preserve 的参考文献确定性发现、人工确认映射与 translate-titles
+- [x] 非正文人工透传映射与跨对象碎词/不可见短文本安全复核
 
 完成标准：任一阶段失败不得产生被标记为合格的 PDF。
 
@@ -80,7 +81,8 @@
 - [ ] 新领域包贡献
 - [x] 发起 [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) 上游接口讨论
 - [x] 在等待回复期间按当前 CLI 契约继续，并用每周真实版面冒烟持续验证兼容性
-- [ ] 获得上游回应或提交文档 PR
+- [x] 提交 [BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)
+- [ ] 获得上游维护者回应或合并
 
 申请准备的逐项证据与缺口见 [CODEX_FOR_OSS_READINESS.zh-CN.md](CODEX_FOR_OSS_READINESS.zh-CN.md)。
 

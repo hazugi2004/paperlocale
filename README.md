@@ -132,6 +132,15 @@ segments must remain byte-for-byte equal to their source, never reach the
 Provider, and can safely resolve a rejected partial batch without repeating
 already accepted model calls.
 
+Before any Provider call, PaperLocale also compares collected segments with
+the source PDF's exact visible page text. A segment that starts or ends inside
+the same ASCII word (for example `Figu` + `re ... perio` + `d`), or a short
+ASCII segment absent from visible page text, is written to
+`segment_safety_review.jsonl` and blocks translation. Inspect that local file,
+then confirm every listed ID with `confirm-passthrough`. v0.3.2 deliberately
+keeps these objects unchanged; full translation requires upstream adjacent-
+object context or merge support.
+
 The default reference policy is `preserve`. PaperLocale writes every segment to
 `reference_review.jsonl`, automatically selects only long segments that match
 the source PDF's exact `REFERENCES` region, and requires explicit confirmation
@@ -140,6 +149,12 @@ omit `--segment-id` when no manual additions are needed. The confirmed map is
 bound to the source PDF and `segments.jsonl` hashes. Use
 `--reference-policy translate-titles` to translate work titles only; reference
 rows do not use body-domain glossary gates.
+
+The current released BabelDOC may still re-typeset an unchanged reference
+paragraph. The object-level fix is proposed upstream in
+[BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) and
+[PR #611](https://github.com/funstory-ai/BabelDOC/pull/611); PaperLocale does
+not carry a local PDF overlay workaround while that review is pending.
 
 The schema 4 run manifest binds the domain-pack content hash, provider, model,
 reasoning effort, Codex CLI version, collect/render layout-engine versions, and

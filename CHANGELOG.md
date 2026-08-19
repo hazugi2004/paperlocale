@@ -12,6 +12,11 @@
 ### Fixed
 
 - 参考文献区域标题确定性支持单数或复数、可选章节号及投稿手稿行号，例如 `6 Reference 353`；仍拒绝正文中的普通 `reference` 词语。
+- 翻译前用源 PDF 精确可见文本识别跨对象碎词和不可见短 ASCII 片段，生成哈希绑定的 `segment_safety_review.jsonl` 并要求人工透传，避免 `Figu图…d` 一类无法由单片段译文修复的损坏。
+
+### Documentation
+
+- 按 BabelDOC 贡献规范提交上游 [Issue #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与一行修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)，解决同文返回仍触发重排的对象类型比较错误；合并和发版仍由上游决定。
 
 ## 0.3.1 - 2026-08-19
 

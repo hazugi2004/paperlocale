@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
+from paperlocale.contracts import read_jsonl
 from paperlocale.domains import load_domain_pack
 from paperlocale.providers import (
     Segment,
@@ -21,8 +22,10 @@ from paperlocale.providers import (
     TranslationContext,
     TranslationProvider,
 )
+from paperlocale.segment_safety import prepare_segment_safety_review
 from paperlocale.workflow import (
     collect_run,
+    confirm_passthrough_run,
     confirm_reference_run,
     initialize_run,
     prepare_reference_review_run,
@@ -40,6 +43,8 @@ class SmokeProvider(TranslationProvider):
     ) -> list[Translation]:
         translations: list[Translation] = []
         for segment in segments:
+            if segment.source == "Hello":
+                raise RuntimeError("不可见 Hello 片段不应进入版面冒烟 Provider")
             target = segment.source
             for source, translated in (
                 ("Compound dry-hot events", "复合干热事件"),
@@ -47,7 +52,6 @@ class SmokeProvider(TranslationProvider):
                 ("soil moisture", "土壤湿度"),
                 ("Source scientific paper", "源科学论文"),
                 ("Column text", "栏文本"),
-                ("Hello", "你好"),
             ):
                 target = target.replace(source, translated)
             if target == segment.source:
@@ -185,7 +189,7 @@ def main() -> int:
 
     run_dir = root / "run"
     domain = load_domain_pack("atmospheric-science")
-    initialize_run(
+    initial_manifest = initialize_run(
         source_pdf=source,
         run_dir=run_dir,
         source_language="en",
@@ -202,6 +206,29 @@ def main() -> int:
     confirm_reference_run(
         run_dir,
         additional_segment_ids=[],
+        confirmed_by="PaperLocale synthetic layout smoke fixture",
+    )
+    safety_summary = prepare_segment_safety_review(
+        source_pdf=source,
+        source_sha256=str(initial_manifest["source_sha256"]),
+        segments_path=Path(str(initial_manifest["segments_path"])),
+        output_dir=run_dir,
+    )
+    safety_rows = read_jsonl(Path(str(safety_summary["review_jsonl"])))
+    observed = [
+        (str(row.get("source", "")), str(row.get("kind", "")))
+        for row in safety_rows
+    ]
+    expected = [("Hello", "unlocated-short-ascii-text")]
+    if observed != expected:
+        raise RuntimeError(
+            "合成版面夹具只允许已知的不可见 Hello 片段："
+            f"expected={expected!r}, actual={observed!r}"
+        )
+    confirm_passthrough_run(
+        run_dir,
+        segment_ids=list(safety_summary["required_passthrough_segment_ids"]),
+        reason="BabelDOC 合成版面运行收集到的不可见调试短文本",
         confirmed_by="PaperLocale synthetic layout smoke fixture",
     )
     manifest = run_to_qa(

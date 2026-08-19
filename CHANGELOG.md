@@ -18,7 +18,7 @@
 
 ### Documentation
 
-- 按 BabelDOC 贡献规范提交上游 [Issue #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与一行修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)，解决同文返回仍触发重排的对象类型比较错误；合并和发版仍由上游决定。
+- 按 BabelDOC 贡献规范提交上游 [Issue #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与最小修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)，解决同文返回仍触发重排的对象类型比较错误；合并和发版仍由上游决定。
 
 ## 0.3.1 - 2026-08-19
 

@@ -51,6 +51,7 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 - Security policy: https://github.com/hazugi2004/paperlocale/security/policy
 - Code of Conduct: https://github.com/hazugi2004/paperlocale/blob/main/CODE_OF_CONDUCT.md
 - Citation metadata: https://github.com/hazugi2004/paperlocale/blob/main/CITATION.cff
+- GitHub Community Standards (100%): https://github.com/hazugi2004/paperlocale/community
 - Good first issues: https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 - Architecture: https://github.com/hazugi2004/paperlocale/blob/main/docs/ARCHITECTURE.md
 - Adoption ledger: https://github.com/hazugi2004/paperlocale/blob/main/docs/ADOPTION_EVIDENCE.zh-CN.md

@@ -40,7 +40,7 @@ SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7`�
 非维护者 `icecold009` 已公开 fork 仓库，并针对 good first issue #2 提交
 [两页 PDF QA 回归 PR #4](https://github.com/hazugi2004/paperlocale/pull/4)。维护者已在隔离工作树中将该提交与最新 `main` 组合验证，36 项测试全部通过，并公开提交批准评审和[最新主线兼容性说明](https://github.com/hazugi2004/paperlocale/pull/4#issuecomment-5330379908)；GitHub 的[首次贡献者 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)也已通过。该 PR 仍由作者标记为 Draft，尚未合并，因此它可以证明贡献入口已吸引首个外部参与者，但不能写成已采用、已发布或已合并贡献。
 
-截至目前，尚无可验证的非维护者真实翻译反馈、外部问题报告、下游引用或 PyPI 下载数据。v0.3.1 三个 Release 附件各有 1 次无法归因的下载，不能据此声称外部采用。
+截至目前，尚无可验证的非维护者真实翻译反馈、外部问题报告、下游引用或 PyPI 下载数据。v0.3.1 与 v0.3.2 各三个 Release 附件都只有维护者公开重下载复核期间产生的 1 次下载，不能据此声称外部采用。
 
 ## 记录格式
 

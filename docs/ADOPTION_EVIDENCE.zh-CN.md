@@ -55,7 +55,7 @@ SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7`�
 | 2026-08-19 | 功能 Release | [v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) / [构建](https://github.com/hazugi2004/paperlocale/actions/runs/32234314229) / [兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32234356256) / [永久附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip) | 第二次真实试运行反向校准、schema 4、人工透传、碎词安全审查、63 项测试与公开附件哈希 | 否 |
 | 2026-08-18 | 维护者发起的上游讨论 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) | 两阶段 CLITranslator 接口稳定性与文档协作请求 | 否，等待外部回复 |
 | 2026-08-19 | 维护者上游跟进 | [v0.2.0 兼容性证据](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545) | 真实兼容性运行、标签构建和结构 QA 证据 | 否，等待外部回复 |
-| 2026-08-19 | 维护者上游修复 | [BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) / [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 同文返回保持原版面对象的最小修复和回归测试；两条自动审查意见已处理 | 否，等待上游维护者审查 |
+| 2026-08-19 | 维护者上游修复 | [BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) / [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 同文返回保持原版面对象的最小修复和回归测试；三条自动审查意见已处理 | 否，等待上游维护者审查 |
 | 2026-08-18 | 外部 fork 与 Draft PR | [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) / [CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274) | 非维护者响应 good first issue；贡献分支 CI 通过，维护者将其与最新主线组合验证 36 项测试并批准 | 是，尚未合并 |
 | 待记录 | 真实试用反馈 / Issue / 引用 / 下游项目 / 下载统计 | 待记录 | 待记录 | 是 / 否 |
 

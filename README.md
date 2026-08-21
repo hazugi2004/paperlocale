@@ -2,6 +2,7 @@
 
 [![tests](https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml/badge.svg)](https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/hazugi2004/paperlocale)](https://github.com/hazugi2004/paperlocale/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/paperlocale)](https://pypi.org/project/paperlocale/)
 [![license](https://img.shields.io/github/license/hazugi2004/paperlocale)](LICENSE)
 
 Verified, layout-preserving academic PDF translation with pluggable model providers and domain-specific terminology packs.
@@ -69,16 +70,14 @@ every candidate remains marked for manual domain review.
 ## Install
 
 Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workflow.
-PaperLocale is not published on PyPI yet, so the verified installation path is
-currently from the repository source. The maintainer-only Trusted Publishing
-procedure is documented in [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
+PaperLocale 0.3.2 is published on PyPI through attested Trusted Publishing.
+The audited maintainer procedure and release evidence are documented in
+[docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
 
 ```bash
-git clone https://github.com/hazugi2004/paperlocale.git
-cd paperlocale
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install ".[layout]"
+python -m pip install "paperlocale[layout]==0.3.2"
 paperlocale domain-check atmospheric-science
 ```
 

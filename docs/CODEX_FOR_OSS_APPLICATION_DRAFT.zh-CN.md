@@ -32,6 +32,8 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 ## 已有证据链接
 
 - Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2
+- PyPI distribution: https://pypi.org/project/paperlocale/0.3.2/
+- Attested PyPI publish: https://github.com/hazugi2004/paperlocale/actions/runs/32441153778
 - v0.3.2 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32234314229
 - v0.3.2 layout compatibility run: https://github.com/hazugi2004/paperlocale/actions/runs/32234356256
 - Durable v0.3.2 compatibility artifact: https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip
@@ -61,14 +63,16 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 
 ## 提交前仍需补强
 
-项目已发布六个版本，完成第三个主要功能 Release，并在公开失败证据后交付安装兼容性热修复；首个非维护者 fork 与 Draft PR 也已经出现，但仍不能代替真实使用或已合并贡献。以下再完成任意两类外部证据后，申请说服力会显著提高：
+项目已发布六个 GitHub 版本，并把 v0.3.2 通过带数字 attestation 的 Trusted
+Publishing 发布到 PyPI；首个非维护者 fork 与 Ready PR 也已经出现，但仍不能代替
+真实使用或已合并贡献。以下再完成任意两类外部证据后，申请说服力会显著提高：
 
 1. 将外部 [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) 或后续外部 PR 完成合并；
 2. 至少一个非维护者提交的真实试用反馈或可复现问题报告；
 3. 一个公开下游使用、课程、研究方法说明或工具清单引用；
 4. 与 BabelDOC/PDFMathTranslate-next 的公开 Issue 或 PR；
 
-如果在这些证据出现前申请，应明确写“new public project”，并依照官方说明解释其生态重要性，不能把维护者创建的 Issue、测试调用、自己的 Star 或未合并 Draft PR 描述为真实用户采用。
+如果在这些证据出现前申请，应明确写“new public project”，并依照官方说明解释其生态重要性，不能把维护者创建的 Issue、测试调用、自己的 Star 或未合并 PR 描述为真实用户采用。
 
 提交时可诚实强调的选择因素是：维护者拥有管理员权限、发布后连续修复真实问题、
 保留失败与成功证据、提供上游兼容性工作流，以及项目服务于科学文献可访问性。

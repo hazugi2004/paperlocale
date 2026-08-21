@@ -1,6 +1,6 @@
 # Codex for Open Source 申请准备
 
-核验日期：2026-08-19。
+核验日期：2026-08-21。
 
 ## 官方条件与权益
 
@@ -29,9 +29,9 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 | 可复现质量证据 | 合成双栏 PDF、公式合同、人工透传与碎词安全清单、图片与矢量绘图硬门禁、逐页 QA；[v0.3.2 永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip)保留日志、映射、清单与对照图 | [公开兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32234356256)为 0 errors / 0 warnings；附件 SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7` |
 | 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考、[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)与 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 公开 | 初步证据，等待非维护者领域人员提交复核 |
 | 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
-| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建、上游兼容性工作流及受控 PyPI Trusted Publishing 工作流 | v0.1.0–v0.3.2；[v0.3.2 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32234314229)验证发行元数据、确切 wheel 与 `[layout]` 求解；PyPI 尚未配置或发布 |
-| 公开版本 | [GitHub v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) | 已发布并设为 latest，三个附件已公开重下载复核；参考文献默认仍为 `preserve` |
-| 外部贡献 | 非维护者 fork 与 [两页 PDF QA Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 36 项测试均通过，维护者已批准 | 初步证据，等待作者标记 Ready 并合并 |
+| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建、上游兼容性工作流及受控 PyPI Trusted Publishing 工作流 | [v0.3.2 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32234314229)验证发行元数据；[PyPI 发布](https://github.com/hazugi2004/paperlocale/actions/runs/32441153778)复用确切附件并生成数字 attestation，隔离安装与 `[layout]` 求解通过 |
+| 公开版本 | [GitHub v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) / [PyPI 0.3.2](https://pypi.org/project/paperlocale/0.3.2/) | GitHub latest 与 PyPI 均已发布；两处 wheel/sdist SHA-256 一致，PyPI provenance 绑定本仓库工作流；参考文献默认仍为 `preserve` |
+| 外部贡献 | 非维护者 fork 与 [两页 PDF QA PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 36 项测试均通过，维护者已批准 | 作者已标记 Ready，仍为 open，尚未合并 |
 | 广泛使用或真实用户采用 | 尚无非维护者真实翻译反馈、问题报告或下游引用 | 未证明 |
 | 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)、[BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与最小修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 三条自动审查意见均已处理，最新为[提交 `be8b888`](https://github.com/hazugi2004/BabelDOC/commit/be8b88895f1e432d6bdaa97d3192d874f6f67732)；尚无上游维护者回应或合并，首次 fork Actions 等待批准运行 |
 
@@ -41,17 +41,19 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 
 项目现在具备“可以公开试用和持续维护”的工程基础，并出现首个可复核的外部贡献；
 活跃维护、角色权限和生态价值已有公开证据，但仓库使用量仍弱：0 star、1 个外部
-fork、v0.3.1 与 v0.3.2 各三个附件都只有维护者复核期间产生的 1 次下载，不能视为外部采用，且没有非维护者真实翻译反馈或下游引用。因此还
+fork、v0.3.1 与 v0.3.2 各三个 GitHub 附件都只有维护者复核期间产生的 1 次下载；
+PyPI 首次发布后的 attestation 与隔离安装也都是维护者核验，不能视为外部采用，
+且没有非维护者真实翻译反馈或下游引用。因此还
 不能诚实声称“广泛使用”。应推动 PR #4 完成并继续获得真实试用证据，再提交更
 有说服力的申请；如果提前申请，应明确项目尚新，并重点解释科学文献翻译的生态
-价值，不能把维护者自测、自己的 Issue 或尚未合并的 Draft PR 写成真实用户采用。
+价值，不能把维护者自测、自己的 Issue 或尚未合并的 PR 写成真实用户采用。
 
 ## 发布后四步
 
 1. ~~发布 Public GitHub 仓库和 `v0.1.0`，确认 GitHub Actions 全绿；~~
 2. ~~创建 2–3 个有明确验收标准的 `good first issue`，邀请领域包和兼容性贡献；~~
 3. ~~获得首个非维护者 fork 与可复核 PR；~~
-4. 推动外部 PR 完成合并，并用可公开的合成 PDF 或开放许可论文收集首批真实试用反馈；
+4. 合并已经 Ready 的外部 PR #4，并用可公开的合成 PDF 或开放许可论文收集首批真实试用反馈；
 5. 获得第二类独立证据后更新采用台账并申请。
 
 可编辑的英文回答见 [CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md](CODEX_FOR_OSS_APPLICATION_DRAFT.zh-CN.md)。

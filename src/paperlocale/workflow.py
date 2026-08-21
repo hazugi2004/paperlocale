@@ -9,24 +9,28 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import math
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
 import pymupdf as fitz
+from fontTools import subset as fonttools_subset
+from fontTools.ttLib import TTFont
 
 from .contracts import read_jsonl, validate_translation_files
 from .domains import DomainPack
-from .pipeline import translate_segment_file
 from .passthrough import (
     confirm_passthrough_map,
     load_passthrough_map,
     passthrough_segment_ids,
 )
+from .pipeline import translate_segment_file
 from .providers import TranslationProvider
 from .qa import inspect_pdf_pair
 from .references import (
@@ -973,6 +977,359 @@ def apply_vector_repair(
         restore.replace(rendered)
         raise
     return rendered
+
+
+def _normalized_pdf_text(value: str) -> str:
+    """忽略 PDF 抽取产生的换行差异，但不改写实际文字内容。"""
+
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _outside_word_signature(
+    page: fitz.Page,
+    rectangle: fitz.Rect,
+) -> list[tuple[object, ...]]:
+    """记录修复矩形外文字及坐标，确保文字删除没有波及相邻正文。"""
+
+    words: list[tuple[object, ...]] = []
+    for word in page.get_text("words"):
+        word_rectangle = fitz.Rect(word[:4])
+        if word_rectangle.intersects(rectangle):
+            continue
+        words.append(
+            (
+                *(round(float(value), 2) for value in word[:4]),
+                str(word[4]),
+            )
+        )
+    return sorted(words)
+
+
+def _subset_repair_font(
+    font_file: Path,
+    replacement: str,
+) -> tuple[bytes, dict[str, object]]:
+    """只为本次替换文字建立字体子集，不改写 PDF 中已有字体程序。"""
+
+    original_font = fitz.Font(fontfile=str(font_file))
+    missing = sorted(
+        {
+            character
+            for character in replacement
+            if not character.isspace()
+            and original_font.has_glyph(ord(character)) == 0
+        }
+    )
+    if missing:
+        preview = "".join(missing[:12])
+        raise ValueError(f"font-file 缺少 replacement 所需字形：{preview!r}")
+
+    original_bytes = bytes(original_font.buffer)
+    try:
+        font = TTFont(
+            str(font_file),
+            fontNumber=0,
+            recalcTimestamp=False,
+        )
+    except Exception as error:
+        raise ValueError(f"font-file 无法由 FontTools 读取：{font_file}") from error
+    try:
+        options = fonttools_subset.Options()
+        # 保留字体声明的全部排版特性，避免阿拉伯文等复杂文字在修复后失去字形替换。
+        options.layout_features = ["*"]
+        subsetter = fonttools_subset.Subsetter(options=options)
+        subsetter.populate(text=replacement)
+        subsetter.subset(font)
+        output = BytesIO()
+        font.save(output, reorderTables=True)
+        subset_bytes = output.getvalue()
+    except Exception as error:
+        raise ValueError(f"font-file 无法为 replacement 生成子集：{font_file}") from error
+    finally:
+        font.close()
+
+    if len(subset_bytes) >= len(original_bytes):
+        raise RuntimeError(
+            "字体子集没有减小嵌入程序；拒绝生成可能异常膨胀的修复 PDF"
+        )
+    subset_font = fitz.Font(fontbuffer=subset_bytes)
+    subset_missing = sorted(
+        {
+            character
+            for character in replacement
+            if not character.isspace()
+            and subset_font.has_glyph(ord(character)) == 0
+        }
+    )
+    if subset_missing:
+        preview = "".join(subset_missing[:12])
+        raise RuntimeError(f"生成的字体子集缺少 replacement 字形：{preview!r}")
+
+    font_sha256 = _sha256(font_file)
+    subset_sha256 = hashlib.sha256(subset_bytes).hexdigest()
+    return subset_bytes, {
+        "font_file": str(font_file),
+        "font_file_sha256": font_sha256,
+        "font_name": original_font.name,
+        "font_subset_sha256": subset_sha256,
+        "font_resource_name": f"PLRepair{subset_sha256[:12]}",
+        "font_program_bytes_before_subset": len(original_bytes),
+        "font_program_bytes_after_subset": len(subset_bytes),
+        "font_subset_bytes_saved": len(original_bytes) - len(subset_bytes),
+    }
+
+
+def _create_text_repair_candidate(
+    *,
+    rendered: Path,
+    candidate: Path,
+    page_number: int,
+    rectangle: fitz.Rect,
+    replacement: str,
+    font_file: Path,
+    font_size: float,
+) -> dict[str, object]:
+    """只在内存候选中删除指定文字并嵌入经过子集化的替换字体。"""
+
+    document = fitz.open(rendered)
+    try:
+        if not 1 <= page_number <= document.page_count:
+            raise ValueError(
+                f"page 超出范围：{page_number}，当前 PDF 共 {document.page_count} 页"
+            )
+        page = document[page_number - 1]
+        if (
+            not all(math.isfinite(float(value)) for value in rectangle)
+            or not rectangle.is_valid
+            or rectangle.is_empty
+        ):
+            raise ValueError("rect 必须是有限且非空的 PDF 点坐标矩形")
+        if not page.rect.contains(rectangle):
+            raise ValueError(f"rect 超出第{page_number}页边界：{tuple(rectangle)}")
+
+        before_text = page.get_textbox(rectangle)
+        if not _normalized_pdf_text(before_text):
+            raise ValueError("指定 rect 内没有可替换文字")
+        if _normalized_pdf_text(before_text) == _normalized_pdf_text(replacement):
+            raise ValueError("replacement 与 rect 内现有文字相同")
+
+        # apply_redactions 会处理页面上的全部 redaction；已有标注必须先由用户处置，
+        # 否则一次图注修复可能意外执行无关删除。
+        if list(page.annots(types=(fitz.PDF_ANNOT_REDACT,)) or []):
+            raise ValueError(f"第{page_number}页已有 redaction 标注，拒绝批量应用")
+
+        subset_bytes, font_evidence = _subset_repair_font(font_file, replacement)
+        font_resource_name = str(font_evidence["font_resource_name"])
+        # redaction 只负责移除文字；透明填充避免白色覆盖层遮住矩形内仍保留的
+        # 图片或矢量对象。下面的 images/graphics NONE 则禁止删除这些对象本身。
+        page.add_redact_annot(rectangle, fill=False, cross_out=False)
+        applied = page.apply_redactions(
+            images=fitz.PDF_REDACT_IMAGE_NONE,
+            graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+            text=fitz.PDF_REDACT_TEXT_REMOVE,
+        )
+        if not applied:
+            raise RuntimeError("PyMuPDF 没有应用文字修复 redaction")
+
+        font_xref = page.insert_font(
+            fontname=font_resource_name,
+            fontbuffer=subset_bytes,
+        )
+        remaining_height = page.insert_textbox(
+            rectangle,
+            replacement,
+            fontname=font_resource_name,
+            fontsize=font_size,
+            color=(0, 0, 0),
+        )
+        if remaining_height < 0:
+            raise ValueError(
+                "replacement 无法放入 rect；请扩大矩形或减小 --font-size"
+            )
+
+        embedded_font = document.extract_font(font_xref)[-1]
+        if hashlib.sha256(embedded_font).hexdigest() != font_evidence[
+            "font_subset_sha256"
+        ]:
+            raise RuntimeError("嵌入的修复字体与已验证子集哈希不一致")
+        document.save(candidate, garbage=4, deflate=True)
+    finally:
+        document.close()
+
+    return {
+        "before_text": before_text,
+        **font_evidence,
+    }
+
+
+def _verify_text_repair(
+    *,
+    before: Path,
+    candidate: Path,
+    page_number: int,
+    rectangle: fitz.Rect,
+    replacement: str,
+) -> dict[str, object]:
+    """确认候选只改变目标矩形文字，并保持页面、图片、链接和既有矢量。"""
+
+    before_document = fitz.open(before)
+    candidate_document = fitz.open(candidate)
+    try:
+        if before_document.page_count != candidate_document.page_count:
+            raise ValueError("文字修复候选改变了 PDF 页数")
+        for index in range(before_document.page_count):
+            before_page = before_document[index]
+            candidate_page = candidate_document[index]
+            if any(
+                abs(left - right) > 0.1
+                for left, right in zip(before_page.rect, candidate_page.rect)
+            ):
+                raise ValueError(f"文字修复候选改变了第{index + 1}页尺寸")
+            if len(before_page.get_images(full=True)) != len(
+                candidate_page.get_images(full=True)
+            ):
+                raise ValueError(f"文字修复候选改变了第{index + 1}页图片数量")
+            if len(before_page.get_links()) != len(candidate_page.get_links()):
+                raise ValueError(f"文字修复候选改变了第{index + 1}页链接数量")
+            if len(list(before_page.annots() or [])) != len(
+                list(candidate_page.annots() or [])
+            ):
+                raise ValueError(f"文字修复候选改变了第{index + 1}页标注数量")
+            if len(candidate_page.get_drawings()) < len(before_page.get_drawings()):
+                raise ValueError(f"文字修复候选减少了第{index + 1}页矢量绘图")
+            if (
+                index != page_number - 1
+                and before_page.get_text() != candidate_page.get_text()
+            ):
+                raise ValueError(f"文字修复候选改变了非目标第{index + 1}页文字")
+
+        before_page = before_document[page_number - 1]
+        candidate_page = candidate_document[page_number - 1]
+        if _outside_word_signature(before_page, rectangle) != _outside_word_signature(
+            candidate_page, rectangle
+        ):
+            raise ValueError("文字修复候选改变了 rect 外的文字或坐标")
+        after_text = candidate_page.get_textbox(rectangle)
+        if _normalized_pdf_text(after_text) != _normalized_pdf_text(replacement):
+            raise ValueError(
+                "修复后 rect 文字与 replacement 不一致："
+                f"{after_text!r} != {replacement!r}"
+            )
+        return {
+            "after_text": after_text,
+            "image_count": len(candidate_page.get_images(full=True)),
+            "vector_count_before": len(before_page.get_drawings()),
+            "vector_count_after": len(candidate_page.get_drawings()),
+            "link_count": len(candidate_page.get_links()),
+            "annotation_count": len(list(candidate_page.annots() or [])),
+        }
+    finally:
+        candidate_document.close()
+        before_document.close()
+
+
+def apply_text_repair(
+    run_dir: Path,
+    *,
+    page_number: int,
+    rectangle: tuple[float, float, float, float],
+    replacement: str,
+    font_file: Path,
+    font_size: float,
+    description: str,
+) -> Path:
+    """在一个明确矩形内受控替换文字，并强制重新执行机器与人工 QA。"""
+
+    if not replacement.strip():
+        raise ValueError("replacement 不能为空")
+    if not description.strip():
+        raise ValueError("description 不能为空")
+    if not math.isfinite(font_size) or font_size <= 0:
+        raise ValueError("font-size 必须是有限且大于 0 的数值")
+
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] not in {"rendered", "qa_generated", "accepted"}:
+        raise ValueError(
+            "apply-text-repair 只接受 rendered、qa_generated 或 accepted，"
+            f"当前为 {manifest['status']}"
+        )
+    _verify_source_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest)
+    resolved_font = font_file.expanduser().resolve()
+    if not resolved_font.is_file():
+        raise FileNotFoundError(f"font-file 不存在：{resolved_font}")
+
+    repair_rectangle = fitz.Rect(rectangle)
+    before_hash = str(manifest["rendered_sha256"])
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    candidate = root / f".text-repair-{timestamp}-{before_hash[:12]}.pdf"
+    try:
+        repair = _create_text_repair_candidate(
+            rendered=rendered,
+            candidate=candidate,
+            page_number=page_number,
+            rectangle=repair_rectangle,
+            replacement=replacement,
+            font_file=resolved_font,
+            font_size=font_size,
+        )
+        structure = _verify_text_repair(
+            before=rendered,
+            candidate=candidate,
+            page_number=page_number,
+            rectangle=repair_rectangle,
+            replacement=replacement,
+        )
+        after_hash = _sha256(candidate)
+        if after_hash == before_hash:
+            raise RuntimeError("文字修复候选与当前 PDF 字节完全相同")
+
+        history = manifest.setdefault("repair_history", [])
+        if not isinstance(history, list):
+            raise ValueError("运行清单 repair_history 字段非法")
+        backup_dir = root / "repair_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = backup_dir / f"{timestamp}-before-{before_hash[:12]}.pdf"
+        shutil.copy2(rendered, backup)
+
+        temporary = rendered.with_name(rendered.name + ".text-repair.tmp")
+        shutil.copy2(candidate, temporary)
+        temporary.replace(rendered)
+        try:
+            if _sha256(rendered) != after_hash:
+                raise RuntimeError("文字修复候选复制后哈希不一致")
+            history.append(
+                {
+                    "applied_at": _utc_now(),
+                    "type": "text-overlay",
+                    "description": description.strip(),
+                    "page": page_number,
+                    "rect": [round(float(value), 3) for value in repair_rectangle],
+                    "replacement": replacement,
+                    "font_size": font_size,
+                    "backup_pdf": str(backup.resolve()),
+                    "before_sha256": before_hash,
+                    "after_sha256": after_hash,
+                    **repair,
+                    **structure,
+                }
+            )
+            manifest["rendered_sha256"] = after_hash
+            manifest["status"] = "rendered"
+            manifest["schema_version"] = SCHEMA_VERSION
+            manifest.pop("qa_report", None)
+            manifest.pop("accepted_by", None)
+            save_manifest(root, manifest)
+        except Exception:
+            # PDF 与清单必须共同成功；清单写入失败时恢复已经备份的旧候选。
+            restore = rendered.with_name(rendered.name + ".restore.tmp")
+            shutil.copy2(backup, restore)
+            restore.replace(rendered)
+            raise
+        return rendered
+    finally:
+        candidate.unlink(missing_ok=True)
 
 
 def run_to_qa(

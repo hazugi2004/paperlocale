@@ -79,6 +79,36 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.reason, "pure formula")
         self.assertEqual(args.confirmed_by, "reviewer")
 
+    def test_apply_text_repair_requires_explicit_geometry_and_font(self) -> None:
+        """文字覆盖不得猜测页码、矩形、字体或字号。"""
+
+        args = build_parser().parse_args(
+            [
+                "apply-text-repair",
+                "--run-dir",
+                "run",
+                "--page",
+                "27",
+                "--rect",
+                "40",
+                "120",
+                "500",
+                "160",
+                "--replacement",
+                "图5 农业干旱评估",
+                "--font-file",
+                "NotoSansCJKsc-Regular.otf",
+                "--font-size",
+                "9.5",
+                "--description",
+                "修复跨对象碎裂图注",
+            ]
+        )
+        self.assertEqual(args.command, "apply-text-repair")
+        self.assertEqual(args.page, 27)
+        self.assertEqual(args.rect, [40.0, 120.0, 500.0, 160.0])
+        self.assertEqual(args.font_size, 9.5)
+
     def test_codex_provider_requires_explicit_model_for_auditing(self) -> None:
         """忽略用户配置后不能把未知默认模型写成可审计运行。"""
 

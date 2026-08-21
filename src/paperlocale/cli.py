@@ -14,6 +14,7 @@ from .providers import REASONING_EFFORTS, CodexLocalProvider, OpenAICompatiblePr
 from .references import REFERENCE_POLICIES
 from .workflow import (
     accept_run,
+    apply_text_repair,
     apply_vector_repair,
     collect_run,
     confirm_passthrough_run,
@@ -231,6 +232,30 @@ def build_parser() -> argparse.ArgumentParser:
     repair.add_argument("--repaired-pdf", type=Path, required=True)
     repair.add_argument("--description", required=True)
 
+    text_repair = subparsers.add_parser(
+        "apply-text-repair",
+        help="在明确页面矩形内替换文字、子集字体并记录修复历史",
+    )
+    text_repair.add_argument("--run-dir", type=Path, required=True)
+    text_repair.add_argument(
+        "--page",
+        type=int,
+        required=True,
+        help="从 1 开始的页码",
+    )
+    text_repair.add_argument(
+        "--rect",
+        type=float,
+        nargs=4,
+        required=True,
+        metavar=("X0", "Y0", "X1", "Y1"),
+        help="PyMuPDF PDF 点坐标：左、上、右、下",
+    )
+    text_repair.add_argument("--replacement", required=True)
+    text_repair.add_argument("--font-file", type=Path, required=True)
+    text_repair.add_argument("--font-size", type=float, required=True)
+    text_repair.add_argument("--description", required=True)
+
     accept = subparsers.add_parser("accept", help="记录人工逐页视觉验收")
     accept.add_argument("--run-dir", type=Path, required=True)
     accept.add_argument("--reviewed-by", required=True)
@@ -410,6 +435,21 @@ def main() -> int:
             description=args.description,
         )
         print(f"矢量修复已导入并记录历史：{repaired}；请重新执行 qa 和 accept")
+        return 0
+    if args.command == "apply-text-repair":
+        repaired = apply_text_repair(
+            args.run_dir,
+            page_number=args.page,
+            rectangle=tuple(args.rect),
+            replacement=args.replacement,
+            font_file=args.font_file,
+            font_size=args.font_size,
+            description=args.description,
+        )
+        print(
+            f"文字修复已应用并记录历史：{repaired}；"
+            "请重新执行 qa 和 accept"
+        )
         return 0
     if args.command == "accept":
         accept_run(args.run_dir, reviewed_by=args.reviewed_by)

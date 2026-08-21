@@ -178,6 +178,30 @@ The command rejects candidates that alter text, page geometry, or image counts,
 backs up the previous PDF, appends `repair_history`, and requires QA and human
 acceptance to run again.
 
+If visual review finds a broken caption that cannot be repaired at segment
+level, replace only an explicitly reviewed page rectangle:
+
+```bash
+paperlocale apply-text-repair --run-dir runs/paper \
+  --page 27 \
+  --rect 40 120 500 160 \
+  --replacement "Figure 5 corrected caption" \
+  --font-file /path/to/NotoSansCJKsc-Regular.otf \
+  --font-size 9.5 \
+  --description "Repair a split-token figure caption"
+```
+
+The command verifies that the font contains every replacement glyph, removes
+text only inside the rectangle while preserving page geometry, images, links,
+existing vectors, and outside text, and rejects overflow. It subsets the
+repair font before embedding it without rewriting existing PDF font programs,
+and records the font and subset hashes, byte reduction, before/after text,
+geometry, PDF hashes, and backup in `repair_history`. QA and human acceptance
+must then run again. Use a locally licensed font and do not commit it to the
+repository; a TTF/OTF usually produces cleaner extraction metadata than a font
+collection, but every result still goes through the same QA warnings and visual
+review.
+
 For a BYOK OpenAI-compatible endpoint:
 
 ```bash

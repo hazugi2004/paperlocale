@@ -170,6 +170,28 @@ paperlocale apply-vector-repair \
 
 该命令拒绝改变文字、页尺寸或图片数量的候选，备份修复前 PDF 并写入 `repair_history`；导入后必须重新执行 `qa` 和 `accept`。
 
+若逐页视觉复核发现无法在片段层修复的损坏图注，可只替换一个已经人工确认的页面
+矩形：
+
+```bash
+paperlocale apply-text-repair \
+  --run-dir runs/paper \
+  --page 27 \
+  --rect 40 120 500 160 \
+  --replacement "图5 农业干旱评估" \
+  --font-file /path/to/NotoSansCJKsc-Regular.otf \
+  --font-size 9.5 \
+  --description "修复跨对象碎裂图注"
+```
+
+坐标采用 PyMuPDF 的 PDF 点坐标（左、上、右、下）。命令会先确认字体包含全部替换
+字形和文字能够放入矩形，只删除矩形内文字，并核对页尺寸、图片、链接、既有矢量及
+矩形外文字没有受损。外部字体必须在嵌入前独立完成子集化，不会顺带重写 PDF 已有
+字体程序；清单记录原字体与子集哈希、子集前后字节、修复前后文字、矩形、PDF 哈希
+和旧 PDF 备份。完成后仍必须重新执行 `qa` 和 `accept`。字体须由用户在本机合法
+取得，不能提交到仓库；TTF/OTF 通常比字体集合产生更干净的抽取元数据，但任何
+CMap 警告和最终视觉效果仍由同一 QA 流程检查。
+
 需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> reference-review/confirm-references -> 可选 confirm-passthrough -> translate -> validate -> render -> qa -> accept` 命令序列。
 
 ## 领域包扩展

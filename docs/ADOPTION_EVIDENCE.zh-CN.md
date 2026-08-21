@@ -28,6 +28,15 @@
 SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7`。
 真实论文及完整译本未上传或分发；该证据仍是维护者测试，不是外部用户采用。
 
+[v0.3.3](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.3) 把真实论文视觉
+验收中暴露的文字碎裂修复正式化为受控 `apply-text-repair`：显式限定页码、矩形、
+替换文字、字体与字号，保留备份、修复历史和哈希绑定，并为每次修复生成独立字体
+子集。[实现 PR #27](https://github.com/hazugi2004/paperlocale/pull/27) 与
+[标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32444041611)通过 74 项
+测试及 Python 3.10–3.13 矩阵。项目自有两页中文修复夹具机器 QA 为 0 errors /
+0 warnings，已逐页视觉验收；原始 23,278,008 字节字体子集为 22,912 字节，最终 PDF
+为 19,594 字节。该夹具不分发真实论文，仍属于维护者工程证据，不是外部采用。
+
 维护者于 2026-08-21 使用受保护的 GitHub Environment 和 PyPI Trusted Publishing
 发布 [PyPI v0.3.2](https://pypi.org/project/paperlocale/0.3.2/)。
 [第一次运行](https://github.com/hazugi2004/paperlocale/actions/runs/32239980222)
@@ -36,6 +45,15 @@ SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7`�
 Release 的确切 wheel/sdist，并为两个文件生成绑定本仓库工作流的数字 attestation。
 维护者完成哈希、密码学验证、隔离安装和 `[layout]` 求解；这些证明可审计分发能力，
 仍不是非维护者采用或下载证据。
+
+同日，[PyPI v0.3.3](https://pypi.org/project/paperlocale/0.3.3/) 由
+[后续 Trusted Publishing 运行](https://github.com/hazugi2004/paperlocale/actions/runs/32445150459)
+从确切 GitHub Release 附件发布。GitHub 与 PyPI 的 wheel SHA-256 均为
+`9738ff9a515f10c1da9a10852fbfc3c9d44a4d1febfe233df173a2be8edaeaab`，sdist 均为
+`c35d9e4a16ea1af5cb8c03c4bea30a1f9fee0f379e920eee155215f5e8138198`；两个 PyPI
+provenance 绑定仓库、工作流和 `pypi` Environment，并通过 `pypi-attestations`
+密码学验证。全新 Python 3.12 环境的确切安装、`pip check`、领域包检查、文字修复
+入口与 `[layout]` 求解均通过。以上仍是维护者发布核验，不代表非维护者安装或使用。
 
 维护者还在 PDFMathTranslate-next 上游发布了
 [CLITranslator 两阶段集成讨论 #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)，并在 v0.2.0 发布后补充了[真实兼容性与标签构建证据](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545)。它证明上游沟通和可复现跟进已经开始；在上游维护者或其他参与者回复前，它仍不构成外部认可或采用。
@@ -56,9 +74,8 @@ Release 的确切 wheel/sdist，并为两个文件生成绑定本仓库工作流
 单独证明真实论文翻译采用、外部下载或广泛使用。
 
 截至目前，尚无可验证的非维护者真实翻译反馈、外部问题报告、下游引用或 PyPI
-外部下载证据。v0.3.1 与 v0.3.2 各三个 GitHub Release 附件都只有维护者公开重下载
-复核期间产生的 1 次下载；PyPI 首发后的下载与安装也来自本次维护者核验，不能据此
-声称外部采用。
+外部下载证据。现有 GitHub Release 与 PyPI 安装核验均由维护者执行，不能据此声称
+外部采用。
 
 ## 记录格式
 
@@ -72,6 +89,8 @@ Release 的确切 wheel/sdist，并为两个文件生成绑定本仓库工作流
 | 2026-08-19 | 维护者兼容性热修复 | [v0.3.1](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.1) / [构建](https://github.com/hazugi2004/paperlocale/actions/runs/32221420406) / [标签兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32221715819) / [永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.1/paperlocale-v0.3.1-layout-compatibility.zip) | 公开保留失败证据后修复 `[layout]` 安装；54 项测试、确切 wheel 依赖求解、真实版面 QA 0 错误、附件哈希复核 | 否 |
 | 2026-08-19 | 功能 Release | [v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) / [构建](https://github.com/hazugi2004/paperlocale/actions/runs/32234314229) / [兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32234356256) / [永久附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip) | 第二次真实试运行反向校准、schema 4、人工透传、碎词安全审查、63 项测试与公开附件哈希 | 否 |
 | 2026-08-21 | PyPI Trusted Publishing | [PyPI 0.3.2](https://pypi.org/project/paperlocale/0.3.2/) / [成功运行](https://github.com/hazugi2004/paperlocale/actions/runs/32441153778) | 精确 GitHub Release 附件、OIDC 最小权限、数字 attestation、哈希与隔离安装证据；不证明外部采用 | 否 |
+| 2026-08-21 | 功能 Release | [v0.3.3](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.3) / [PR #27](https://github.com/hazugi2004/paperlocale/pull/27) / [构建](https://github.com/hazugi2004/paperlocale/actions/runs/32444041611) | 受控文字修复、独立字体子集、74 项测试与两页中文夹具视觉验收；不证明外部采用 | 否 |
+| 2026-08-21 | PyPI Trusted Publishing | [PyPI 0.3.3](https://pypi.org/project/paperlocale/0.3.3/) / [成功运行](https://github.com/hazugi2004/paperlocale/actions/runs/32445150459) | 精确 GitHub Release 附件、数字 attestation、哈希、密码学验证与隔离安装证据；不证明外部采用 | 否 |
 | 2026-08-18 | 维护者发起的上游讨论 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) | 两阶段 CLITranslator 接口稳定性与文档协作请求 | 否，等待外部回复 |
 | 2026-08-19 | 维护者上游跟进 | [v0.2.0 兼容性证据](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545) | 真实兼容性运行、标签构建和结构 QA 证据 | 否，等待外部回复 |
 | 2026-08-19 | 维护者上游修复 | [BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) / [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 同文返回保持原版面对象的最小修复和回归测试；三条自动审查意见已处理 | 否，等待上游维护者审查 |

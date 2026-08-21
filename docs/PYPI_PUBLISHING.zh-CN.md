@@ -1,7 +1,8 @@
 # PyPI 可信发布操作手册
 
-状态：`v0.3.2` 已于 2026-08-21 通过 PyPI Trusted Publishing 发布并完成公开
-attestation、哈希、隔离安装和 `[layout]` 依赖求解核验。
+状态：`v0.3.2` 与 `v0.3.3` 已于 2026-08-21 通过 PyPI Trusted Publishing 发布；
+当前最新版 `v0.3.3` 已完成公开 attestation、哈希、隔离安装和 `[layout]` 依赖求解
+核验。
 
 ## 设计边界
 
@@ -51,11 +52,31 @@ publisher；任一字段不一致都会被 PyPI 拒绝。
 - 全新 Python 3.12 环境从 `https://pypi.org/simple` 安装确切 0.3.2，`pip check`、
   `paperlocale domain-check atmospheric-science` 和 `[layout]` dry-run 求解全部通过。
 
-## 后续手动发布
+## v0.3.3 后续发布证据
+
+`v0.3.3` 的后续发布证明同一可信发布路径可以复用，而不是只在首次创建 PyPI 项目时
+偶然成功：
+
+- [标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32444041611)
+  从提交 `6002805` 构建并安装确切 wheel，`twine check` 与 `[layout]` 求解通过；
+- [GitHub v0.3.3 Release](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.3)
+  的 wheel SHA-256 为
+  `9738ff9a515f10c1da9a10852fbfc3c9d44a4d1febfe233df173a2be8edaeaab`，
+  sdist 为
+  `c35d9e4a16ea1af5cb8c03c4bea30a1f9fee0f379e920eee155215f5e8138198`；
+- [PyPI 发布运行](https://github.com/hazugi2004/paperlocale/actions/runs/32445150459)
+  的准备和发布作业均成功，PyPI 两个文件与 GitHub Release 哈希完全一致；
+- 两个 PyPI Integrity API provenance 均绑定 GitHub 仓库 `hazugi2004/paperlocale`、
+  工作流 `publish-pypi.yml` 和 Environment `pypi`；
+  `pypi-attestations==0.0.30` 对 wheel 与 sdist 的密码学验证均返回 `OK`；
+- 全新 Python 3.12 环境从 PyPI 安装确切 0.3.3 后，模块版本、发行版本、`pip check`、
+  `domain-check`、`apply-text-repair` 入口和 `[layout]` dry-run 求解全部通过。
+
+## 后续版本操作
 
 1. 在 GitHub Actions 打开 `publish-pypi`，选择 `Run workflow`。
-2. 输入已经公开并完成审计、且尚未上传 PyPI 的稳定标签，例如 `v0.3.3`；PyPI
-   版本不可覆盖，不要再次发布 `v0.3.2`。
+2. 输入已经公开并完成审计、且尚未上传 PyPI 的稳定标签，例如未来的 `v0.3.4`；
+   PyPI 版本不可覆盖，不要再次发布 `v0.3.2` 或 `v0.3.3`。
 3. 等待 `Verify published distributions` 通过。
 4. 在 `pypi` Environment 部署审批中复核标签并手动批准。
 5. 发布作业成功后，检查 `https://pypi.org/project/paperlocale/` 的版本、文件和

@@ -14,7 +14,7 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 - Project: PaperLocale
 - Repository: https://github.com/hazugi2004/paperlocale
 - Core maintainer: `hazugi2004`
-- Role evidence: 仓库管理员、提交者和 `v0.1.0` / `v0.1.1` / `v0.2.0` / `v0.3.0` / `v0.3.1` / `v0.3.2` 发布者
+- Role evidence: 仓库管理员、提交者和 `v0.1.0` / `v0.1.1` / `v0.2.0` / `v0.3.0` / `v0.3.1` / `v0.3.2` / `v0.3.3` 发布者
 - License: AGPL-3.0-only
 
 ## 英文项目简介
@@ -31,9 +31,12 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 
 ## 已有证据链接
 
-- Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2
-- PyPI distribution: https://pypi.org/project/paperlocale/0.3.2/
-- Attested PyPI publish: https://github.com/hazugi2004/paperlocale/actions/runs/32441153778
+- Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.3
+- PyPI distribution: https://pypi.org/project/paperlocale/0.3.3/
+- Attested PyPI publish: https://github.com/hazugi2004/paperlocale/actions/runs/32445150459
+- v0.3.3 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32444041611
+- v0.3.3 controlled text-repair PR: https://github.com/hazugi2004/paperlocale/pull/27
+- v0.3.3 release evidence: https://github.com/hazugi2004/paperlocale/blob/main/docs/releases/v0.3.3.md
 - v0.3.2 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32234314229
 - v0.3.2 layout compatibility run: https://github.com/hazugi2004/paperlocale/actions/runs/32234356256
 - Durable v0.3.2 compatibility artifact: https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip
@@ -63,8 +66,9 @@ API Key、登录凭据、未公开论文或其他机密信息。申请和提交�
 
 ## 提交前仍需补强
 
-项目已发布六个 GitHub 版本，并把 v0.3.2 通过带数字 attestation 的 Trusted
-Publishing 发布到 PyPI；首个非维护者贡献 PR #4 也已通过评审、测试并合并。它证明
+项目已发布七个 GitHub 版本，并把 v0.3.2 与当前最新版 v0.3.3 通过带数字
+attestation 的 Trusted Publishing 发布到 PyPI；首个非维护者贡献 PR #4 也已通过
+评审、测试并合并。它证明
 贡献入口有效，但仍不能代替真实使用。以下再完成至少一类独立证据后，申请说服力
 会显著提高：
 

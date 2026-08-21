@@ -7,7 +7,8 @@
 ### Added
 
 - 增加 Contributor Covenant 3.0 社区准则和 CFF 1.2.0 学术软件引用元数据，完善私密行为问题报告与 GitHub “Cite this repository” 入口。
-- 增加仅手动触发的 PyPI Trusted Publishing 工作流：从已审计 GitHub Release 复用确切发行包，把 OIDC 权限限制在独立发布作业，并固定关键第三方 Action 到完整提交。
+- 增加仅手动触发的 PyPI Trusted Publishing 工作流：从已审计 GitHub Release 复用确切发行包，把 OIDC 权限限制在独立发布作业，并固定关键第三方 Action 到完整提交；[成功运行](https://github.com/hazugi2004/paperlocale/actions/runs/32441153778)已发布带 attestation 的 `v0.3.2`。
+- 合并首个非维护者贡献 [PR #4](https://github.com/hazugi2004/paperlocale/pull/4)，将项目自有 PDF QA 合成夹具扩展为两页并增加第二页占位符回归。
 
 ## 0.3.2 - 2026-08-19
 

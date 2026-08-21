@@ -1,6 +1,7 @@
 # PyPI 可信发布操作手册
 
-状态：工作流已准备，尚未配置 PyPI 待定发布者，也尚未向 PyPI 上传任何版本。
+状态：`v0.3.2` 已于 2026-08-21 通过 PyPI Trusted Publishing 发布并完成公开
+attestation、哈希、隔离安装和 `[layout]` 依赖求解核验。
 
 ## 设计边界
 
@@ -9,45 +10,61 @@ GitHub Release 事件。准备作业从对应的公开 GitHub Release 下载已�
 sdist，复核元数据、安装入口及 `[layout]` 依赖求解；独立发布作业不检出或执行仓库
 代码，只持有 `id-token: write`，通过 PyPI Trusted Publishing 获取短期凭据。
 
-这意味着工作流合并后仍不会自行发布。PyPI 待定发布者和 GitHub Environment 都必须
-由仓库维护者本人配置，发布时还需要再次手动运行并批准 Environment。
+这意味着标签和 GitHub Release 不会自行触发 PyPI 上传。每次发布仍需维护者手动
+输入标签，并批准受保护的 `pypi` Environment。
 
-## 首次发布前一次性配置
+## 当前可信发布配置
 
-1. 在仓库 `Settings -> Environments` 新建 `pypi` Environment，将 `hazugi2004` 设为
-   required reviewer。不要在其中保存 PyPI API token。
-2. 登录 PyPI，打开 <https://pypi.org/manage/account/publishing/>，创建 pending
-   publisher，逐项填写：
+GitHub `pypi` Environment 已将 `hazugi2004` 设为 required reviewer，并允许发起者
+本人审批；仓库没有保存 PyPI API token。PyPI publisher 与 GitHub OIDC 必须持续
+保持以下精确身份：
 
-   | 字段 | 精确值 |
-   |---|---|
-   | PyPI Project Name | `paperlocale` |
-   | GitHub Owner | `hazugi2004` |
-   | Repository name | `paperlocale` |
-   | Workflow name | `publish-pypi.yml` |
-   | Environment name | `pypi` |
+| 字段 | 精确值 |
+|---|---|
+| PyPI Project Name | `paperlocale` |
+| GitHub Owner | `hazugi2004` |
+| Repository name | `paperlocale` |
+| Workflow name | `publish-pypi.yml` |
+| Environment name | `pypi` |
 
-3. 再次核对项目名、仓库、工作流文件名和 Environment。OIDC 声明与任一字段不一致
-   时，PyPI 会拒绝上传。
+修改仓库所有者、仓库名、工作流文件名或 Environment 时，必须同步更新 PyPI
+publisher；任一字段不一致都会被 PyPI 拒绝。
 
 2026-08-19 对 `https://pypi.org/pypi/paperlocale/json` 的只读检查返回 404，表示检查
-当时没有同名公开项目；名称只有在首次成功上传并由 PyPI 创建项目后才真正确定，不能
-把这次检查当作永久占位。
+当时没有同名公开项目。首次上传于 2026-08-21 成功创建正式
+[`paperlocale`](https://pypi.org/project/paperlocale/0.3.2/) 项目。
 
-## 手动发布
+## 首次发布证据
+
+- [第一次运行](https://github.com/hazugi2004/paperlocale/actions/runs/32239980222)
+  在附件校验和 Environment 审批后被 PyPI 以 `invalid-publisher` 拒绝；没有上传文件。
+  维护者按实际 OIDC claims 纠正 publisher 后才重试，没有改工作流来猜测匹配；
+- [成功运行](https://github.com/hazugi2004/paperlocale/actions/runs/32441153778)
+  的准备和发布作业均通过，并从公开 GitHub Release 复用确切 wheel 与 sdist；
+- PyPI wheel SHA-256 为
+  `594687d6fc474963a485682717cdd746a3d62f6af99cd7fc5611e9bcdfcf04f1`，sdist 为
+  `a79570a6d30c4e2c0f2b73d4a4cc292a933b8faf8714a12f4075f6e7ba5a9dfa`，与 GitHub
+  Release 完全一致；
+- 两个文件的 PyPI provenance 都声明 GitHub 仓库 `hazugi2004/paperlocale`、工作流
+  `publish-pypi.yml`、Environment `pypi`；`pypi-attestations==0.0.30` 对 wheel 和
+  sdist 的密码学验证均返回 `OK`；
+- 全新 Python 3.12 环境从 `https://pypi.org/simple` 安装确切 0.3.2，`pip check`、
+  `paperlocale domain-check atmospheric-science` 和 `[layout]` dry-run 求解全部通过。
+
+## 后续手动发布
 
 1. 在 GitHub Actions 打开 `publish-pypi`，选择 `Run workflow`。
-2. 输入已经公开并完成审计的稳定标签，例如 `v0.3.2`。
+2. 输入已经公开并完成审计、且尚未上传 PyPI 的稳定标签，例如 `v0.3.3`；PyPI
+   版本不可覆盖，不要再次发布 `v0.3.2`。
 3. 等待 `Verify published distributions` 通过。
 4. 在 `pypi` Environment 部署审批中复核标签并手动批准。
 5. 发布作业成功后，检查 `https://pypi.org/project/paperlocale/` 的版本、文件和
    attestations，再在全新虚拟环境执行：
 
    ```bash
-   python -m pip install "paperlocale[layout]==0.3.2"
+   python -m pip install "paperlocale[layout]==X.Y.Z"
    paperlocale domain-check atmospheric-science
    ```
 
-只有上述页面和隔离安装都核验成功后，才能把 README 的普通用户安装方式改为 PyPI，
-并在路线图中勾选“发布到 PyPI”。失败时保留 Actions 日志，不使用 `skip-existing` 掩盖
-重复版本或部分上传问题。
+每个新版本都必须复核 PyPI 文件哈希、provenance、attestation 和隔离安装。失败时
+保留 Actions 日志，不使用 `skip-existing` 掩盖重复版本或部分上传问题。

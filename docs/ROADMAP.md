@@ -63,7 +63,7 @@
 - [x] 贡献指南、Issue/PR 模板与标签构建工作流
 - [x] Contributor Covenant 3.0 社区准则与 `CITATION.cff` 学术引用元数据
 - [x] 仅手动触发、OIDC 最小权限且复用已审计 Release 附件的 PyPI 可信发布工作流
-- [ ] 发布到 PyPI
+- [x] 通过 Trusted Publishing 与数字 attestation 发布 PyPI `v0.3.2`
 - [x] GitHub `v0.1.0` Release
 - [x] GitHub `v0.2.0` 一键运行、结构门禁与 Provider 评估 Release
 - [x] GitHub `v0.3.0` 真实试运行反向校准、参考文献审计与恢复语义 Release
@@ -77,8 +77,8 @@
 - [x] 发布后审计并发布 `v0.1.1` 安全与完整性修复
 - [x] 准备上游讨论与中英文社区发布草稿
 - [ ] 跨周持续发布和兼容性维护
-- [x] 首个非维护者 fork 与 [Draft PR #4](https://github.com/hazugi2004/paperlocale/pull/4)
-- [ ] 合并首个外部 PR
+- [x] 首个非维护者 fork 与 [已合并 PR #4](https://github.com/hazugi2004/paperlocale/pull/4)
+- [x] 合并首个外部 PR
 - [ ] 非维护者真实试用反馈或问题报告
 - [ ] 领域人员完成 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 的首份 Provider 语义复核
 - [ ] 新领域包贡献

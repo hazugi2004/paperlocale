@@ -70,14 +70,14 @@ every candidate remains marked for manual domain review.
 ## Install
 
 Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workflow.
-PaperLocale 0.3.2 is published on PyPI through attested Trusted Publishing.
+PaperLocale 0.3.3 is published on PyPI through attested Trusted Publishing.
 The audited maintainer procedure and release evidence are documented in
 [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.3.2"
+python -m pip install "paperlocale[layout]==0.3.3"
 paperlocale domain-check atmospheric-science
 ```
 
@@ -252,7 +252,7 @@ the newest `pdf2zh-next` release allowed by the declared dependency range.
 
 ## Contributing
 
-Start with the scoped [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22), or read [CONTRIBUTING.md](CONTRIBUTING.md). Current entry points cover an ecology domain pack, a two-page synthetic PDF regression, and Ubuntu installation verification.
+Start with the scoped [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22), or read [CONTRIBUTING.md](CONTRIBUTING.md). Current entry points cover an ecology domain pack, Ubuntu installation verification, and independent review of the atmospheric-science Provider evaluation.
 
 ## License
 

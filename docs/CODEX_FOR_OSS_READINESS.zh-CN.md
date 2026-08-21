@@ -25,12 +25,12 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 | 明确的公共开源价值 | 学术 PDF 保版翻译、科学信息硬门禁、可扩展领域术语包 | 已实现 |
 | 核心维护者与写权限 | `MAINTAINERS.md` 与 GitHub `hazugi2004/paperlocale` 管理权限 | 已验证 |
 | 社区治理与学术引用 | Contributor Covenant 3.0 社区准则、私密行为问题报告、CFF 1.2.0 软件引用元数据 | [GitHub Community Standards](https://github.com/hazugi2004/paperlocale/community) 已验证为 100%，默认分支已识别 Code of Conduct 与 `CITATION.cff` |
-| 可运行项目 | 一键断点续跑 CLI、两种 Provider、Provider 评估、参考文献与非正文人工确认、碎词安全审查、单向状态机、当前主线 67 项不联网测试 | [PR #17](https://github.com/hazugi2004/paperlocale/pull/17)、[#18](https://github.com/hazugi2004/paperlocale/pull/18)、[#19](https://github.com/hazugi2004/paperlocale/pull/19) 的 Python 3.10–3.13 矩阵、macOS 中文/空格路径及 `[layout]` 求解均通过 |
-| 可复现质量证据 | 合成双栏 PDF、公式合同、人工透传与碎词安全清单、图片与矢量绘图硬门禁、逐页 QA；[v0.3.2 永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip)保留日志、映射、清单与对照图 | [公开兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32234356256)为 0 errors / 0 warnings；附件 SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7` |
+| 可运行项目 | 一键断点续跑 CLI、两种 Provider、Provider 评估、参考文献与非正文人工确认、碎词安全审查、受控文字修复、单向状态机、当前主线 74 项不联网测试 | [v0.3.3 实现 PR #27](https://github.com/hazugi2004/paperlocale/pull/27)及 Python 3.10–3.13 矩阵通过；macOS 中文/空格路径与 `[layout]` 求解继续受 CI 保护 |
+| 可复现质量证据 | 合成双栏 PDF、公式合同、人工透传与碎词安全清单、图片与矢量绘图硬门禁、逐页 QA；[v0.3.2 永久审计附件](https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip)保留日志、映射、清单与对照图；v0.3.3 两页中文修复夹具完成独立字体子集、0 errors / 0 warnings 和逐页视觉验收 | [v0.3.2 公开兼容性运行](https://github.com/hazugi2004/paperlocale/actions/runs/32234356256)及 [v0.3.3 发布说明](https://github.com/hazugi2004/paperlocale/blob/main/docs/releases/v0.3.3.md)；兼容性附件 SHA-256 为 `3f50a2a3adfe5b66d037cb905827b0d8c5ba9d6bc9307908223b77628ec61dc7` |
 | 翻译质量证据 | `codex-local` 对大气科学包 5/5 内容合同通过；候选、参考、[逐条复核工作表](evidence/codex-local-atmospheric-science-review.zh-CN.md)与 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 公开 | 初步证据，等待非维护者领域人员提交复核 |
 | 可公开演示 | 自有合成论文的原文、译文与全页 QA GIF | 已实现 |
-| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建、上游兼容性工作流及受控 PyPI Trusted Publishing 工作流 | [v0.3.2 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32234314229)验证发行元数据；[PyPI 发布](https://github.com/hazugi2004/paperlocale/actions/runs/32441153778)复用确切附件并生成数字 attestation，隔离安装与 `[layout]` 求解通过 |
-| 公开版本 | [GitHub v0.3.2](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.2) / [PyPI 0.3.2](https://pypi.org/project/paperlocale/0.3.2/) | GitHub latest 与 PyPI 均已发布；两处 wheel/sdist SHA-256 一致，PyPI provenance 绑定本仓库工作流；参考文献默认仍为 `preserve` |
+| 发布与维护机制 | CHANGELOG、安全策略、Issue/PR 模板、测试、标签构建、上游兼容性工作流及受控 PyPI Trusted Publishing 工作流 | [v0.3.3 标签构建](https://github.com/hazugi2004/paperlocale/actions/runs/32444041611)验证发行元数据；[PyPI 发布](https://github.com/hazugi2004/paperlocale/actions/runs/32445150459)复用确切附件并生成数字 attestation，隔离安装与 `[layout]` 求解通过 |
+| 公开版本 | [GitHub v0.3.3](https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.3) / [PyPI 0.3.3](https://pypi.org/project/paperlocale/0.3.3/) | GitHub latest 与 PyPI 均已发布；两处 wheel/sdist SHA-256 一致，PyPI provenance 绑定本仓库工作流并通过 `pypi-attestations` 验证；参考文献默认仍为 `preserve` |
 | 外部贡献 | 非维护者 fork 与 [两页 PDF QA PR #4](https://github.com/hazugi2004/paperlocale/pull/4)；[贡献分支 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)及其与最新主线组合验证的 67 项测试均通过，维护者已批准 | 已于 2026-08-21 以[提交 `9460265`](https://github.com/hazugi2004/paperlocale/commit/9460265766d4ceda32a3a294ec7fe56cf18677ad)合并，成为首个非维护者合并贡献 |
 | 广泛使用或真实用户采用 | 尚无非维护者真实翻译反馈、问题报告或下游引用 | 未证明 |
 | 上游生态协作 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354)、[BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) 与最小修复及回归测试 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 三条自动审查意见均已处理，最新为[提交 `be8b888`](https://github.com/hazugi2004/BabelDOC/commit/be8b88895f1e432d6bdaa97d3192d874f6f67732)；尚无上游维护者回应或合并，首次 fork Actions 等待批准运行 |
@@ -40,10 +40,10 @@ OpenAI 决定；申请不保证入选。评估可考虑仓库使用情况、生�
 ## 申请判断
 
 项目现在具备“可以公开试用和持续维护”的工程基础，并已合并首个可复核的外部贡献；
-活跃维护、角色权限和生态价值已有公开证据，但仓库使用量仍弱：0 star、1 个外部
-fork、v0.3.1 与 v0.3.2 各三个 GitHub 附件都只有维护者复核期间产生的 1 次下载；
-PyPI 首次发布后的 attestation 与隔离安装也都是维护者核验，不能视为外部采用，
-且没有非维护者真实翻译反馈或下游引用。因此还
+活跃维护、角色权限和生态价值已有公开证据，但仓库使用量仍弱：核验时为 0 star、
+1 个外部 fork。v0.3.3 的 GitHub/PyPI 发布、attestation、隔离安装和合成夹具视觉验收
+也都由维护者执行，只能证明发行完整性，不能视为外部采用；目前仍没有非维护者真实
+翻译反馈或下游引用。因此还
 不能诚实声称“广泛使用”。应继续获得真实试用或下游引用证据，再提交更
 有说服力的申请；如果提前申请，应明确项目尚新，并重点解释科学文献翻译的生态
 价值，不能把维护者自测、自己的 Issue 或单个已合并测试 PR 写成真实用户采用。

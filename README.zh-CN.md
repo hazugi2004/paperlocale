@@ -55,13 +55,13 @@ paperlocale provider-eval \
 ## 安装
 
 需要 Python 3.10–3.13。完整 PDF 流程还需要 Poppler 的 `pdftoppm`：macOS 可执行 `brew install poppler`，Ubuntu 可执行 `sudo apt-get install poppler-utils`。
-PaperLocale 0.3.2 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
+PaperLocale 0.3.3 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
 维护者发布流程与公开核验证据见 [PyPI 发布手册](docs/PYPI_PUBLISHING.zh-CN.md)。
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.3.2"
+python -m pip install "paperlocale[layout]==0.3.3"
 paperlocale domain-check atmospheric-science
 ```
 
@@ -220,9 +220,10 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 63 项单元测试不联网运行，覆盖内容合同、Provider 评估、一键断点续跑、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、页面 QA、隔离环境入口和演示产物；
+- 74 项单元测试不联网运行，覆盖内容合同、Provider 评估、一键断点续跑、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控文字修复、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
-- 合成页包含公式占位、矢量表格与嵌入图片；最新 QA 报告中源文/译文均为 1 个图片对象和 8 次矢量绘制，不提交任何受版权限制的论文；
+- 版面兼容性夹具包含公式占位、矢量表格与嵌入图片；源文/译文均为 1 个图片对象和 8 次矢量绘制；
+- v0.3.3 两页中文文字修复夹具将 23,278,008 字节原始字体独立子集化为 22,912 字节，最终 PDF 为 19,594 字节；机器 QA 为 0 errors / 0 warnings，并已逐页视觉验收。两类夹具均为项目自有，不提交任何受版权限制的论文；
 - “保版”不等于像素完全一致。中文长度变化会改变行内断行，因此最终候选必须人工逐页核对。
 
 ## 开发与版面兼容性检查
@@ -248,4 +249,4 @@ python scripts/layout_smoke.py \
 
 ## 参与贡献
 
-可以从已有的 [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) 开始，或阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。当前入口包括生态学领域包、两页合成 PDF 回归和 Ubuntu 安装复核。
+可以从已有的 [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) 开始，或阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。当前入口包括生态学领域包、Ubuntu 安装复核和大气科学 Provider 评估独立复核。

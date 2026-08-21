@@ -77,8 +77,8 @@
 - [x] 发布后审计并发布 `v0.1.1` 安全与完整性修复
 - [x] 准备上游讨论与中英文社区发布草稿
 - [ ] 跨周持续发布和兼容性维护
-- [x] 首个非维护者 fork 与 [Ready PR #4](https://github.com/hazugi2004/paperlocale/pull/4)
-- [ ] 合并首个外部 PR
+- [x] 首个非维护者 fork 与 [已合并 PR #4](https://github.com/hazugi2004/paperlocale/pull/4)
+- [x] 合并首个外部 PR
 - [ ] 非维护者真实试用反馈或问题报告
 - [ ] 领域人员完成 [Issue #5](https://github.com/hazugi2004/paperlocale/issues/5) 的首份 Provider 语义复核
 - [ ] 新领域包贡献

@@ -47,7 +47,13 @@ Release 的确切 wheel/sdist，并为两个文件生成绑定本仓库工作流
 证明主动上游协作，不属于外部认可。
 
 非维护者 `icecold009` 已公开 fork 仓库，并针对 good first issue #2 提交
-[两页 PDF QA 回归 PR #4](https://github.com/hazugi2004/paperlocale/pull/4)。维护者已在隔离工作树中将该提交与最新 `main` 组合验证，36 项测试全部通过，并公开提交批准评审和[最新主线兼容性说明](https://github.com/hazugi2004/paperlocale/pull/4#issuecomment-5330379908)；GitHub 的[首次贡献者 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)也已通过。作者已将 PR 标记为 Ready，但尚未合并，因此它可以证明贡献入口已吸引首个外部参与者，不能写成已采用、已发布或已合并贡献。
+[两页 PDF QA 回归 PR #4](https://github.com/hazugi2004/paperlocale/pull/4)。贡献分支的
+[首次贡献者 CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274)
+通过；维护者批准后又将确切提交与 2026-08-21 最新 `main` 组合验证，67 项测试和
+`git diff --check` 均通过。该 PR 随后以
+[提交 `9460265`](https://github.com/hazugi2004/paperlocale/commit/9460265766d4ceda32a3a294ec7fe56cf18677ad)
+合并并关闭 good first issue #2，证明项目获得首个已合并的非维护者贡献；它仍不能
+单独证明真实论文翻译采用、外部下载或广泛使用。
 
 截至目前，尚无可验证的非维护者真实翻译反馈、外部问题报告、下游引用或 PyPI
 外部下载证据。v0.3.1 与 v0.3.2 各三个 GitHub Release 附件都只有维护者公开重下载
@@ -69,7 +75,7 @@ Release 的确切 wheel/sdist，并为两个文件生成绑定本仓库工作流
 | 2026-08-18 | 维护者发起的上游讨论 | [PDFMathTranslate-next #354](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354) | 两阶段 CLITranslator 接口稳定性与文档协作请求 | 否，等待外部回复 |
 | 2026-08-19 | 维护者上游跟进 | [v0.2.0 兼容性证据](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354#issuecomment-5330814545) | 真实兼容性运行、标签构建和结构 QA 证据 | 否，等待外部回复 |
 | 2026-08-19 | 维护者上游修复 | [BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610) / [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611) | 同文返回保持原版面对象的最小修复和回归测试；三条自动审查意见已处理 | 否，等待上游维护者审查 |
-| 2026-08-18 | 外部 fork 与 Ready PR | [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) / [CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274) | 非维护者响应 good first issue；贡献分支 CI 通过，维护者将其与最新主线组合验证 36 项测试并批准 | 是，尚未合并 |
+| 2026-08-21 | 首个已合并外部 PR | [PR #4](https://github.com/hazugi2004/paperlocale/pull/4) / [CI](https://github.com/hazugi2004/paperlocale/actions/runs/32150697274) / [合并提交](https://github.com/hazugi2004/paperlocale/commit/9460265766d4ceda32a3a294ec7fe56cf18677ad) | 非维护者响应 good first issue；贡献分支 CI 与最新主线 67 项组合测试通过，维护者批准后合并 | 是，已合并 |
 
 ## 可接受证据
 

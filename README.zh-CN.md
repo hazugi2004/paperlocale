@@ -58,15 +58,15 @@ paperlocale provider-eval \
 ## 安装
 
 需要 Python 3.10–3.13。完整 PDF 流程还需要 Poppler 的 `pdftoppm`：macOS 可执行 `brew install poppler`，Ubuntu 可执行 `sudo apt-get install poppler-utils`。
-PaperLocale 0.3.4 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
+PaperLocale 0.4.0 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
 维护者发布流程与公开核验证据见 [PyPI 发布手册](docs/PYPI_PUBLISHING.zh-CN.md)。
-v0.4.0 网页桥接目前只是源码候选，尚未发布到 PyPI；操作与额度边界见
+v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.3.4"
+python -m pip install "paperlocale[layout]==0.4.0"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```

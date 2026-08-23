@@ -74,17 +74,17 @@ every candidate remains marked for manual domain review.
 ## Install
 
 Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workflow.
-PaperLocale 0.3.4 is published on PyPI through attested Trusted Publishing.
+PaperLocale 0.4.0 is published on PyPI through attested Trusted Publishing.
 The audited maintainer procedure and release evidence are documented in
 [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
-The manual ChatGPT Web bridge is an unreleased v0.4.0 source candidate; see
+The v0.4.0 manual ChatGPT Web bridge is documented in
 [docs/CHATGPT_WEB_MANUAL.zh-CN.md](docs/CHATGPT_WEB_MANUAL.zh-CN.md) for its
 copy/paste workflow and usage-limit boundary.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.3.4"
+python -m pip install "paperlocale[layout]==0.4.0"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```

@@ -65,7 +65,7 @@
 - [x] 贡献指南、Issue/PR 模板与标签构建工作流
 - [x] Contributor Covenant 3.0 社区准则与 `CITATION.cff` 学术引用元数据
 - [x] 仅手动触发、OIDC 最小权限且复用已审计 Release 附件的 PyPI 可信发布工作流
-- [x] 通过 Trusted Publishing 与数字 attestation 发布 PyPI `v0.3.2`、`v0.3.3` 和 `v0.3.4`
+- [x] 通过 Trusted Publishing 与数字 attestation 发布 PyPI `v0.3.2`、`v0.3.3`、`v0.3.4` 和 `v0.4.0`
 - [x] GitHub `v0.1.0` Release
 - [x] GitHub `v0.2.0` 一键运行、结构门禁与 Provider 评估 Release
 - [x] GitHub `v0.3.0` 真实试运行反向校准、参考文献审计与恢复语义 Release
@@ -73,6 +73,7 @@
 - [x] GitHub `v0.3.2` 行号参考文献、人工透传、碎词安全审查与 schema 4 Release
 - [x] GitHub `v0.3.3` 受控文字修复、独立字体子集与 74 项测试 Release
 - [x] GitHub `v0.3.4` Qwen-MT 泛化、单片段检查点、参考文献行识别与 88 项测试 Release
+- [x] GitHub `v0.4.0` ChatGPT Web 人工桥接、受控文字删除与 94 项测试 Release
 - [x] 三个有验收标准的 good first issues
 - [x] 自有合成论文的原文、译文与全页 QA 演示 GIF
 

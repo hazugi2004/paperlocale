@@ -5,10 +5,10 @@ type: software
 authors:
   - name: "PaperLocale contributors"
 abstract: "PaperLocale is an auditable workflow for translating academic PDFs while preserving page structure, figures, tables, formulas, protected scientific information, and human-reviewed quality evidence."
-version: "0.4.0"
+version: "0.4.1"
 date-released: "2026-08-23"
 repository-code: "https://github.com/hazugi2004/paperlocale"
-repository-artifact: "https://github.com/hazugi2004/paperlocale/releases/tag/v0.4.0"
+repository-artifact: "https://github.com/hazugi2004/paperlocale/releases/tag/v0.4.1"
 license: AGPL-3.0-only
 keywords:
   - academic PDF

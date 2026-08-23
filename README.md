@@ -74,7 +74,7 @@ every candidate remains marked for manual domain review.
 ## Install
 
 Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workflow.
-PaperLocale 0.4.0 is published on PyPI through attested Trusted Publishing.
+PaperLocale 0.4.1 is published on PyPI through attested Trusted Publishing.
 The audited maintainer procedure and release evidence are documented in
 [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
 The v0.4.0 manual ChatGPT Web bridge is documented in
@@ -84,7 +84,7 @@ copy/paste workflow and usage-limit boundary.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.4.0"
+python -m pip install "paperlocale[layout]==0.4.1"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -155,8 +155,11 @@ The default reference policy is `preserve`. PaperLocale writes every segment to
 `reference_review.jsonl`, automatically selects only long segments that match
 the source PDF's exact `REFERENCES` region, and requires explicit confirmation
 before any model call. Automatically matched IDs do not need to be repeated;
-omit `--segment-id` when no manual additions are needed. The confirmed map is
-bound to the source PDF and `segments.jsonl` hashes. Use
+omit `--segment-id` when no manual additions are needed. If page columns or
+post-reference sections cause a reviewed false positive, repeat
+`--exclude-segment-id ID` on `confirm-references`; only IDs from the current
+automatic set can be excluded, and every exclusion is recorded in the bound
+map. The confirmed map is bound to the source PDF and `segments.jsonl` hashes. Use
 `--reference-policy translate-titles` to translate work titles only; reference
 rows do not use body-domain glossary gates.
 

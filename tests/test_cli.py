@@ -12,8 +12,8 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 
 class CliTest(unittest.TestCase):
-    def test_package_version_matches_v040_candidate_line(self) -> None:
-        self.assertEqual(__version__, "0.4.0")
+    def test_package_version_matches_v041_candidate_line(self) -> None:
+        self.assertEqual(__version__, "0.4.1")
 
     def test_cli_reports_package_version(self) -> None:
         """发布包必须能直接报告可核对的版本。"""
@@ -59,11 +59,14 @@ class CliTest(unittest.TestCase):
                 "first",
                 "--segment-id",
                 "second",
+                "--exclude-segment-id",
+                "false-positive",
                 "--confirmed-by",
                 "reviewer",
             ]
         )
         self.assertEqual(args.segment_id, ["first", "second"])
+        self.assertEqual(args.exclude_segment_id, ["false-positive"])
         self.assertEqual(args.confirmed_by, "reviewer")
 
     def test_confirm_passthrough_requires_reason_and_reviewer(self) -> None:

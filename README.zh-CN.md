@@ -58,7 +58,7 @@ paperlocale provider-eval \
 ## 安装
 
 需要 Python 3.10–3.13。完整 PDF 流程还需要 Poppler 的 `pdftoppm`：macOS 可执行 `brew install poppler`，Ubuntu 可执行 `sudo apt-get install poppler-utils`。
-PaperLocale 0.4.0 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
+PaperLocale 0.4.1 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
 维护者发布流程与公开核验证据见 [PyPI 发布手册](docs/PYPI_PUBLISHING.zh-CN.md)。
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
@@ -66,7 +66,7 @@ v0.4.0 网页桥接的操作与额度边界见
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.4.0"
+python -m pip install "paperlocale[layout]==0.4.1"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -101,7 +101,10 @@ paperlocale confirm-references \
 ```
 
 已经确定性匹配的 ID 会自动纳入，不需要重复填写；没有额外片段时可省略所有
-`--segment-id`。确认后重新执行原来的 `paperlocale run` 命令即可继续。映射会
+`--segment-id`。若栏布局或 References 后续章节造成经人工确认的自动误匹配，
+可在 `confirm-references` 中重复使用 `--exclude-segment-id ID`；它只能排除
+当次自动集合中的 ID，且每项排除都会记入映射。确认后重新执行原来的
+`paperlocale run` 命令即可继续。映射会
 绑定源 PDF 与 `segments.jsonl` 的哈希，翻译开始后不能静默修改。
 
 如需只翻译参考文献中的作品标题，在原运行命令中显式添加
@@ -258,7 +261,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 94 项单元测试不联网运行，覆盖内容合同、三种 Provider、ChatGPT 网页人工桥接、单片段批处理边界、Provider 评估、一键断点续跑、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控文字修复、页面 QA、隔离环境入口和演示产物；
+- 97 项单元测试不联网运行，覆盖内容合同、三种 Provider、ChatGPT 网页人工桥接、单片段批处理边界、Provider 评估、一键断点续跑、双栏参考文献空间边界、自动误匹配显式排除、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控文字修复、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 版面兼容性夹具包含公式占位、矢量表格与嵌入图片；源文/译文均为 1 个图片对象和 8 次矢量绘制；
 - v0.3.3 两页中文文字修复夹具将 23,278,008 字节原始字体独立子集化为 22,912 字节，最终 PDF 为 19,594 字节；机器 QA 为 0 errors / 0 warnings，并已逐页视觉验收。两类夹具均为项目自有，不提交任何受版权限制的论文；

@@ -33,6 +33,8 @@ The project does not promise bitwise-identical typography. Chinese text naturall
 
 - `codex-local`: local-only translation through an authenticated Codex CLI session;
 - `openai-compatible`: BYOK access to OpenAI and compatible endpoints;
+- an auditable manual ChatGPT Web bridge that exports hash-bound prompts and imports
+  strict JSON responses without browser login, scraping, or automation;
 - `qwen-mt`: BYOK access to Qwen-MT's dedicated translation endpoint, with
   one-segment checkpoints and domain-pack terminology intervention;
 - an extensible `atmospheric-science` pack with terminology and evaluation cases;
@@ -75,6 +77,9 @@ Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workfl
 PaperLocale 0.3.4 is published on PyPI through attested Trusted Publishing.
 The audited maintainer procedure and release evidence are documented in
 [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
+The manual ChatGPT Web bridge is an unreleased v0.4.0 source candidate; see
+[docs/CHATGPT_WEB_MANUAL.zh-CN.md](docs/CHATGPT_WEB_MANUAL.zh-CN.md) for its
+copy/paste workflow and usage-limit boundary.
 
 ```bash
 python -m venv .venv
@@ -203,6 +208,20 @@ must then run again. Use a locally licensed font and do not commit it to the
 repository; a TTF/OTF usually produces cleaner extraction metadata than a font
 collection, but every result still goes through the same QA warnings and visual
 review.
+
+For a reviewed fragment that must only be removed, pass an explicit empty
+replacement and omit the font options:
+
+```bash
+paperlocale apply-text-repair --run-dir runs/paper \
+  --page 2 --rect 120 29 144 39 --replacement '' \
+  --description "Remove a reviewed split-token fragment"
+```
+
+Removal mode embeds no font, records `text-removal` in `repair_history`, and
+still enforces the same rectangle, outside-text, page, image, link, vector,
+backup, QA, and human-acceptance gates. Whitespace-only replacements are
+rejected.
 
 For a BYOK OpenAI-compatible endpoint:
 

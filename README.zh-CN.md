@@ -28,6 +28,8 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 
 - `codex-local`：调用用户本机已登录的 Codex，仅用于可信本地环境；
 - `openai-compatible`：由用户自备 API Key，可连接 OpenAI 及兼容接口；
+- `chatgpt-web` 人工桥接：把哈希绑定批次粘贴到 ChatGPT 网页端普通 Chat，再导入
+  严格 JSON 回复；项目不登录、抓取或自动点击网页；
 - `qwen-mt`：由用户自备百炼 API Key，按 Qwen-MT 专用翻译接口的单片段语义调用；
 - `atmospheric-science`：内置 18 条大气科学固定术语和 5 个回归案例；
 - `collect -> translate -> validate -> render -> qa -> accept`：有清单、有断点、不可跳步的单向工作流；
@@ -58,6 +60,8 @@ paperlocale provider-eval \
 需要 Python 3.10–3.13。完整 PDF 流程还需要 Poppler 的 `pdftoppm`：macOS 可执行 `brew install poppler`，Ubuntu 可执行 `sudo apt-get install poppler-utils`。
 PaperLocale 0.3.4 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
 维护者发布流程与公开核验证据见 [PyPI 发布手册](docs/PYPI_PUBLISHING.zh-CN.md)。
+v0.4.0 网页桥接目前只是源码候选，尚未发布到 PyPI；操作与额度边界见
+[ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
 ```bash
 python -m venv .venv
@@ -209,6 +213,21 @@ paperlocale apply-text-repair \
 取得，不能提交到仓库；TTF/OTF 通常比字体集合产生更干净的抽取元数据，但任何
 CMap 警告和最终视觉效果仍由同一 QA 流程检查。
 
+若损坏对象只是已确认的孤立残片（例如固定首字母与可译对象切分后遗留
+`limate`），可显式传入空 replacement：
+
+```bash
+paperlocale apply-text-repair \
+  --run-dir runs/paper \
+  --page 2 \
+  --rect 120 29 144 39 \
+  --replacement '' \
+  --description "删除已核对的孤立英文残片"
+```
+
+只删除模式不需要 `--font-file` 或 `--font-size`，不会嵌入空字体子集；
+清单以 `text-removal` 独立记录。只包含空格的 replacement 仍会被拒绝。
+
 需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> reference-review/confirm-references -> 可选 confirm-passthrough -> translate -> validate -> render -> qa -> accept` 命令序列。
 
 ## 领域包扩展
@@ -239,7 +258,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 88 项单元测试不联网运行，覆盖内容合同、三种 Provider、单片段批处理边界、Provider 评估、一键断点续跑、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控文字修复、页面 QA、隔离环境入口和演示产物；
+- 94 项单元测试不联网运行，覆盖内容合同、三种 Provider、ChatGPT 网页人工桥接、单片段批处理边界、Provider 评估、一键断点续跑、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控文字修复、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 版面兼容性夹具包含公式占位、矢量表格与嵌入图片；源文/译文均为 1 个图片对象和 8 次矢量绘制；
 - v0.3.3 两页中文文字修复夹具将 23,278,008 字节原始字体独立子集化为 22,912 字节，最终 PDF 为 19,594 字节；机器 QA 为 0 errors / 0 warnings，并已逐页视觉验收。两类夹具均为项目自有，不提交任何受版权限制的论文；

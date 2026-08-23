@@ -15,18 +15,24 @@ from pathlib import Path
 
 from .domains import DomainPack
 
-
 FORMULA_RE = re.compile(r"\{v\d+\}")
 STYLE_RE = re.compile(r"<style\s+id=['\"]\d+['\"]>|</style>", re.IGNORECASE)
-# 中文译文常把“获取”“下载”等词直接接在 URL 或 DOI 后。若不把汉字作为边界，
-# 正则会误把这些汉字算进标识符，进而把完整保留的网址判成丢失或篡改。
+# 中文译文常把“获取”“下载”等词直接接在 URL 或 DOI 后。汉字必须作为
+# 标识符边界，否则完整保留的网址会因中文后缀而被误判为篡改。
 URL_RE = re.compile(
     r"https?://[^\s)\]}>,;，。；：！？）】》\u3400-\u9fff]+", re.IGNORECASE
 )
 DOI_RE = re.compile(
     r"\b10\.\d{4,9}/[^\s)\]}>,;，。；：！？）】》\u3400-\u9fff]+", re.IGNORECASE
 )
-NUMBER_RE = re.compile(r"(?<![\dA-Za-z])[-+−]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?")
+# PDF 文本层常把引文号和产品版本紧贴在英文名后，如
+# ``productivity3,17,18`` 和 ``NDVI3g``。第二个零宽分支允许数字紧跟
+# ASCII 字母；正负号仍只能由第一分支接管，因此 ``mid-1960s``
+# 中的连字符不会被误判为负号。
+NUMBER_RE = re.compile(
+    r"(?:(?<![\dA-Za-z])[-+−]?|(?<=[A-Za-z]))"
+    r"\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?"
+)
 ABBREVIATION_RE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Z][A-Z0-9-]{1,})(?![A-Za-z0-9])")
 ABBREVIATION_EXCLUSIONS = frozenset({"ABSTRACT", "KEYWORDS", "REFERENCES"})
 UNIT_RE = re.compile(

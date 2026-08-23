@@ -2,7 +2,37 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
-## Unreleased
+## 0.4.0 - 未发布
+
+### Added
+
+- 增加 `chatgpt-web-export` / `chatgpt-web-import` 人工网页桥接：导出带哈希的
+  大气科学翻译批次，在 ChatGPT 网页端普通 Chat 中人工交换严格 JSON，再复用
+  现有内容合同、部分批次恢复、参考文献 `preserve`、PDF 重建和逐页 QA。
+- 网页批次绑定源 PDF、片段、领域包、参考文献和透传映射身份；导入记录人工可见
+  模型标签，保存每次回复原始字节快照和导入历史，不保存登录态、Cookie 或 API Key。
+- `apply-text-repair` 支持显式空 replacement 的只删除模式；不嵌入字体，
+  以 `text-removal` 独立记录，并继续强制矩形外文字、页面结构、备份和 QA 门禁。
+
+### Fixed
+
+- ChatGPT Web 提示改为单一 `json` 代码块，并要求使用代码块的复制按钮，
+  避免裸 JSON 中的 URL、DOI 和邮箱被网页富文本层改成 Markdown 链接。
+- 数字合同现在一致识别紧贴英文单词或中文汉字的引文号，例如
+  `productivity3,17,18` 与 `生产力3,17,18`；`mid-1960s` 仍不会被误判为负数。
+
+### Security
+
+- PaperLocale 不登录、不抓取也不自动点击 `chatgpt.com`；网页 Chat 不是官方 API，
+  因此不能作为无人值守 Provider，也不能保证任何账户的具体用量或额度归属。
+
+### Verification
+
+- 使用 9 页大气科学开放获取论文完成受监督 Computer Use 网页实验：
+  106 个片段中 83 个通过普通 Chat 的 6 个哈希批次翻译，19 个人工透传，
+  4 个参考文献片段保留；106/106 内容合同、9/9 页机器 QA 和逐页视觉验收通过。
+- 真实运行证据见 [`docs/releases/v0.4.0.md`](docs/releases/v0.4.0.md)；不上传或再分发
+  源 PDF、完整译本或私人 ChatGPT 会话链接。
 
 ## 0.3.4 - 2026-08-23
 

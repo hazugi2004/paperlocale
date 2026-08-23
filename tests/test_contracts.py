@@ -64,6 +64,17 @@ class TranslationContractTest(unittest.TestCase):
         self.assertEqual(protected_counts(source)["number"], {"1960": 1})
         self.assertEqual(validate_translation(source, target), [])
 
+    def test_citation_numbers_attached_to_english_and_chinese_are_equivalent(self) -> None:
+        """英文论文引文号常紧贴单词，中文译文也可紧贴汉字。"""
+
+        source = "Vegetation productivity3,17,18 follows earlier studies24,25."
+        target = "植被生产力3,17,18与早期研究24,25的结果一致。"
+        self.assertEqual(
+            protected_counts(source)["number"],
+            protected_counts(target)["number"],
+        )
+        self.assertEqual(validate_translation(source, target), [])
+
     def test_chinese_text_after_url_and_doi_is_not_part_of_identifier(self) -> None:
         """中文可直接承接网址，但不能因此把中文后缀误识别为 URL 或 DOI。"""
 

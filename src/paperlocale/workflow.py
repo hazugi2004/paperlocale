@@ -206,6 +206,7 @@ def confirm_reference_run(
     *,
     additional_segment_ids: list[str],
     confirmed_by: str,
+    excluded_automatic_segment_ids: list[str] | tuple[str, ...] = (),
 ) -> dict[str, object]:
     """确认自动结果和用户补充 ID；已有断点译文后禁止改写映射。"""
 
@@ -226,6 +227,7 @@ def confirm_reference_run(
         output_dir=root,
         additional_segment_ids=additional_segment_ids,
         confirmed_by=confirmed_by,
+        excluded_automatic_segment_ids=excluded_automatic_segment_ids,
     )
 
 
@@ -408,6 +410,7 @@ def _prepare_segment_safety_configuration(
     root: Path,
     manifest: dict[str, object],
     passthrough_ids: set[str],
+    reference_ids: set[str],
 ) -> set[str]:
     """生成确定性安全清单，并阻止未确认的碎词或不可见短片段进入模型。"""
 
@@ -420,15 +423,15 @@ def _prepare_segment_safety_configuration(
     summary_path = root / "segment_safety_summary.json"
     manifest["segment_safety_summary"] = str(summary_path.resolve())
     manifest["segment_safety_summary_sha256"] = _sha256(summary_path)
-    manifest["segment_safety_required_count"] = summary[
-        "required_passthrough_count"
-    ]
-    manifest["schema_version"] = SCHEMA_VERSION
-    save_manifest(root, manifest)
-
-    required = {
+    all_required = {
         str(sid) for sid in summary["required_passthrough_segment_ids"]
     }
+    reference_exempt = all_required & reference_ids
+    required = all_required - reference_ids
+    manifest["segment_safety_required_count"] = len(required)
+    manifest["segment_safety_reference_exempt_count"] = len(reference_exempt)
+    manifest["schema_version"] = SCHEMA_VERSION
+    save_manifest(root, manifest)
     missing = sorted(required - passthrough_ids)
     if missing:
         raise ValueError(
@@ -442,6 +445,7 @@ def _prepare_segment_safety_configuration(
 def _recorded_segment_safety_configuration(
     manifest: dict[str, object],
     passthrough_ids: set[str],
+    reference_ids: set[str],
 ) -> set[str]:
     """验证阶段核对翻译前生成的安全清单及其人工透传闭合关系。"""
 
@@ -460,7 +464,7 @@ def _recorded_segment_safety_configuration(
     )
     required = {
         str(sid) for sid in summary["required_passthrough_segment_ids"]
-    }
+    } - reference_ids
     missing = sorted(required - passthrough_ids)
     if missing:
         raise ValueError(f"片段安全复核所需透传映射不闭合：{missing}")
@@ -701,7 +705,12 @@ def translate_run(
         raise ValueError(
             f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}"
         )
-    _prepare_segment_safety_configuration(root, manifest, passthrough_ids)
+    _prepare_segment_safety_configuration(
+        root,
+        manifest,
+        passthrough_ids,
+        reference_ids,
+    )
     provider_provenance = provider.provenance()
     recorded_provider = manifest.get("translation_provider")
     if isinstance(recorded_provider, dict) and recorded_provider != provider_provenance:
@@ -768,7 +777,11 @@ def validate_run(run_dir: Path, domain: DomainPack) -> None:
     _verify_domain_languages(manifest, domain)
     reference_ids, reference_policy = _recorded_reference_configuration(manifest)
     passthrough_ids = _recorded_passthrough_configuration(manifest)
-    _recorded_segment_safety_configuration(manifest, passthrough_ids)
+    _recorded_segment_safety_configuration(
+        manifest,
+        passthrough_ids,
+        reference_ids,
+    )
     validate_translation_files(
         Path(str(manifest["segments_path"])),
         Path(str(manifest["translations_path"])),

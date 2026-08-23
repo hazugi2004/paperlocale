@@ -266,7 +266,12 @@ def export_chatgpt_web_batches(
     overlap = reference_ids & passthrough_ids
     if overlap:
         raise ValueError(f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}")
-    _prepare_segment_safety_configuration(root, manifest, passthrough_ids)
+    _prepare_segment_safety_configuration(
+        root,
+        manifest,
+        passthrough_ids,
+        reference_ids,
+    )
 
     segments_path = Path(str(manifest["segments_path"]))
     segments = _read_segments(segments_path)

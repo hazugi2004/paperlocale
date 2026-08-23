@@ -2,6 +2,18 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
+## 0.4.1 - 2026-08-23
+
+### Fixed
+
+- 右栏中途开始 `References` 时，首页区域改为仅收集标题所在右栏，避免把左栏同高度的结论或结果正文误标为参考文献；
+- `confirm-references` 新增可审计的 `--exclude-segment-id`，允许复核者排除致谢、作者贡献、Publisher note 或许可证等自动越界片段；只能排除当次自动匹配 ID，并在 `reference_map.json` 留痕；
+- 已经人工确认为参考文献且由 `preserve` 保留的碎片，不再被片段安全审查重复要求 `confirm-passthrough`；Codex/API 和 ChatGPT Web 导出路径共用同一修复。
+
+### Validation
+
+- 新增右栏参考文献、显式排除和参考文献/安全审查重叠回归；第 28 篇真实双栏 PDF 回放中的 4 个已知正文误匹配全部消失。
+
 ## 0.4.0 - 2026-08-23
 
 ### Added

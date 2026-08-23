@@ -118,6 +118,36 @@ def _build_shared_block_reference_pdf(path: Path) -> str:
     return reference
 
 
+def _build_right_column_reference_pdf(path: Path) -> tuple[str, str]:
+    """生成右栏中途开始参考文献、左栏同高度仍为正文的页面。"""
+
+    body = (
+        "In the future, the research should focus on compound-event mechanisms "
+        "and their regional ecological consequences under multiple scenarios."
+    )
+    reference = (
+        "Smith, A., B. Jones, and C. White, 2024: Compound drought and heat "
+        "assessment across climate regions. Journal of Climate, 37, 100-125."
+    )
+    document = canvas.Canvas(str(path))
+    document.setFont("Helvetica-Bold", 11)
+    document.drawString(320, 560, "References")
+    document.setFont("Helvetica", 8)
+    document.drawString(40, 530, body)
+    document.drawString(
+        320,
+        530,
+        "Smith, A., B. Jones, and C. White, 2024: Compound drought and heat",
+    )
+    document.drawString(
+        320,
+        518,
+        "assessment across climate regions. Journal of Climate, 37, 100-125.",
+    )
+    document.save()
+    return body, reference
+
+
 class ReferenceReviewTest(unittest.TestCase):
     def test_exact_matches_and_manual_ids_form_bound_map(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -248,6 +278,83 @@ class ReferenceReviewTest(unittest.TestCase):
             self.assertEqual(summary["heading_pages"], [1])
             self.assertTrue(summary["automatic_region_available"])
             self.assertIn(segment_id(reference), automatic)
+
+    def test_right_column_heading_does_not_capture_left_column_body(self) -> None:
+        """右栏 References 不能把同页左栏未结束的正文标为书目。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "right-column-references.pdf"
+            body, reference = _build_right_column_reference_pdf(source_pdf)
+            segments = root / "segments.jsonl"
+            write_jsonl_atomic(
+                segments,
+                [
+                    {"id": segment_id(source), "source": source}
+                    for source in (body, reference, "References")
+                ],
+            )
+
+            summary = prepare_reference_review(
+                source_pdf=source_pdf,
+                source_sha256=hashlib.sha256(source_pdf.read_bytes()).hexdigest(),
+                segments_path=segments,
+                output_dir=root,
+            )
+            automatic = set(summary["automatic_reference_segment_ids"])
+            self.assertIn(segment_id(reference), automatic)
+            self.assertIn(segment_id("References"), automatic)
+            self.assertNotIn(segment_id(body), automatic)
+
+    def test_reviewer_can_exclude_only_automatic_false_positives(self) -> None:
+        """显式排除必须留在映射中，且不能用来删除人工补充项。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "right-column-references.pdf"
+            body, reference = _build_right_column_reference_pdf(source_pdf)
+            segments = root / "segments.jsonl"
+            write_jsonl_atomic(
+                segments,
+                [
+                    {"id": segment_id(source), "source": source}
+                    for source in (body, reference, "References")
+                ],
+            )
+            source_hash = hashlib.sha256(source_pdf.read_bytes()).hexdigest()
+
+            mapping = confirm_reference_review(
+                source_pdf=source_pdf,
+                source_sha256=source_hash,
+                segments_path=segments,
+                output_dir=root,
+                additional_segment_ids=[],
+                excluded_automatic_segment_ids=[segment_id(reference)],
+                confirmed_by="reviewer",
+            )
+            self.assertNotIn(segment_id(reference), mapping["reference_segment_ids"])
+            self.assertEqual(
+                mapping["excluded_automatic_segment_ids"],
+                [segment_id(reference)],
+            )
+            self.assertEqual(
+                load_reference_map(
+                    source_sha256=source_hash,
+                    segments_path=segments,
+                    map_path=root / "reference_map.json",
+                ),
+                mapping,
+            )
+            with self.assertRaisesRegex(ValueError, "只能排除自动匹配"):
+                confirm_reference_review(
+                    source_pdf=source_pdf,
+                    source_sha256=source_hash,
+                    segments_path=segments,
+                    output_dir=root,
+                    additional_segment_ids=[],
+                    excluded_automatic_segment_ids=[segment_id(body)],
+                    confirmed_by="reviewer",
+                )
 
 
 if __name__ == "__main__":

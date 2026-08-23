@@ -188,6 +188,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="补充一个未自动匹配的参考文献片段 ID；可重复使用",
     )
+    confirm_references.add_argument(
+        "--exclude-segment-id",
+        action="append",
+        default=[],
+        help="排除一个经人工复核的自动误匹配 ID；可重复使用",
+    )
     confirm_references.add_argument("--confirmed-by", required=True)
 
     confirm_passthrough = subparsers.add_parser(
@@ -443,6 +449,7 @@ def main() -> int:
             args.run_dir,
             additional_segment_ids=args.segment_id,
             confirmed_by=args.confirmed_by,
+            excluded_automatic_segment_ids=args.exclude_segment_id,
         )
         print(
             "参考文献映射已确认："

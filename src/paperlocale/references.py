@@ -125,7 +125,7 @@ def _reference_region(
     """
 
     document = fitz.open(source_pdf)
-    headings: list[tuple[int, float]] = []
+    headings: list[tuple[int, float, float, float]] = []
     page_text_lines: list[list[tuple[float, float, float, float, str]]] = []
     page_line_entries: list[list[tuple[float, float, str]]] = []
     try:
@@ -171,20 +171,32 @@ def _reference_region(
             line_numbers = [entry[2] for entry in line_entries]
             for line in text_lines:
                 if _heading_block_matches(line[4], line_numbers):
-                    headings.append((page_index, line[3]))
+                    headings.append(
+                        (page_index, line[0], line[3], float(page.rect.width))
+                    )
     finally:
         document.close()
 
-    heading_pages = [page_index + 1 for page_index, _bottom in headings]
+    heading_pages = [page_index + 1 for page_index, _x0, _bottom, _width in headings]
     if len(headings) != 1:
         return heading_pages, None, ()
 
-    heading_page, heading_bottom = headings[0]
+    heading_page, heading_x0, heading_bottom, heading_page_width = headings[0]
+    heading_starts_in_right_column = heading_x0 >= heading_page_width * 0.45
     region_parts: list[str] = []
     region_boundary: tuple[int, float] | None = None
     for page_index in range(heading_page, len(page_text_lines)):
         for line in page_text_lines[page_index]:
             if page_index == heading_page and line[1] < heading_bottom:
+                continue
+            if (
+                page_index == heading_page
+                and heading_starts_in_right_column
+                and line[0] < heading_x0 - 2
+            ):
+                # 双栏论文可能在首页右栏中途开始 References，此时
+                # 左栏同高度仍是正文。只限制这一个首页右栏，后续页
+                # 仍保留全宽参考文献，不猜测其他排版。
                 continue
             cleaned = _block_without_line_numbers(
                 line[4],
@@ -310,8 +322,9 @@ def confirm_reference_review(
     output_dir: Path,
     additional_segment_ids: list[str],
     confirmed_by: str,
+    excluded_automatic_segment_ids: list[str] | tuple[str, ...] = (),
 ) -> dict[str, object]:
-    """把自动结果与用户补充 ID 合并为绑定当前输入字节的参考文献映射。"""
+    """合并自动结果、用户补充和显式排除为绑定当前输入的映射。"""
 
     if not confirmed_by.strip():
         raise ValueError("confirmed_by 不能为空")
@@ -324,17 +337,27 @@ def confirm_reference_review(
     rows = read_jsonl(segments_path)
     known_ids = {str(row.get("id", "")) for row in rows}
     requested = set(additional_segment_ids)
-    unknown = sorted(requested - known_ids)
+    excluded = set(excluded_automatic_segment_ids)
+    unknown = sorted((requested | excluded) - known_ids)
     if unknown:
         raise ValueError(f"参考文献确认包含未知片段 ID：{unknown}")
     automatic = {
         str(segment_id)
         for segment_id in summary["automatic_reference_segment_ids"]
     }
+    invalid_exclusions = sorted(excluded - automatic)
+    if invalid_exclusions:
+        raise ValueError(
+            f"只能排除自动匹配的参考文献片段：{invalid_exclusions}"
+        )
+    conflicting = sorted(requested & excluded)
+    if conflicting:
+        raise ValueError(f"同一片段不能同时补充和排除：{conflicting}")
+    confirmed = (automatic - excluded) | requested
     selected = [
         str(row["id"])
         for row in rows
-        if str(row["id"]) in automatic | requested
+        if str(row["id"]) in confirmed
     ]
     mapping: dict[str, object] = {
         "schema_version": 1,
@@ -346,6 +369,11 @@ def confirm_reference_review(
         "automatic_reference_segment_ids": list(
             summary["automatic_reference_segment_ids"]
         ),
+        "excluded_automatic_segment_ids": [
+            str(row["id"])
+            for row in rows
+            if str(row["id"]) in excluded
+        ],
     }
     _write_json_atomic(output_dir / "reference_map.json", mapping)
     return mapping
@@ -375,6 +403,22 @@ def load_reference_map(
         raise ValueError("参考文献映射的 reference_segment_ids 字段非法")
     if len(set(selected)) != len(selected):
         raise ValueError("参考文献映射包含重复片段 ID")
+    automatic = mapping.get("automatic_reference_segment_ids", [])
+    excluded = mapping.get("excluded_automatic_segment_ids", [])
+    for field, values in (
+        ("automatic_reference_segment_ids", automatic),
+        ("excluded_automatic_segment_ids", excluded),
+    ):
+        if not isinstance(values, list) or any(
+            not isinstance(segment_id, str) for segment_id in values
+        ):
+            raise ValueError(f"参考文献映射的 {field} 字段非法")
+        if len(set(values)) != len(values):
+            raise ValueError(f"参考文献映射的 {field} 包含重复 ID")
+    if set(excluded) - set(automatic):
+        raise ValueError("参考文献映射排除了非自动匹配片段")
+    if set(excluded) & set(selected):
+        raise ValueError("已排除的自动匹配片段仍出现在参考文献映射中")
     if not isinstance(mapping.get("confirmed_by"), str) or not str(
         mapping["confirmed_by"]
     ).strip():

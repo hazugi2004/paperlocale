@@ -74,6 +74,7 @@
 - [x] GitHub `v0.3.3` 受控文字修复、独立字体子集与 74 项测试 Release
 - [x] GitHub `v0.3.4` Qwen-MT 泛化、单片段检查点、参考文献行识别与 88 项测试 Release
 - [x] GitHub `v0.4.0` ChatGPT Web 人工桥接、受控文字删除与 94 项测试 Release
+- [x] GitHub `v0.4.1` 双栏参考文献边界、显式排除与安全透传闭合热修复 Release
 - [x] 三个有验收标准的 good first issues
 - [x] 自有合成论文的原文、译文与全页 QA 演示 GIF
 

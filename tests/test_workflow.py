@@ -107,7 +107,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
-        self.assertEqual(manifest["paperlocale_version"], "0.4.0")
+        self.assertEqual(manifest["paperlocale_version"], "0.4.1")
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)
@@ -685,6 +685,54 @@ class WorkflowTest(unittest.TestCase):
             translated = load_manifest(run_dir)
             self.assertEqual(translated["segment_safety_required_count"], 2)
             self.assertTrue(translated["segment_safety_summary_sha256"])
+            validate_run(run_dir, domain)
+
+    def test_reference_fragment_is_exempt_from_duplicate_safety_passthrough(self) -> None:
+        """已确认 preserve 的参考文献碎片不能再被要求重复透传。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(40, 780, "Soil moisture was 10 mm.")
+            document.showPage()
+            document.drawString(40, 780, "References")
+            document.drawString(40, 740, "Publisher note")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            body = "Soil moisture was 10 mm."
+            reference_fragment = "blisher note"
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [
+                    {"id": segment_id(text), "source": text}
+                    for text in (body, reference_fragment)
+                ],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[segment_id(reference_fragment)],
+                confirmed_by="reviewer",
+            )
+
+            provider = _SafetyProvider()
+            self.assertEqual(
+                translate_run(run_dir=run_dir, provider=provider, domain=domain),
+                (0, 2),
+            )
+            self.assertEqual(provider.sources, [body])
+            translated = load_manifest(run_dir)
+            self.assertEqual(translated["segment_safety_required_count"], 0)
+            self.assertEqual(translated["segment_safety_reference_exempt_count"], 1)
             validate_run(run_dir, domain)
 
     def test_validate_rejects_domain_content_changed_without_version_bump(self) -> None:

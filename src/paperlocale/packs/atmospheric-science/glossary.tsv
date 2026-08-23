@@ -7,6 +7,7 @@ net ecosystem exchange	净生态系统交换	true	保留缩写 NEE 并保持正�
 soil moisture	土壤湿度	true	具体层次必须保留深度
 vegetation index	植被指数	true	NDVI/EVI 等缩写原样保留
 compound dry-hot event	复合干热事件	true	全文统一
+compound hot-dry event	复合干热事件	true	与 dry-hot 为词序变体，全文统一
 compound dry-hot condition	复合干热状况	true	用于状态或条件而非独立事件
 land-atmosphere interaction	陆气相互作用	true	不要与 land-atmosphere coupling 混淆
 potential evapotranspiration	潜在蒸散发	true	保留缩写 PET

@@ -28,6 +28,9 @@ jobs:
       - name: Install the exact built wheel
         run: |
           python -m pip install --force-reinstall dist/*.whl
+          expected_version="${GITHUB_REF_NAME#v}"
+          EXPECTED_VERSION="$expected_version" python -c 'import importlib.metadata, os, paperlocale; expected = os.environ["EXPECTED_VERSION"]; assert importlib.metadata.version("paperlocale") == paperlocale.__version__ == expected'
+          paperlocale --version | grep -Fx "paperlocale $expected_version"
           paperlocale domain-check atmospheric-science
       - name: Resolve layout extra from the exact built wheel
         run: |

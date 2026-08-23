@@ -34,6 +34,25 @@
 - 真实运行证据见 [`docs/releases/v0.4.0.md`](docs/releases/v0.4.0.md)；不上传或再分发
   源 PDF、完整译本或私人 ChatGPT 会话链接。
 
+## 0.3.4 - 2026-08-23
+
+### Added
+
+- 新增独立 `qwen-mt` Provider，使用 Qwen-MT 官方单消息语义、DomainPack 提示与术语干预，并对公式/样式标记执行可逆保护；
+- 新运行清单记录 `paperlocale_version`，CLI 新增 `paperlocale --version`，标签构建核对源码、包元数据和命令行版本一致。
+
+### Changed
+
+- Provider 可声明自身的最大单批片段数；正式翻译和 Provider 评估共用该边界，Qwen-MT 每条成功译文立即进入原子检查点；
+- Qwen-MT 实现去除第 13 篇论文的地名、阶段和学科提示硬编码；`compound hot-dry event` 作为通用词序变体收入 v1.1.0 大气科学领域包；
+- URL/DOI 和缩写门禁可容忍已证实的 PDF 断行空格与中文紧邻文本，但不改写原始数字或猜测公式含义。
+
+### Fixed
+
+- `paperlocale run` 现在把 `--max-segments` 和 `--max-characters` 正确传入一键工作流；
+- 参考文献区域改为按可见文本行识别，修复 PyMuPDF 将 `References` 与整页书目合并为同一文本块时的整区漏检；
+- Qwen-MT 删除保护标记时明确失败，不再根据译文中首个缩写位置猜测回填。
+
 ## 0.3.3 - 2026-08-21
 
 ### Added

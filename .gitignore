@@ -9,6 +9,7 @@ build/
 dist/
 output/
 tmp/
+runs/
 *.pdf
 !.github/fixtures/*.pdf
 

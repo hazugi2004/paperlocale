@@ -107,6 +107,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
+        self.assertEqual(manifest["paperlocale_version"], "0.4.0")
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)

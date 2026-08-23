@@ -118,49 +118,60 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
 def _reference_region(
     source_pdf: Path,
 ) -> tuple[list[int], str | None, tuple[str, ...]]:
-    """返回标题页、标题后区域和由 PDF 坐标确定的左侧稿件行号。"""
+    """返回标题页、标题后区域和由 PDF 坐标确定的左侧稿件行号。
+
+    参考文献标题可能与整页书目被 PyMuPDF 合并为一个文本块，
+    因此识别和区域收集都以可见文本行为单位，不依赖块边界。
+    """
 
     document = fitz.open(source_pdf)
     headings: list[tuple[int, float]] = []
-    page_blocks: list[list[tuple[float, float, float, float, str]]] = []
+    page_text_lines: list[list[tuple[float, float, float, float, str]]] = []
     page_line_entries: list[list[tuple[float, float, str]]] = []
     try:
         for page_index, page in enumerate(document):
-            blocks = [
-                (
-                    float(block[0]),
-                    float(block[1]),
-                    float(block[2]),
-                    float(block[3]),
-                    str(block[4]),
-                )
-                for block in page.get_text("blocks")
-            ]
-            page_blocks.append(blocks)
+            text_lines: list[tuple[float, float, float, float, str]] = []
             line_entries: list[tuple[float, float, str]] = []
             for block in page.get_text("dict")["blocks"]:
                 for line in block.get("lines", []):
-                    line_text = "".join(
-                        str(span.get("text", "")) for span in line.get("spans", [])
-                    ).strip()
-                    # 投稿手稿边栏行号位于页面最左侧；页脚页码在页面中部，
-                    # 不满足这个坐标边界。只记录纯数字行，避免删除正文数字。
-                    if (
-                        line_text.isdigit()
-                        and float(line["bbox"][2]) <= float(page.rect.width) * 0.12
-                    ):
-                        line_entries.append(
-                            (
-                                float(line["bbox"][1]),
-                                float(line["bbox"][3]),
-                                line_text,
+                    bbox = line["bbox"]
+                    content_parts: list[str] = []
+                    for span in line.get("spans", []):
+                        span_text = str(span.get("text", ""))
+                        span_bbox = span.get("bbox", bbox)
+                        # 同一视觉行内也可能同时包含左侧行号和正文。
+                        # 依据 span 坐标分离行号，避免依赖提取器是否换行。
+                        if (
+                            span_text.strip().isdigit()
+                            and float(span_bbox[2]) <= float(page.rect.width) * 0.12
+                        ):
+                            line_entries.append(
+                                (
+                                    float(span_bbox[1]),
+                                    float(span_bbox[3]),
+                                    span_text.strip(),
+                                )
                             )
+                            continue
+                        content_parts.append(span_text)
+                    line_text = "".join(content_parts).strip()
+                    if not line_text:
+                        continue
+                    text_lines.append(
+                        (
+                            float(bbox[0]),
+                            float(bbox[1]),
+                            float(bbox[2]),
+                            float(bbox[3]),
+                            line_text,
                         )
+                    )
+            page_text_lines.append(text_lines)
             page_line_entries.append(line_entries)
             line_numbers = [entry[2] for entry in line_entries]
-            for block in blocks:
-                if _heading_block_matches(block[4], line_numbers):
-                    headings.append((page_index, block[3]))
+            for line in text_lines:
+                if _heading_block_matches(line[4], line_numbers):
+                    headings.append((page_index, line[3]))
     finally:
         document.close()
 
@@ -171,36 +182,36 @@ def _reference_region(
     heading_page, heading_bottom = headings[0]
     region_parts: list[str] = []
     region_boundary: tuple[int, float] | None = None
-    for page_index in range(heading_page, len(page_blocks)):
-        for block in page_blocks[page_index]:
-            if page_index == heading_page and block[1] < heading_bottom:
+    for page_index in range(heading_page, len(page_text_lines)):
+        for line in page_text_lines[page_index]:
+            if page_index == heading_page and line[1] < heading_bottom:
                 continue
             cleaned = _block_without_line_numbers(
-                block[4],
+                line[4],
                 [entry[2] for entry in page_line_entries[page_index]],
             )
             # 参考文献必须止于下一个编号章节，不能把其后的 Figure 或 Table
             # 章节误标为参考文献。标题自身已经在上方排除，不会触发此边界。
             if NUMBERED_SECTION_HEADING_RE.fullmatch(cleaned):
-                region_boundary = (page_index, block[1])
+                region_boundary = (page_index, line[1])
                 break
-            region_parts.append(block[4])
+            region_parts.append(line[4])
         if region_boundary is not None:
             break
 
     last_region_page = (
-        region_boundary[0] if region_boundary is not None else len(page_blocks) - 1
+        region_boundary[0] if region_boundary is not None else len(page_text_lines) - 1
     )
     boundary_top = region_boundary[1] if region_boundary is not None else None
     line_numbers = tuple(
         text
         for page_index in range(heading_page, last_region_page + 1)
-        for top, _bottom, text in page_line_entries[page_index]
+        for _top, bottom, text in page_line_entries[page_index]
         # 边界页只纳入下一个章节标题上方的行号，避免 Figure 章节的行号
         # 参与候选归一化；其余参考文献页全部纳入。
         if boundary_top is None
         or page_index < last_region_page
-        or top < boundary_top
+        or bottom <= boundary_top
     )
     return heading_pages, "\n".join(region_parts), line_numbers
 

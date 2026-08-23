@@ -133,9 +133,15 @@ def translate_segment_file(
         reference_policy=reference_policy,
         reference_segment_ids=frozenset(reference_segment_ids),
     )
+    provider_limit = provider.max_batch_segments
+    effective_max_segments = (
+        min(max_segments, provider_limit)
+        if provider_limit is not None
+        else max_segments
+    )
     for batch in make_batches(
         pending,
-        max_segments=max_segments,
+        max_segments=effective_max_segments,
         max_characters=max_characters,
     ):
         translated = provider.translate(batch, context)

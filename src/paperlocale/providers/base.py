@@ -40,6 +40,10 @@ class TranslationContext:
 class TranslationProvider(ABC):
     """所有真实 Provider 必须实现的同步批量接口。"""
 
+    # 大多数聊天模型可接收多个结构化片段；专用翻译模型可覆盖
+    # 此值声明更严格的单次上限，由公共流水线统一切批。
+    max_batch_segments: int | None = None
+
     def provenance(self) -> dict[str, object]:
         """返回可写入运行清单的非敏感 Provider 身份。
 

@@ -18,8 +18,14 @@ from .domains import DomainPack
 
 FORMULA_RE = re.compile(r"\{v\d+\}")
 STYLE_RE = re.compile(r"<style\s+id=['\"]\d+['\"]>|</style>", re.IGNORECASE)
-URL_RE = re.compile(r"https?://[^\s)\]}>,;，。；：！？）】》]+", re.IGNORECASE)
-DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s)\]}>,;，。；：！？）】》]+", re.IGNORECASE)
+# 中文译文常把“获取”“下载”等词直接接在 URL 或 DOI 后。若不把汉字作为边界，
+# 正则会误把这些汉字算进标识符，进而把完整保留的网址判成丢失或篡改。
+URL_RE = re.compile(
+    r"https?://[^\s)\]}>,;，。；：！？）】》\u3400-\u9fff]+", re.IGNORECASE
+)
+DOI_RE = re.compile(
+    r"\b10\.\d{4,9}/[^\s)\]}>,;，。；：！？）】》\u3400-\u9fff]+", re.IGNORECASE
+)
 NUMBER_RE = re.compile(r"(?<![\dA-Za-z])[-+−]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?")
 ABBREVIATION_RE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Z][A-Z0-9-]{1,})(?![A-Za-z0-9])")
 ABBREVIATION_EXCLUSIONS = frozenset({"ABSTRACT", "KEYWORDS", "REFERENCES"})
@@ -54,15 +60,33 @@ def _clean_identifiers(values: list[str]) -> Counter[str]:
 def protected_counts(text: str) -> dict[str, Counter[str]]:
     """提取必须保留的标记及出现次数。"""
 
+    # DOI 链接常在列宽边界被拆成 ``https://doi.org/ 10.x/...``；先只合并
+    # 这一种确定性 URL 断行，使译文中的正常完整链接不被误报为篡改。
+    identifier_text = re.sub(
+        r"(https?://doi\.org/)\s+(10\.\d{4,9}/[^\s)\]}>,;，。；：！？）】》\u3400-\u9fff]+)",
+        r"\1\2",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # PDF 版面引擎可能在连字符后插入断行空格，例如 ``HDI- MSDI`` 或
+    # ``SSP5- 8.5``。缩写门禁只消除这一种版面空格，使正确合并后的译文
+    # 仍可通过；原始文字、数字和其他标点检查保持不变。
+    abbreviation_text = re.sub(r"(?<=[a-z])(?=[A-Z]{2})", " ", text)
+    abbreviation_text = re.sub(
+        r"(?<=[A-Z0-9])-\s+(?=[A-Z0-9])",
+        "-",
+        abbreviation_text,
+    )
     abbreviations = (
-        value for value in ABBREVIATION_RE.findall(text)
+        value
+        for value in ABBREVIATION_RE.findall(abbreviation_text)
         if value not in ABBREVIATION_EXCLUSIONS
     )
     return {
         "formula": Counter(FORMULA_RE.findall(text)),
         "style": Counter(STYLE_RE.findall(text)),
-        "url": _clean_identifiers(URL_RE.findall(text)),
-        "doi": _clean_identifiers(DOI_RE.findall(text)),
+        "url": _clean_identifiers(URL_RE.findall(identifier_text)),
+        "doi": _clean_identifiers(DOI_RE.findall(identifier_text)),
         "number": Counter(NUMBER_RE.findall(text)),
         "abbreviation": Counter(abbreviations),
         "unit": Counter(match.group(0) for match in UNIT_RE.finditer(text)),

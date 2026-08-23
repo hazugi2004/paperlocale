@@ -27,10 +27,11 @@
 - [x] Provider 协议与确定性测试 Provider
 - [x] `codex-local`
 - [x] `openai-compatible`
+- [x] `qwen-mt` 专用翻译 Provider 与单片段原子检查点
 - [x] 真实 Provider 领域案例评估与原子 JSON 报告
 - [x] 结构化输出、批次和断点测试
 
-完成标准：两个真实 Provider 产生的结果都必须经过同一门禁，且凭据不落盘。
+完成标准：三个真实 Provider 产生的结果都必须经过同一门禁，且凭据不落盘。
 
 ## 阶段 3：PDF 流水线
 

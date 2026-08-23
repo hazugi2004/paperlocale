@@ -64,6 +64,35 @@ class TranslationContractTest(unittest.TestCase):
         self.assertEqual(protected_counts(source)["number"], {"1960": 1})
         self.assertEqual(validate_translation(source, target), [])
 
+    def test_chinese_text_after_url_and_doi_is_not_part_of_identifier(self) -> None:
+        """中文可直接承接网址，但不能因此把中文后缀误识别为 URL 或 DOI。"""
+
+        source = "Data are available at https://doi.org/10.5281/zenodo.10878698."
+        target = "数据可从https://doi.org/10.5281/zenodo.10878698获取。"
+        self.assertEqual(validate_translation(source, target), [])
+
+    def test_pdf_line_break_inside_doi_url_is_ignored(self) -> None:
+        """doi.org 与 DOI 之间的版面空格不改变链接身份。"""
+
+        source = "Available at https://doi.org/ 10.5281/zenodo.10878698."
+        target = "可在https://doi.org/10.5281/zenodo.10878698获取。"
+        self.assertEqual(validate_translation(source, target), [])
+
+    def test_pdf_line_break_after_hyphen_does_not_change_abbreviation(self) -> None:
+        """版面断行空格可消除，但缩写本身仍必须完整保留。"""
+
+        source = "HDI- MSDI and SSP5- 8.5"
+        target = "HDI-MSDI和SSP5-8.5"
+        self.assertEqual(validate_translation(source, target), [])
+
+    def test_pdf_word_fusion_before_abbreviation_is_ignored(self) -> None:
+        """正文词与大写缩写粘连时，缩写身份仍按可见排版含义核对。"""
+
+        self.assertEqual(
+            validate_translation("andHDI- MSDI", "以及HDI-MSDI"),
+            [],
+        )
+
     def test_atomic_jsonl_and_file_closure(self) -> None:
         source = "Soil moisture was 10 mm."
         sid = segment_id(source)

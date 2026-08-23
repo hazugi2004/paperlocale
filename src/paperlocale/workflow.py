@@ -23,6 +23,7 @@ import pymupdf as fitz
 from fontTools import subset as fonttools_subset
 from fontTools.ttLib import TTFont
 
+from . import __version__
 from .contracts import read_jsonl, validate_translation_files
 from .domains import DomainPack
 from .passthrough import (
@@ -526,6 +527,9 @@ def initialize_run(
         raise FileExistsError(f"运行目录已有清单，请继续原运行或使用新目录：{root}")
     manifest: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
+        # 不同版本可以读取同一清单架构，但新运行必须留下
+        # 实际创建它的 PaperLocale 版本，便于重现和故障定位。
+        "paperlocale_version": __version__,
         "created_at": _utc_now(),
         "updated_at": _utc_now(),
         "status": "initialized",
@@ -1341,6 +1345,8 @@ def run_to_qa(
     dpi: int = 144,
     pdftoppm_bin: str | Path | None = None,
     reference_policy: str = "preserve",
+    max_segments: int = 200,
+    max_characters: int = 30000,
 ) -> dict[str, object]:
     """从当前断点沿唯一生产路径推进到机器 QA，保留人工验收边界。
 
@@ -1361,6 +1367,8 @@ def run_to_qa(
             run_dir=root,
             provider=provider,
             domain=domain,
+            max_segments=max_segments,
+            max_characters=max_characters,
             reference_policy=reference_policy,
         )
         manifest = load_manifest(root)

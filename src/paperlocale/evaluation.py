@@ -10,6 +10,20 @@ from .domains import DomainPack
 from .providers import Segment, TranslationContext, TranslationProvider
 
 
+def _provider_batches(
+    provider: TranslationProvider,
+    segments: list[Segment],
+) -> list[list[Segment]]:
+    """按 Provider 声明的单次片段上限分批。"""
+
+    limit = provider.max_batch_segments
+    if limit is None:
+        return [segments]
+    if limit <= 0:
+        raise ValueError("Provider max_batch_segments 必须为正数")
+    return [segments[index : index + limit] for index in range(0, len(segments), limit)]
+
+
 def evaluate_provider(
     *,
     provider: TranslationProvider,
@@ -36,7 +50,11 @@ def evaluate_provider(
         target_language=domain.target_language,
         domain=domain,
     )
-    translations = provider.translate(segments, context)
+    translations = [
+        translation
+        for batch in _provider_batches(provider, segments)
+        for translation in provider.translate(batch, context)
+    ]
     if [item.id for item in translations] != [item.id for item in segments]:
         raise ValueError("Provider 评估输出顺序或 ID 与领域案例不一致")
 

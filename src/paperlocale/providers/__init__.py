@@ -6,11 +6,13 @@
 from .base import Segment, Translation, TranslationContext, TranslationProvider
 from .codex_local import REASONING_EFFORTS, CodexLocalProvider
 from .openai_compatible import OpenAICompatibleProvider
+from .qwen_mt import QwenMTProvider
 
 __all__ = [
     "REASONING_EFFORTS",
     "CodexLocalProvider",
     "OpenAICompatibleProvider",
+    "QwenMTProvider",
     "Segment",
     "Translation",
     "TranslationContext",

@@ -36,11 +36,60 @@ class _MappingProvider(TranslationProvider):
         return [Translation(segment.id, self.mapping[segment.source]) for segment in segments]
 
 
+class _SingleSegmentProvider(_MappingProvider):
+    """模拟每次只允许一条消息的专用翻译模型。"""
+
+    max_batch_segments = 1
+
+    def translate(
+        self,
+        segments: list[Segment],
+        context: TranslationContext,
+    ) -> list[Translation]:
+        if len(segments) != 1:
+            raise AssertionError("流水线未遵守 Provider 的单片段上限")
+        return super().translate(segments, context)
+
+
 class PipelineTest(unittest.TestCase):
     def test_batches_respect_character_limit(self) -> None:
         segments = [Segment(str(index), "x" * 10) for index in range(5)]
         batches = make_batches(segments, max_segments=10, max_characters=25)
         self.assertEqual([len(batch) for batch in batches], [2, 2, 1])
+
+    def test_provider_batch_limit_overrides_user_batch_size(self) -> None:
+        """用户给出的大批次不能越过 Provider 自身的更严上限。"""
+
+        sources = (
+            "Soil moisture was 10 mm.",
+            "Air temperature was 20 °C.",
+        )
+        provider = _SingleSegmentProvider(
+            {
+                sources[0]: "土壤湿度为10 mm。",
+                sources[1]: "气温为20 °C。",
+            }
+        )
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            segments = root / "segments.jsonl"
+            translations = root / "translations.jsonl"
+            write_jsonl_atomic(
+                segments,
+                [{"id": segment_id(source), "source": source} for source in sources],
+            )
+            self.assertEqual(
+                translate_segment_file(
+                    segments_path=segments,
+                    translations_path=translations,
+                    provider=provider,
+                    domain=domain,
+                    max_segments=200,
+                ),
+                (0, 2),
+            )
+            self.assertEqual(provider.calls, 2)
 
     def test_resume_does_not_call_provider_twice(self) -> None:
         source = "Soil moisture was 10 mm."

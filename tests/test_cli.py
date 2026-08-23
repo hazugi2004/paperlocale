@@ -12,8 +12,15 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 
 class CliTest(unittest.TestCase):
-    def test_package_version_matches_v033_release_line(self) -> None:
-        self.assertEqual(__version__, "0.3.3")
+    def test_package_version_matches_v034_release_line(self) -> None:
+        self.assertEqual(__version__, "0.3.4")
+
+    def test_cli_reports_package_version(self) -> None:
+        """发布包必须能直接报告可核对的版本。"""
+
+        with self.assertRaises(SystemExit) as raised:
+            build_parser().parse_args(["--version"])
+        self.assertEqual(raised.exception.code, 0)
 
     def test_run_parser_accepts_single_command_workflow_options(self) -> None:
         """一键命令必须同时接收源 PDF、运行目录和明确 Provider。"""
@@ -117,6 +124,25 @@ class CliTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "显式提供 --model"):
             _provider_from_args(args)
+
+    def test_run_parser_accepts_qwen_mt_provider(self) -> None:
+        """Qwen-MT 使用独立 Provider，不能冒充通用聊天模型接口。"""
+
+        args = build_parser().parse_args(
+            [
+                "run",
+                "paper.pdf",
+                "--run-dir",
+                "runs/paper",
+                "--provider",
+                "qwen-mt",
+                "--base-url",
+                "https://example.test/compatible-mode/v1",
+                "--model",
+                "qwen-mt-plus",
+            ]
+        )
+        self.assertEqual(args.provider, "qwen-mt")
 
     def test_existing_run_rejects_a_different_source_pdf(self) -> None:
         """复用运行目录时不能把新论文误接到旧片段、译文和 QA 证据上。"""

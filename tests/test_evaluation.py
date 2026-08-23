@@ -48,7 +48,40 @@ class _SourceEchoProvider(TranslationProvider):
         ]
 
 
+class _SingleCaseReferenceProvider(_ReferenceProvider):
+    """模拟评估时仍需单条调用的专用翻译模型。"""
+
+    max_batch_segments = 1
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def translate(
+        self,
+        segments: list[Segment],
+        context: TranslationContext,
+    ) -> list[Translation]:
+        if len(segments) != 1:
+            raise AssertionError("评估器未遵守 Provider 的单案例上限")
+        self.call_count += 1
+        return super().translate(segments, context)
+
+
 class EvaluationTest(unittest.TestCase):
+    def test_evaluation_honors_provider_batch_limit(self) -> None:
+        """评估入口与正式流水线必须使用同一 Provider 边界。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        provider = _SingleCaseReferenceProvider()
+        report = evaluate_provider(
+            provider=provider,
+            provider_name="single-case-test",
+            model=None,
+            domain=domain,
+        )
+        self.assertEqual(provider.call_count, len(domain.eval_cases))
+        self.assertEqual(report["contract_passed_count"], len(domain.eval_cases))
+
     def test_reference_provider_generates_atomic_review_report(self) -> None:
         domain = load_domain_pack("atmospheric-science")
         report = evaluate_provider(

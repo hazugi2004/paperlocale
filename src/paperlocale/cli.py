@@ -6,11 +6,17 @@ import argparse
 import os
 from pathlib import Path
 
+from . import __version__
 from .contracts import validate_translation, validate_translation_files
 from .domains import load_domain_pack
 from .evaluation import evaluate_provider, write_evaluation_report
 from .pipeline import translate_segment_file
-from .providers import REASONING_EFFORTS, CodexLocalProvider, OpenAICompatibleProvider
+from .providers import (
+    REASONING_EFFORTS,
+    CodexLocalProvider,
+    OpenAICompatibleProvider,
+    QwenMTProvider,
+)
 from .references import REFERENCE_POLICIES
 from .workflow import (
     accept_run,
@@ -75,6 +81,11 @@ def _initialize_or_load_run(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paperlocale", description=__doc__)
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     domain = subparsers.add_parser("domain-check", help="验证内置或外部领域包")
@@ -87,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     provider_eval.add_argument("--domain", default="atmospheric-science")
     provider_eval.add_argument(
         "--provider",
-        choices=("codex-local", "openai-compatible"),
+        choices=("codex-local", "openai-compatible", "qwen-mt"),
         required=True,
     )
     provider_eval.add_argument("--model")
@@ -108,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     translate.add_argument("--domain", default="atmospheric-science")
     translate.add_argument(
         "--provider",
-        choices=("codex-local", "openai-compatible"),
+        choices=("codex-local", "openai-compatible", "qwen-mt"),
         required=True,
     )
     translate.add_argument("--model")
@@ -138,7 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=REFERENCE_POLICIES,
         default="preserve",
     )
-    run.add_argument("--provider", choices=("codex-local", "openai-compatible"))
+    run.add_argument(
+        "--provider", choices=("codex-local", "openai-compatible", "qwen-mt")
+    )
     run.add_argument("--model")
     run.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     run.add_argument("--codex-bin")
@@ -197,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_translate.add_argument(
         "--provider",
-        choices=("codex-local", "openai-compatible"),
+        choices=("codex-local", "openai-compatible", "qwen-mt"),
         required=True,
     )
     run_translate.add_argument("--model")
@@ -276,11 +289,14 @@ def _provider_from_args(args: argparse.Namespace):
     if args.reasoning_effort:
         raise ValueError("--reasoning-effort 当前只适用于 codex-local")
     if not args.base_url or not args.model:
-        raise ValueError("openai-compatible 必须提供 --base-url 和 --model")
+        raise ValueError(f"{args.provider} 必须提供 --base-url 和 --model")
     api_key = os.environ.get(args.api_key_env, "")
     if not api_key:
         raise ValueError(f"环境变量 {args.api_key_env} 为空")
-    return OpenAICompatibleProvider(
+    provider_class = (
+        QwenMTProvider if args.provider == "qwen-mt" else OpenAICompatibleProvider
+    )
+    return provider_class(
         base_url=args.base_url,
         api_key=api_key,
         model=args.model,
@@ -354,6 +370,8 @@ def main() -> int:
             dpi=args.dpi,
             pdftoppm_bin=args.pdftoppm_bin,
             reference_policy=args.reference_policy,
+            max_segments=args.max_segments,
+            max_characters=args.max_characters,
         )
         if final_manifest["status"] == "qa_generated":
             comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"

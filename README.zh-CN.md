@@ -28,7 +28,8 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 
 - `codex-local`：调用用户本机已登录的 Codex，仅用于可信本地环境；
 - `openai-compatible`：由用户自备 API Key，可连接 OpenAI 及兼容接口；
-- `atmospheric-science`：内置 17 条大气科学固定术语和 5 个回归案例；
+- `qwen-mt`：由用户自备百炼 API Key，按 Qwen-MT 专用翻译接口的单片段语义调用；
+- `atmospheric-science`：内置 18 条大气科学固定术语和 5 个回归案例；
 - `collect -> translate -> validate -> render -> qa -> accept`：有清单、有断点、不可跳步的单向工作流；
 - 页数、MediaBox、CropBox、图片对象、矢量表格/图形、空白页和内部占位符机器检查；
 - 所有页面的原文—译文并排 PNG，必须显式记录人工视觉验收。
@@ -55,13 +56,14 @@ paperlocale provider-eval \
 ## 安装
 
 需要 Python 3.10–3.13。完整 PDF 流程还需要 Poppler 的 `pdftoppm`：macOS 可执行 `brew install poppler`，Ubuntu 可执行 `sudo apt-get install poppler-utils`。
-PaperLocale 0.3.3 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
+PaperLocale 0.3.4 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
 维护者发布流程与公开核验证据见 [PyPI 发布手册](docs/PYPI_PUBLISHING.zh-CN.md)。
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.3.3"
+python -m pip install "paperlocale[layout]==0.3.4"
+paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
@@ -122,6 +124,23 @@ paperlocale run paper.pdf \
 远程端点必须使用 HTTPS，避免 API Key 经明文网络发送。只有
 `localhost`、`127.0.0.1` 和 `::1` 等本机 loopback 服务可以使用 HTTP。
 
+如需使用阿里云百炼 Qwen-MT 专用翻译模型，密钥仍只放在环境变量中，
+`--base-url` 填 API 版本前缀，不要包含 `/chat/completions`：
+
+```bash
+export PAPERLOCALE_API_KEY="你的-DashScope-Key"
+paperlocale run paper.pdf \
+  --run-dir runs/paper \
+  --provider qwen-mt \
+  --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  --model qwen-mt-plus \
+  --domain atmospheric-science
+```
+
+Qwen-MT 每次只接收一个源片段；PaperLocale 从领域包读取语言、学科提示和
+术语干预，每条译文通过门禁后立即原子保存，再调用下一条。API Key 只放在
+Authorization header，不写入运行清单。
+
 打开 `runs/paper/qa/comparisons/` 逐页核对。确认页面结构、表格、图片、公式和中文断行可接受后，记录验收：
 
 ```bash
@@ -153,7 +172,7 @@ paperlocale confirm-passthrough \
 `confirm-passthrough` 确认清单中全部 ID。v0.3.2 选择原样保留这些对象；完整翻译
 需要上游提供相邻对象上下文或合并能力，不能靠提示词猜测。
 
-schema 4 运行清单会记录领域包内容哈希、Provider、模型、推理强度、Codex CLI
+schema 4 运行清单会记录 PaperLocale 版本、领域包内容哈希、Provider、模型、推理强度、Codex CLI
 版本、collect/render 使用的版面引擎版本，以及人工透传映射的哈希。`codex-local`
 因此要求显式提供 `--model`；没有填写推理强度时会如实记录为空，不伪造实际设置。
 
@@ -220,7 +239,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 74 项单元测试不联网运行，覆盖内容合同、Provider 评估、一键断点续跑、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控文字修复、页面 QA、隔离环境入口和演示产物；
+- 88 项单元测试不联网运行，覆盖内容合同、三种 Provider、单片段批处理边界、Provider 评估、一键断点续跑、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控文字修复、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 版面兼容性夹具包含公式占位、矢量表格与嵌入图片；源文/译文均为 1 个图片对象和 8 次矢量绘制；
 - v0.3.3 两页中文文字修复夹具将 23,278,008 字节原始字体独立子集化为 22,912 字节，最终 PDF 为 19,594 字节；机器 QA 为 0 errors / 0 warnings，并已逐页视觉验收。两类夹具均为项目自有，不提交任何受版权限制的论文；

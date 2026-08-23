@@ -33,6 +33,8 @@ The project does not promise bitwise-identical typography. Chinese text naturall
 
 - `codex-local`: local-only translation through an authenticated Codex CLI session;
 - `openai-compatible`: BYOK access to OpenAI and compatible endpoints;
+- `qwen-mt`: BYOK access to Qwen-MT's dedicated translation endpoint, with
+  one-segment checkpoints and domain-pack terminology intervention;
 - an extensible `atmospheric-science` pack with terminology and evaluation cases;
 - a resumable `collect -> translate -> validate -> render -> qa -> accept` workflow;
 - page geometry, image-object, vector-drawing, blank-page, placeholder, and all-page visual checks.
@@ -70,14 +72,15 @@ every candidate remains marked for manual domain review.
 ## Install
 
 Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workflow.
-PaperLocale 0.3.3 is published on PyPI through attested Trusted Publishing.
+PaperLocale 0.3.4 is published on PyPI through attested Trusted Publishing.
 The audited maintainer procedure and release evidence are documented in
 [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.3.3"
+python -m pip install "paperlocale[layout]==0.3.4"
+paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
@@ -214,6 +217,25 @@ paperlocale run paper.pdf --run-dir runs/paper \
 
 Remote compatible endpoints must use HTTPS. Plain HTTP is accepted only for
 loopback services on `localhost`, `127.0.0.1`, or `::1`.
+
+For Alibaba Cloud Bailian's dedicated Qwen-MT endpoint, keep the API key in an
+environment variable and select the explicit provider. The base URL is the API
+version prefix and must not include `/chat/completions`:
+
+```bash
+export PAPERLOCALE_API_KEY="your-DashScope-key"
+paperlocale run paper.pdf --run-dir runs/paper \
+  --provider qwen-mt \
+  --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  --model qwen-mt-plus \
+  --domain atmospheric-science
+```
+
+Qwen-MT receives only one source segment per request. PaperLocale derives its
+language codes, domain instruction, and glossary terms from the selected
+domain pack, validates every returned segment, and saves each accepted result
+before starting the next request. API keys are sent only in the Authorization
+header and are never written to the run manifest.
 
 For explicit stage-by-stage control, the same production path remains available
 as `init-run -> collect -> reference-review/confirm-references -> optional

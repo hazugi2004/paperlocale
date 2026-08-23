@@ -90,6 +90,34 @@ def _build_line_numbered_reference_pdf(path: Path) -> tuple[str, str, str, str]:
     return body, exact_reference, heading, figure_caption
 
 
+def _build_shared_block_reference_pdf(path: Path) -> str:
+    """生成标题与首条书目可能共享文本块的紧凑版式。"""
+
+    reference = (
+        "Sutanto, S. J., 2024: Sensitivity of dry indicators to climate. "
+        "Hydrol. Earth Syst. Sci., 28, 100-120. "
+        "https://doi.org/10.1000/example.2024."
+    )
+    document = canvas.Canvas(str(path))
+    document.setFont("Helvetica-Bold", 11)
+    document.drawString(40, 780, "References")
+    document.setFont("Helvetica", 8)
+    # 极小行距会让 PDF 提取器将标题和书目归入同一文本块。
+    document.drawString(
+        40,
+        768,
+        "Sutanto, S. J., 2024: Sensitivity of dry indicators to climate. ",
+    )
+    document.drawString(
+        40,
+        756,
+        "Hydrol. Earth Syst. Sci., 28, 100-120. "
+        "https://doi.org/10.1000/example.2024.",
+    )
+    document.save()
+    return reference
+
+
 class ReferenceReviewTest(unittest.TestCase):
     def test_exact_matches_and_manual_ids_form_bound_map(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -195,6 +223,31 @@ class ReferenceReviewTest(unittest.TestCase):
             self.assertIsNotNone(REFERENCE_HEADING_RE.fullmatch(value), value)
         for value in rejected:
             self.assertIsNone(REFERENCE_HEADING_RE.fullmatch(value), value)
+
+    def test_heading_is_found_when_pdf_groups_it_with_reference_text(self) -> None:
+        """文本块合并不能导致整个参考文献区域漏检。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "shared-block.pdf"
+            reference = _build_shared_block_reference_pdf(source_pdf)
+            segments = root / "segments.jsonl"
+            rows = [
+                {"id": segment_id(source), "source": source}
+                for source in ("References", reference)
+            ]
+            write_jsonl_atomic(segments, rows)
+
+            summary = prepare_reference_review(
+                source_pdf=source_pdf,
+                source_sha256=hashlib.sha256(source_pdf.read_bytes()).hexdigest(),
+                segments_path=segments,
+                output_dir=root,
+            )
+            automatic = set(summary["automatic_reference_segment_ids"])
+            self.assertEqual(summary["heading_pages"], [1])
+            self.assertTrue(summary["automatic_region_available"])
+            self.assertIn(segment_id(reference), automatic)
 
 
 if __name__ == "__main__":

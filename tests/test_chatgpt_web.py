@@ -94,6 +94,8 @@ class ChatGPTWebBridgeTest(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn("普通 **Chat** 模式", prompt)
+            self.assertIn("一个且仅一个 `json` 代码块", prompt)
+            self.assertIn("代码块的“复制”按钮", prompt)
             self.assertIn(str(exported["batches"][0]["batch_sha256"]), prompt)
             manifest = load_manifest(run_dir)
             self.assertTrue(manifest["chatgpt_web_batch_manifest_sha256"])

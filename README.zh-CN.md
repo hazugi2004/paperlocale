@@ -194,6 +194,21 @@ paperlocale apply-text-repair \
 取得，不能提交到仓库；TTF/OTF 通常比字体集合产生更干净的抽取元数据，但任何
 CMap 警告和最终视觉效果仍由同一 QA 流程检查。
 
+若损坏对象只是已确认的孤立残片（例如固定首字母与可译对象切分后遗留
+`limate`），可显式传入空 replacement：
+
+```bash
+paperlocale apply-text-repair \
+  --run-dir runs/paper \
+  --page 2 \
+  --rect 120 29 144 39 \
+  --replacement '' \
+  --description "删除已核对的孤立英文残片"
+```
+
+只删除模式不需要 `--font-file` 或 `--font-size`，不会嵌入空字体子集；
+清单以 `text-removal` 独立记录。只包含空格的 replacement 仍会被拒绝。
+
 需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> reference-review/confirm-references -> 可选 confirm-passthrough -> translate -> validate -> render -> qa -> accept` 命令序列。
 
 ## 领域包扩展

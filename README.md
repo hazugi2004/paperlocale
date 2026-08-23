@@ -206,6 +206,20 @@ repository; a TTF/OTF usually produces cleaner extraction metadata than a font
 collection, but every result still goes through the same QA warnings and visual
 review.
 
+For a reviewed fragment that must only be removed, pass an explicit empty
+replacement and omit the font options:
+
+```bash
+paperlocale apply-text-repair --run-dir runs/paper \
+  --page 2 --rect 120 29 144 39 --replacement '' \
+  --description "Remove a reviewed split-token fragment"
+```
+
+Removal mode embeds no font, records `text-removal` in `repair_history`, and
+still enforces the same rectangle, outside-text, page, image, link, vector,
+backup, QA, and human-acceptance gates. Whitespace-only replacements are
+rejected.
+
 For a BYOK OpenAI-compatible endpoint:
 
 ```bash

@@ -64,6 +64,17 @@ class TranslationContractTest(unittest.TestCase):
         self.assertEqual(protected_counts(source)["number"], {"1960": 1})
         self.assertEqual(validate_translation(source, target), [])
 
+    def test_citation_numbers_attached_to_english_and_chinese_are_equivalent(self) -> None:
+        """英文论文引文号常紧贴单词，中文译文也可紧贴汉字。"""
+
+        source = "Vegetation productivity3,17,18 follows earlier studies24,25."
+        target = "植被生产力3,17,18与早期研究24,25的结果一致。"
+        self.assertEqual(
+            protected_counts(source)["number"],
+            protected_counts(target)["number"],
+        )
+        self.assertEqual(validate_translation(source, target), [])
+
     def test_atomic_jsonl_and_file_closure(self) -> None:
         source = "Soil moisture was 10 mm."
         sid = segment_id(source)

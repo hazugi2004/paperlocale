@@ -1086,10 +1086,10 @@ def _create_text_repair_candidate(
     page_number: int,
     rectangle: fitz.Rect,
     replacement: str,
-    font_file: Path,
-    font_size: float,
+    font_file: Path | None,
+    font_size: float | None,
 ) -> dict[str, object]:
-    """只在内存候选中删除指定文字并嵌入经过子集化的替换字体。"""
+    """只在候选中删除指定文字，并在需要时嵌入子集替换字体。"""
 
     document = fitz.open(rendered)
     try:
@@ -1118,8 +1118,26 @@ def _create_text_repair_candidate(
         if list(page.annots(types=(fitz.PDF_ANNOT_REDACT,)) or []):
             raise ValueError(f"第{page_number}页已有 redaction 标注，拒绝批量应用")
 
-        subset_bytes, font_evidence = _subset_repair_font(font_file, replacement)
-        font_resource_name = str(font_evidence["font_resource_name"])
+        if replacement:
+            if font_file is None or font_size is None:
+                raise ValueError("非空 replacement 必须提供 font-file 和 font-size")
+            subset_bytes, font_evidence = _subset_repair_font(font_file, replacement)
+            font_resource_name = str(font_evidence["font_resource_name"])
+        else:
+            # 只删除模式不嵌入任何字体程序。保留显式空字段，
+            # 使 repair_history 能区分“没有记录”与“经审计的文字删除”。
+            subset_bytes = b""
+            font_resource_name = ""
+            font_evidence = {
+                "font_file": None,
+                "font_file_sha256": None,
+                "font_name": None,
+                "font_subset_sha256": None,
+                "font_resource_name": None,
+                "font_program_bytes_before_subset": 0,
+                "font_program_bytes_after_subset": 0,
+                "font_subset_bytes_saved": 0,
+            }
         # redaction 只负责移除文字；透明填充避免白色覆盖层遮住矩形内仍保留的
         # 图片或矢量对象。下面的 images/graphics NONE 则禁止删除这些对象本身。
         page.add_redact_annot(rectangle, fill=False, cross_out=False)
@@ -1131,27 +1149,28 @@ def _create_text_repair_candidate(
         if not applied:
             raise RuntimeError("PyMuPDF 没有应用文字修复 redaction")
 
-        font_xref = page.insert_font(
-            fontname=font_resource_name,
-            fontbuffer=subset_bytes,
-        )
-        remaining_height = page.insert_textbox(
-            rectangle,
-            replacement,
-            fontname=font_resource_name,
-            fontsize=font_size,
-            color=(0, 0, 0),
-        )
-        if remaining_height < 0:
-            raise ValueError(
-                "replacement 无法放入 rect；请扩大矩形或减小 --font-size"
+        if replacement:
+            font_xref = page.insert_font(
+                fontname=font_resource_name,
+                fontbuffer=subset_bytes,
             )
+            remaining_height = page.insert_textbox(
+                rectangle,
+                replacement,
+                fontname=font_resource_name,
+                fontsize=font_size,
+                color=(0, 0, 0),
+            )
+            if remaining_height < 0:
+                raise ValueError(
+                    "replacement 无法放入 rect；请扩大矩形或减小 --font-size"
+                )
 
-        embedded_font = document.extract_font(font_xref)[-1]
-        if hashlib.sha256(embedded_font).hexdigest() != font_evidence[
-            "font_subset_sha256"
-        ]:
-            raise RuntimeError("嵌入的修复字体与已验证子集哈希不一致")
+            embedded_font = document.extract_font(font_xref)[-1]
+            if hashlib.sha256(embedded_font).hexdigest() != font_evidence[
+                "font_subset_sha256"
+            ]:
+                raise RuntimeError("嵌入的修复字体与已验证子集哈希不一致")
         document.save(candidate, garbage=4, deflate=True)
     finally:
         document.close()
@@ -1234,18 +1253,22 @@ def apply_text_repair(
     page_number: int,
     rectangle: tuple[float, float, float, float],
     replacement: str,
-    font_file: Path,
-    font_size: float,
+    font_file: Path | None,
+    font_size: float | None,
     description: str,
 ) -> Path:
     """在一个明确矩形内受控替换文字，并强制重新执行机器与人工 QA。"""
 
-    if not replacement.strip():
-        raise ValueError("replacement 不能为空")
+    removal_only = replacement == ""
+    if not removal_only and not replacement.strip():
+        raise ValueError("replacement 不能只包含空白字符")
     if not description.strip():
         raise ValueError("description 不能为空")
-    if not math.isfinite(font_size) or font_size <= 0:
-        raise ValueError("font-size 必须是有限且大于 0 的数值")
+    if not removal_only:
+        if font_file is None or font_size is None:
+            raise ValueError("非空 replacement 必须提供 font-file 和 font-size")
+        if not math.isfinite(font_size) or font_size <= 0:
+            raise ValueError("font-size 必须是有限且大于 0 的数值")
 
     root = run_dir.expanduser().resolve()
     manifest = load_manifest(root)
@@ -1256,8 +1279,8 @@ def apply_text_repair(
         )
     _verify_source_pdf(manifest)
     rendered = _verify_rendered_pdf(manifest)
-    resolved_font = font_file.expanduser().resolve()
-    if not resolved_font.is_file():
+    resolved_font = font_file.expanduser().resolve() if font_file else None
+    if resolved_font is not None and not resolved_font.is_file():
         raise FileNotFoundError(f"font-file 不存在：{resolved_font}")
 
     repair_rectangle = fitz.Rect(rectangle)
@@ -1302,7 +1325,7 @@ def apply_text_repair(
             history.append(
                 {
                     "applied_at": _utc_now(),
-                    "type": "text-overlay",
+                    "type": "text-removal" if removal_only else "text-overlay",
                     "description": description.strip(),
                     "page": page_number,
                     "rect": [round(float(value), 3) for value in repair_rectangle],

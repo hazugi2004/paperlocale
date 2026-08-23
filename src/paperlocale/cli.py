@@ -269,7 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     text_repair = subparsers.add_parser(
         "apply-text-repair",
-        help="在明确页面矩形内替换文字、子集字体并记录修复历史",
+        help="在明确页面矩形内替换或删除文字，并记录修复历史",
     )
     text_repair.add_argument("--run-dir", type=Path, required=True)
     text_repair.add_argument(
@@ -286,9 +286,21 @@ def build_parser() -> argparse.ArgumentParser:
         metavar=("X0", "Y0", "X1", "Y1"),
         help="PyMuPDF PDF 点坐标：左、上、右、下",
     )
-    text_repair.add_argument("--replacement", required=True)
-    text_repair.add_argument("--font-file", type=Path, required=True)
-    text_repair.add_argument("--font-size", type=float, required=True)
+    text_repair.add_argument(
+        "--replacement",
+        required=True,
+        help="替换文字；显式传入空字符串时只删除 rect 内文字",
+    )
+    text_repair.add_argument(
+        "--font-file",
+        type=Path,
+        help="非空 replacement 必需；只删除模式不使用",
+    )
+    text_repair.add_argument(
+        "--font-size",
+        type=float,
+        help="非空 replacement 必需；只删除模式不使用",
+    )
     text_repair.add_argument("--description", required=True)
 
     accept = subparsers.add_parser("accept", help="记录人工逐页视觉验收")

@@ -54,7 +54,9 @@ paperlocale chatgpt-web-export \
 1. 登录 `chatgpt.com`，选择普通 `Chat`，不要选择 Codex 或 ChatGPT Work；
 2. 新建独立聊天并粘贴一个完整 `batch-NNN.md`；
 3. 核对回复只有 `batch_id`、`batch_sha256`、`translations` 三个顶层字段；
-4. 去掉 Markdown 代码围栏，把完整 JSON 保存到清单指定的响应路径；
+4. 使用 `json` 代码块自带的“复制”按钮，把其中的纯 JSON 内容
+   保存到清单指定的响应路径。不要使用整条回复的“复制回复”；
+   裸 JSON 中的 URL 或邮箱可能被网页富文本层改写为 Markdown 链接；
 5. 按网页模型选择器原样记下模型标签，不能事后猜测底层模型版本。
 
 导入回复：

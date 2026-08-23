@@ -908,6 +908,34 @@ class WorkflowTest(unittest.TestCase):
             )
             self.assertEqual(list(run_dir.glob(".text-repair-*.pdf")), [])
 
+    def test_apply_text_repair_can_remove_a_bound_fragment_without_font(self) -> None:
+        """只删除模式必须严格限定矩形，且不嵌入空字体子集。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, rendered, rectangle, _font_file = self._make_text_repair_run(root)
+            apply_text_repair(
+                run_dir,
+                page_number=1,
+                rectangle=rectangle,
+                replacement="",
+                font_file=None,
+                font_size=None,
+                description="删除跨对象残留文字",
+            )
+
+            repaired = fitz.open(rendered)
+            try:
+                text = repaired[0].get_text()
+            finally:
+                repaired.close()
+            history = load_manifest(run_dir)["repair_history"][0]
+            self.assertNotIn("broken caption", text)
+            self.assertIn("Stable outside text 10 mm", text)
+            self.assertEqual(history["type"], "text-removal")
+            self.assertIsNone(history["font_file"])
+            self.assertEqual(history["font_program_bytes_after_subset"], 0)
+
     def test_apply_text_repair_uses_distinct_subsets_across_repairs(self) -> None:
         """同一字体的连续修复必须为新增字形建立不同资源，不能复用缺字子集。"""
 

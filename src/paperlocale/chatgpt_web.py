@@ -131,8 +131,10 @@ def _web_prompt(
 请在 ChatGPT 网页端的普通 **Chat** 模式完成本批翻译。不要切换到 Codex 或
 ChatGPT Work。不要上传源 PDF；本提示只包含版面引擎已经拆出的具体片段。
 
-只返回一个合法 JSON 对象，不要使用 Markdown 代码围栏，也不要添加解释。顶层字段
-必须且只能是 `batch_id`、`batch_sha256` 和 `translations`：
+只返回一个合法 JSON 对象，并把它放入一个且仅一个 `json` 代码块。
+代码块外不要添加解释。这样可避免 ChatGPT 富文本层把 URL 或邮箱
+自动改写为 Markdown 链接。顶层字段必须且只能是 `batch_id`、
+`batch_sha256` 和 `translations`：
 
 {{
   "batch_id": "{batch_id}",
@@ -143,7 +145,8 @@ ChatGPT Work。不要上传源 PDF；本提示只包含版面引擎已经拆出�
 }}
 
 `batch_id` 与 `batch_sha256` 必须逐字回显；`translations` 必须覆盖下方全部输入 ID，
-不得缺失、重复或增加 ID。完成后把整个 JSON 对象保存为
+不得缺失、重复或增加 ID。完成后使用代码块的“复制”按钮，把
+其中的 JSON 对象保存为
 `responses/{batch_id}.json`，再交给 PaperLocale 导入。
 
 {build_prompt(batch, context)}

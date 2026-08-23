@@ -12,8 +12,8 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 
 class CliTest(unittest.TestCase):
-    def test_package_version_matches_v033_release_line(self) -> None:
-        self.assertEqual(__version__, "0.3.3")
+    def test_package_version_matches_v040_candidate_line(self) -> None:
+        self.assertEqual(__version__, "0.4.0")
 
     def test_run_parser_accepts_single_command_workflow_options(self) -> None:
         """一键命令必须同时接收源 PDF、运行目录和明确 Provider。"""
@@ -78,6 +78,19 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.segment_id, ["formula-id"])
         self.assertEqual(args.reason, "pure formula")
         self.assertEqual(args.confirmed_by, "reviewer")
+
+    def test_chatgpt_web_commands_require_explicit_model_label_on_import(self) -> None:
+        """网页桥接使用独立导出/导入命令，不能冒充自动 API Provider。"""
+
+        exported = build_parser().parse_args(
+            ["chatgpt-web-export", "--run-dir", "run"]
+        )
+        self.assertEqual(exported.command, "chatgpt-web-export")
+        self.assertEqual(exported.max_segments, 20)
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(
+                ["chatgpt-web-import", "--run-dir", "run"]
+            )
 
     def test_apply_text_repair_requires_explicit_geometry_and_font(self) -> None:
         """文字覆盖不得猜测页码、矩形、字体或字号。"""

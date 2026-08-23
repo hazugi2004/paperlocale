@@ -28,6 +28,8 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 
 - `codex-local`：调用用户本机已登录的 Codex，仅用于可信本地环境；
 - `openai-compatible`：由用户自备 API Key，可连接 OpenAI 及兼容接口；
+- `chatgpt-web` 人工桥接：把哈希绑定批次粘贴到 ChatGPT 网页端普通 Chat，再导入
+  严格 JSON 回复；项目不登录、抓取或自动点击网页；
 - `atmospheric-science`：内置 17 条大气科学固定术语和 5 个回归案例；
 - `collect -> translate -> validate -> render -> qa -> accept`：有清单、有断点、不可跳步的单向工作流；
 - 页数、MediaBox、CropBox、图片对象、矢量表格/图形、空白页和内部占位符机器检查；
@@ -57,6 +59,8 @@ paperlocale provider-eval \
 需要 Python 3.10–3.13。完整 PDF 流程还需要 Poppler 的 `pdftoppm`：macOS 可执行 `brew install poppler`，Ubuntu 可执行 `sudo apt-get install poppler-utils`。
 PaperLocale 0.3.3 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
 维护者发布流程与公开核验证据见 [PyPI 发布手册](docs/PYPI_PUBLISHING.zh-CN.md)。
+v0.4.0 网页桥接目前只是源码候选，尚未发布到 PyPI；操作与额度边界见
+[ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
 ```bash
 python -m venv .venv

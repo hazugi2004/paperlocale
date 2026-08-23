@@ -33,6 +33,8 @@ The project does not promise bitwise-identical typography. Chinese text naturall
 
 - `codex-local`: local-only translation through an authenticated Codex CLI session;
 - `openai-compatible`: BYOK access to OpenAI and compatible endpoints;
+- an auditable manual ChatGPT Web bridge that exports hash-bound prompts and imports
+  strict JSON responses without browser login, scraping, or automation;
 - an extensible `atmospheric-science` pack with terminology and evaluation cases;
 - a resumable `collect -> translate -> validate -> render -> qa -> accept` workflow;
 - page geometry, image-object, vector-drawing, blank-page, placeholder, and all-page visual checks.
@@ -73,6 +75,9 @@ Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workfl
 PaperLocale 0.3.3 is published on PyPI through attested Trusted Publishing.
 The audited maintainer procedure and release evidence are documented in
 [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
+The manual ChatGPT Web bridge is an unreleased v0.4.0 source candidate; see
+[docs/CHATGPT_WEB_MANUAL.zh-CN.md](docs/CHATGPT_WEB_MANUAL.zh-CN.md) for its
+copy/paste workflow and usage-limit boundary.
 
 ```bash
 python -m venv .venv

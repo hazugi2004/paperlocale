@@ -6,6 +6,10 @@ import argparse
 import os
 from pathlib import Path
 
+from .chatgpt_web import (
+    export_chatgpt_web_batches,
+    import_chatgpt_web_responses,
+)
 from .contracts import validate_translation, validate_translation_files
 from .domains import load_domain_pack
 from .evaluation import evaluate_provider, write_evaluation_report
@@ -186,6 +190,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     confirm_passthrough.add_argument("--reason", required=True)
     confirm_passthrough.add_argument("--confirmed-by", required=True)
+
+    chatgpt_export = subparsers.add_parser(
+        "chatgpt-web-export",
+        help="导出供 ChatGPT 网页端普通 Chat 人工翻译的哈希绑定批次",
+    )
+    chatgpt_export.add_argument("--run-dir", type=Path, required=True)
+    chatgpt_export.add_argument("--domain", default="atmospheric-science")
+    chatgpt_export.add_argument(
+        "--reference-policy",
+        choices=REFERENCE_POLICIES,
+        default="preserve",
+    )
+    chatgpt_export.add_argument("--max-segments", type=int, default=20)
+    chatgpt_export.add_argument("--max-characters", type=int, default=12000)
+
+    chatgpt_import = subparsers.add_parser(
+        "chatgpt-web-import",
+        help="导入并验证从 ChatGPT 网页端普通 Chat 保存的 JSON 回复",
+    )
+    chatgpt_import.add_argument("--run-dir", type=Path, required=True)
+    chatgpt_import.add_argument("--domain", default="atmospheric-science")
+    chatgpt_import.add_argument(
+        "--reference-policy",
+        choices=REFERENCE_POLICIES,
+        default="preserve",
+    )
+    chatgpt_import.add_argument(
+        "--model-label",
+        required=True,
+        help="按网页模型选择器原样记录的人工可见模型标签",
+    )
 
     run_translate = subparsers.add_parser("translate", help="翻译一个已初始化运行")
     run_translate.add_argument("--run-dir", type=Path, required=True)
@@ -392,6 +427,28 @@ def main() -> int:
             confirmed_by=args.confirmed_by,
         )
         print(f"人工透传映射已确认：{len(mapping['entries'])} 个片段")
+        return 0
+    if args.command == "chatgpt-web-export":
+        batch_manifest = export_chatgpt_web_batches(
+            run_dir=args.run_dir,
+            domain=load_domain_pack(args.domain),
+            max_segments=args.max_segments,
+            max_characters=args.max_characters,
+            reference_policy=args.reference_policy,
+        )
+        print(
+            f"ChatGPT Web 批次已导出：{batch_manifest['batch_count']} 批，"
+            f"{batch_manifest['segment_count']} 个片段；请逐个保存网页 JSON 回复"
+        )
+        return 0
+    if args.command == "chatgpt-web-import":
+        reused, translated = import_chatgpt_web_responses(
+            run_dir=args.run_dir,
+            domain=load_domain_pack(args.domain),
+            model_label=args.model_label,
+            reference_policy=args.reference_policy,
+        )
+        print(f"ChatGPT Web 回复导入完成：复用 {reused}，新译 {translated}")
         return 0
     if args.command == "translate":
         pack = load_domain_pack(args.domain)

@@ -2,7 +2,20 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
-## Unreleased
+## 0.4.0 - 未发布
+
+### Added
+
+- 增加 `chatgpt-web-export` / `chatgpt-web-import` 人工网页桥接：导出带哈希的
+  大气科学翻译批次，在 ChatGPT 网页端普通 Chat 中人工交换严格 JSON，再复用
+  现有内容合同、部分批次恢复、参考文献 `preserve`、PDF 重建和逐页 QA。
+- 网页批次绑定源 PDF、片段、领域包、参考文献和透传映射身份；导入记录人工可见
+  模型标签，保存每次回复原始字节快照和导入历史，不保存登录态、Cookie 或 API Key。
+
+### Security
+
+- PaperLocale 不登录、不抓取也不自动点击 `chatgpt.com`；网页 Chat 不是官方 API，
+  因此不能作为无人值守 Provider，也不能保证任何账户的具体用量或额度归属。
 
 ## 0.3.3 - 2026-08-21
 

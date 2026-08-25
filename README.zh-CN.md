@@ -22,7 +22,8 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 
 - `codex-local`：调用用户本机已登录的 Codex，仅用于可信本地环境；
 - `openai-compatible`：由用户自备 API Key，可连接 OpenAI 及兼容接口；
-- `atmospheric-science`：内置 17 条大气科学固定术语和 5 个回归案例；
+- `atmospheric-science`：内置大气科学固定术语和 5 个回归案例；
+- `ecology`：内置生态学固定术语和 5 个回归案例；
 - `collect -> translate -> validate -> render -> qa -> accept`：有清单、有断点、不可跳步的单向工作流；
 - 页数、MediaBox、CropBox、图片对象、空白页和内部占位符机器检查；
 - 所有页面的原文—译文并排 PNG，必须显式记录人工视觉验收。
@@ -31,7 +32,7 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 
 ## 领域包
 
-首个内置领域包为 `atmospheric-science`，包括固定术语、保护规则、翻译约束和回归案例。后续医学、地学、生态学等领域只需新增领域包，不修改翻译核心。
+当前内置领域包包括 `atmospheric-science` 和 `ecology`，每个包都包括固定术语、保护规则、翻译约束和回归案例。后续医学、地学等领域只需新增领域包，不修改翻译核心。
 
 ## 安装
 

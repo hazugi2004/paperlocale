@@ -24,7 +24,7 @@ The project does not promise bitwise-identical typography. Chinese text naturall
 
 - `codex-local`: local-only translation through an authenticated Codex CLI session;
 - `openai-compatible`: BYOK access to OpenAI and compatible endpoints;
-- an extensible `atmospheric-science` pack with terminology and evaluation cases;
+- built-in `atmospheric-science` and `ecology` packs with terminology and evaluation cases;
 - a resumable `collect -> translate -> validate -> render -> qa -> accept` workflow;
 - page geometry, image object, blank-page, placeholder, and all-page visual checks.
 
@@ -32,10 +32,11 @@ PaperLocale never reads or copies Codex authentication files. ChatGPT-managed Co
 
 ## Domain packs
 
-The first built-in pack is `atmospheric-science`. A pack contains a manifest, glossary, prompt rules, and evaluation cases. New disciplines can be added without changing the translation pipeline.
+The built-in packs are `atmospheric-science` and `ecology`. Each pack contains a manifest, glossary, prompt rules, and evaluation cases. New disciplines can be added without changing the translation pipeline.
 
 ```bash
 python -m paperlocale domain-check atmospheric-science
+python -m paperlocale domain-check ecology
 python -m paperlocale validate-segments \
   --segments segments.jsonl \
   --translations translations.jsonl \

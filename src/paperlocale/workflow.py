@@ -55,6 +55,10 @@ STATES = (
     "accepted",
 )
 SCHEMA_VERSION = 4
+UNATTENDED_ACTOR = "paperlocale-unattended"
+UNATTENDED_PASSTHROUGH_REASON = (
+    "PaperLocale 确定性版面安全规则识别为不能独立翻译，无人值守模式原样保留"
+)
 
 
 def _utc_now() -> str:
@@ -333,6 +337,82 @@ def _load_reference_configuration(
     return selected, map_path
 
 
+def _prepare_unattended_configuration(
+    root: Path,
+    manifest: dict[str, object],
+) -> dict[str, object]:
+    """为无人值守运行生成确定性参考文献与片段安全映射。
+
+    无人值守模式只接受现有算法已经给出的确定性结果：不猜测
+    额外参考文献范围，也不把普通合同失败改为透传。生成的映射仍
+    绑定源 PDF 和 ``segments.jsonl`` 哈希，因此断点续跑不会静默换文件。
+    """
+
+    if manifest["status"] != "collected":
+        raise ValueError(
+            f"无人值守准备只接受 collected，当前为 {manifest['status']}"
+        )
+    reference_map_path = root / "reference_map.json"
+    if not reference_map_path.is_file():
+        confirm_reference_run(
+            root,
+            additional_segment_ids=[],
+            excluded_automatic_segment_ids=[],
+            confirmed_by=UNATTENDED_ACTOR,
+        )
+        manifest = load_manifest(root)
+    reference_mapping = load_reference_map(
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        map_path=reference_map_path,
+    )
+    reference_ids = {
+        str(segment_id)
+        for segment_id in reference_mapping["reference_segment_ids"]
+    }
+
+    # 先生成现有的确定性安全清单，再只补齐尚未映射的 ID。
+    # 这些片段是被版面引擎拆断的 ASCII 词或页面不可定位的短对象；
+    # 让模型独立改写它们可能比原样保留更容易损坏 PDF 文本对象。
+    summary = prepare_segment_safety_review(
+        source_pdf=Path(str(manifest["source_pdf"])),
+        source_sha256=str(manifest["source_sha256"]),
+        segments_path=Path(str(manifest["segments_path"])),
+        output_dir=root,
+    )
+    required_ids = [
+        str(segment_id)
+        for segment_id in summary["required_passthrough_segment_ids"]
+        if str(segment_id) not in reference_ids
+    ]
+    passthrough_ids: set[str] = set()
+    passthrough_map_path = root / "passthrough_map.json"
+    if passthrough_map_path.is_file():
+        passthrough_ids, _ = _load_passthrough_configuration(root, manifest)
+    missing_ids = [
+        segment_id
+        for segment_id in required_ids
+        if segment_id not in passthrough_ids
+    ]
+    if missing_ids:
+        confirm_passthrough_run(
+            root,
+            segment_ids=missing_ids,
+            reason=UNATTENDED_PASSTHROUGH_REASON,
+            confirmed_by=UNATTENDED_ACTOR,
+        )
+        manifest = load_manifest(root)
+
+    # 清单中明确记录自动模式及其实际采用的边界数量，
+    # 后续不会把系统决定误报为人工复核。
+    manifest["execution_mode"] = "unattended"
+    manifest["unattended_reference_segment_count"] = len(reference_ids)
+    manifest["unattended_passthrough_segment_count"] = len(required_ids)
+    manifest["schema_version"] = SCHEMA_VERSION
+    save_manifest(root, manifest)
+    return manifest
+
+
 def _load_passthrough_configuration(
     root: Path,
     manifest: dict[str, object],
@@ -469,6 +549,54 @@ def _recorded_segment_safety_configuration(
     if missing:
         raise ValueError(f"片段安全复核所需透传映射不闭合：{missing}")
     return required
+
+
+def _provider_resume_identity(provenance: dict[str, object]) -> dict[str, object]:
+    """返回决定断点能否续跑的 Provider 配置身份。
+
+    Codex CLI 会随桌面应用更新，其版本号是可审计的执行环境信息，
+    但不改变用户已锁定的 Provider、模型或推理强度。其他 Provider
+    仍使用完整 provenance 作为断点身份，不扩大兼容边界。
+    """
+
+    identity = dict(provenance)
+    if identity.get("provider") == "codex-local":
+        identity.pop("codex_cli_version", None)
+    return identity
+
+
+def _record_provider_version_transition(
+    manifest: dict[str, object],
+    *,
+    recorded_provider: dict[str, object],
+    current_provider: dict[str, object],
+) -> None:
+    """记录同一 Codex 配置在断点间的 CLI 版本变化。"""
+
+    history_value = manifest.get("translation_provider_history")
+    if history_value is None:
+        history: list[dict[str, object]] = [
+            {
+                "observed_at": str(manifest.get("created_at", "")),
+                "translation_count_before": 0,
+                "provenance": dict(recorded_provider),
+            }
+        ]
+    elif isinstance(history_value, list) and all(
+        isinstance(entry, dict) for entry in history_value
+    ):
+        history = list(history_value)
+    else:
+        raise ValueError("translation_provider_history 字段非法")
+
+    current_entry = {
+        "observed_at": _utc_now(),
+        "translation_count_before": int(manifest.get("translation_count", 0)),
+        "provenance": dict(current_provider),
+    }
+    if not history or history[-1].get("provenance") != current_entry["provenance"]:
+        history.append(current_entry)
+    manifest["translation_provider_history"] = history
 
 
 def _layout_provenance(executable: str) -> dict[str, str]:
@@ -682,6 +810,7 @@ def translate_run(
     max_segments: int = 200,
     max_characters: int = 30000,
     reference_policy: str = "preserve",
+    unattended: bool = False,
 ) -> tuple[int, int]:
     """翻译已收集片段，成功后把运行推进到 ``translated``。"""
 
@@ -691,6 +820,8 @@ def translate_run(
         raise ValueError(f"translate 不接受状态：{manifest['status']}")
     _verify_source_pdf(manifest)
     _verify_domain_languages(manifest, domain)
+    if unattended and manifest["status"] == "collected":
+        manifest = _prepare_unattended_configuration(root, manifest)
     reference_ids, reference_map_path = _load_reference_configuration(
         root,
         manifest,
@@ -714,14 +845,23 @@ def translate_run(
     provider_provenance = provider.provenance()
     recorded_provider = manifest.get("translation_provider")
     if isinstance(recorded_provider, dict) and recorded_provider != provider_provenance:
-        raise ValueError(
-            "Provider 配置与已有断点译文不一致："
-            f"run={recorded_provider!r}, current={provider_provenance!r}"
+        if _provider_resume_identity(recorded_provider) != _provider_resume_identity(
+            provider_provenance
+        ):
+            raise ValueError(
+                "Provider 配置与已有断点译文不一致："
+                f"run={recorded_provider!r}, current={provider_provenance!r}"
+            )
+        _record_provider_version_transition(
+            manifest,
+            recorded_provider=recorded_provider,
+            current_provider=provider_provenance,
         )
     # 在模型调用前绑定领域包和 Provider；即使本批只有部分译文通过，
     # 已原子保存的断点也不会变成来源不明的数据。
     manifest["domain_pack"] = _domain_provenance(domain)
-    manifest["translation_provider"] = provider_provenance
+    if not isinstance(recorded_provider, dict):
+        manifest["translation_provider"] = provider_provenance
     manifest["reference_policy"] = reference_policy
     manifest["reference_map"] = str(reference_map_path.resolve())
     manifest["reference_map_sha256"] = _sha256(reference_map_path)
@@ -923,6 +1063,257 @@ def _verify_vector_repair(before: Path, candidate: Path) -> list[dict[str, int]]
     return changes
 
 
+def _vector_drawing_key(drawing: dict[str, object]) -> tuple[float, ...]:
+    """使用与机器 QA 一致的 0.01 PDF 点边界生成矢量对象身份。"""
+
+    return tuple(round(float(value), 2) for value in drawing["rect"])
+
+
+def _missing_source_vector_drawings(
+    source_page: fitz.Page,
+    translated_page: fitz.Page,
+) -> list[dict[str, object]]:
+    """按边界和重复次数返回译文页中缺失的源矢量绘图。"""
+
+    translated_counts: dict[tuple[float, ...], int] = {}
+    for drawing in translated_page.get_drawings():
+        key = _vector_drawing_key(drawing)
+        translated_counts[key] = translated_counts.get(key, 0) + 1
+
+    missing: list[dict[str, object]] = []
+    for drawing in source_page.get_drawings():
+        key = _vector_drawing_key(drawing)
+        if translated_counts.get(key, 0):
+            translated_counts[key] -= 1
+        else:
+            missing.append(drawing)
+    return missing
+
+
+def _replay_vector_drawing(
+    page: fitz.Page,
+    drawing: dict[str, object],
+) -> None:
+    """用 PyMuPDF 原生路径操作重放一个源矢量对象。"""
+
+    shape = page.new_shape()
+    for item in drawing["items"]:
+        operator = item[0]
+        if operator == "l":
+            shape.draw_line(item[1], item[2])
+        elif operator == "c":
+            shape.draw_bezier(item[1], item[2], item[3], item[4])
+        elif operator == "re":
+            shape.draw_rect(item[1])
+        elif operator == "qu":
+            shape.draw_quad(item[1])
+        else:
+            raise ValueError(f"源 PDF 包含不支持的矢量操作：{operator!r}")
+
+    line_cap_value = drawing.get("lineCap")
+    if isinstance(line_cap_value, (tuple, list)):
+        line_cap = max(int(value) for value in line_cap_value)
+    elif line_cap_value is None:
+        line_cap = 0
+    else:
+        line_cap = int(line_cap_value)
+    line_join_value = drawing.get("lineJoin")
+    width_value = drawing.get("width")
+    shape.finish(
+        width=float(width_value) if width_value is not None else 1.0,
+        color=drawing.get("color"),
+        fill=drawing.get("fill"),
+        lineCap=line_cap,
+        lineJoin=int(line_join_value) if line_join_value is not None else 0,
+        dashes=drawing.get("dashes"),
+        even_odd=bool(drawing.get("even_odd", False)),
+        closePath=bool(drawing.get("closePath", False)),
+        fill_opacity=float(drawing.get("fill_opacity") or 1.0),
+        stroke_opacity=float(drawing.get("stroke_opacity") or 1.0),
+    )
+    shape.commit(overlay=True)
+
+
+def restore_source_vectors(
+    run_dir: Path,
+    *,
+    description: str,
+) -> Path:
+    """只重放译文 PDF 中按精确边界缺失的源矢量路径。
+
+    候选先写入独立临时 PDF，再复用 ``apply_vector_repair`` 的文字、
+    页面、图片和矢量增量验证与原子替换，不直接改写已绑定产物。
+    """
+
+    if not description.strip():
+        raise ValueError("description 不能为空")
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] not in {"rendered", "qa_generated", "accepted"}:
+        raise ValueError(
+            "restore-source-vectors 只接受 rendered、qa_generated 或 accepted，"
+            f"当前为 {manifest['status']}"
+        )
+    source = _verify_source_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest)
+    qa_report_path = root / "qa" / "qa_report.json"
+    if not qa_report_path.is_file():
+        raise FileNotFoundError("缺少机器 QA 报告；请先执行 paperlocale qa")
+    qa_report = json.loads(qa_report_path.read_text(encoding="utf-8"))
+    # 矢量恢复只能消费与当前源文件、当前译文候选同时绑定的 QA 结论。
+    # 仅凭路径或旧报告中的页号不足以证明它仍属于这一次 PDF 状态。
+    if qa_report.get("source_sha256") != manifest["source_sha256"]:
+        raise ValueError("机器 QA 报告不属于当前源 PDF")
+    if qa_report.get("translated_sha256") != manifest["rendered_sha256"]:
+        raise ValueError("机器 QA 报告不属于当前译文 PDF")
+    qa_pages = qa_report.get("pages")
+    if not isinstance(qa_pages, list):
+        raise ValueError("机器 QA 报告缺少 pages")
+    # QA 中 source > translated 的页集合是本次修复的唯一允许列表；即使逐对象
+    # 比较在其他页面发现细小边界差异，也不得越过机器 QA 的页级门禁进行重放。
+    vector_loss_pages = {
+        int(page["page"])
+        for page in qa_pages
+        if isinstance(page, dict)
+        and isinstance(page.get("page"), int)
+        and isinstance(page.get("source_vector_drawings"), int)
+        and isinstance(page.get("translated_vector_drawings"), int)
+        and page["source_vector_drawings"] > page["translated_vector_drawings"]
+    }
+    if not vector_loss_pages:
+        raise ValueError("机器 QA 没有报告矢量绘图减少页")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    candidate = root / f".source-vector-repair-{timestamp}.pdf"
+    source_document = fitz.open(source)
+    translated_document = fitz.open(rendered)
+    restored_pages: list[dict[str, object]] = []
+    try:
+        if source_document.page_count != translated_document.page_count:
+            raise ValueError("源 PDF 与译文 PDF 页数不一致")
+        for page_index in range(source_document.page_count):
+            if page_index + 1 not in vector_loss_pages:
+                continue
+            source_page = source_document[page_index]
+            translated_page = translated_document[page_index]
+            missing = _missing_source_vector_drawings(source_page, translated_page)
+            if not missing:
+                continue
+            for drawing in missing:
+                _replay_vector_drawing(translated_page, drawing)
+            restored_pages.append(
+                {
+                    "page": page_index + 1,
+                    "restored_count": len(missing),
+                    "bboxes": [
+                        [round(float(value), 3) for value in drawing["rect"]]
+                        for drawing in missing
+                    ],
+                }
+            )
+        if not restored_pages:
+            raise ValueError("译文 PDF 没有按精确边界缺失的源矢量对象")
+        translated_document.save(candidate, garbage=4, deflate=True)
+    finally:
+        translated_document.close()
+        source_document.close()
+
+    try:
+        repaired = apply_vector_repair(
+            root,
+            repaired_pdf=candidate,
+            description=description,
+        )
+        repaired_manifest = load_manifest(root)
+        history = repaired_manifest.get("repair_history")
+        if not isinstance(history, list) or not history:
+            raise RuntimeError("源矢量修复后缺少 repair_history")
+        last_entry = history[-1]
+        if not isinstance(last_entry, dict):
+            raise RuntimeError("repair_history 最后一项格式非法")
+        last_entry["source_vector_restoration"] = restored_pages
+        save_manifest(root, repaired_manifest)
+        return repaired
+    finally:
+        candidate.unlink(missing_ok=True)
+
+
+def rollback_last_repair(
+    run_dir: Path,
+    *,
+    reason: str,
+) -> Path:
+    """按 repair_history 哈希绑定备份回滚最后一次 PDF 修复。"""
+
+    if not reason.strip():
+        raise ValueError("reason 不能为空")
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] not in {"rendered", "qa_generated", "accepted"}:
+        raise ValueError(
+            "rollback-last-repair 只接受 rendered、qa_generated 或 accepted，"
+            f"当前为 {manifest['status']}"
+        )
+    _verify_source_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest)
+    history = manifest.get("repair_history")
+    if not isinstance(history, list) or not history:
+        raise ValueError("当前运行没有可回滚的 repair_history")
+    # repair_history 是按 before -> after 串联的修复链。回滚只能从链尾开始，
+    # 否则会跳过后续修复，使当前 PDF 与审计历史失去一一对应关系。
+    last_entry = history[-1]
+    if not isinstance(last_entry, dict):
+        raise ValueError("repair_history 最后一项格式非法")
+    before_hash = last_entry.get("before_sha256")
+    after_hash = last_entry.get("after_sha256")
+    backup_value = last_entry.get("backup_pdf")
+    if not all(
+        isinstance(value, str) and value
+        for value in (before_hash, after_hash, backup_value)
+    ):
+        raise ValueError("repair_history 最后一项缺少回滚身份")
+    if manifest["rendered_sha256"] != after_hash:
+        raise ValueError("当前译文 PDF 已不是最后一次修复的产物")
+    backup = Path(backup_value).expanduser().resolve()
+    if not backup.is_file() or _sha256(backup) != before_hash:
+        raise ValueError("最后一次修复的备份不存在或哈希不一致")
+
+    current_snapshot = root / f".rollback-current-{after_hash[:12]}.pdf"
+    shutil.copy2(rendered, current_snapshot)
+    temporary = rendered.with_name(rendered.name + ".rollback.tmp")
+    try:
+        # 备份先复制到目标 PDF 同目录，再用原子替换恢复；复制、替换、清单更新
+        # 共用同一恢复边界，任一步失败都把 PDF 还原为调用前的 after 版本。
+        shutil.copy2(backup, temporary)
+        temporary.replace(rendered)
+        if _sha256(rendered) != before_hash:
+            raise RuntimeError("回滚后 PDF 哈希与备份不一致")
+        rolled_back = dict(last_entry)
+        rolled_back["rolled_back_at"] = _utc_now()
+        rolled_back["rollback_reason"] = reason.strip()
+        rollback_history = manifest.setdefault("repair_rollback_history", [])
+        if not isinstance(rollback_history, list):
+            raise ValueError("repair_rollback_history 字段非法")
+        rollback_history.append(rolled_back)
+        history.pop()
+        manifest["rendered_sha256"] = before_hash
+        manifest["status"] = "rendered"
+        manifest["schema_version"] = SCHEMA_VERSION
+        # QA 与人工 accept 都绑定回滚前的 after 哈希，因此只解除清单中的当前
+        # 绑定；历史 QA 文件和逐页对照图仍保留在磁盘，供后续审计而不冒充现状。
+        manifest.pop("qa_report", None)
+        manifest.pop("accepted_by", None)
+        save_manifest(root, manifest)
+        return rendered
+    except Exception:
+        restore = rendered.with_name(rendered.name + ".rollback-restore.tmp")
+        shutil.copy2(current_snapshot, restore)
+        restore.replace(rendered)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+        current_snapshot.unlink(missing_ok=True)
+
+
 def apply_vector_repair(
     run_dir: Path,
     *,
@@ -1105,6 +1496,7 @@ def _create_text_repair_candidate(
     replacement: str,
     font_file: Path | None,
     font_size: float | None,
+    single_line: bool,
 ) -> dict[str, object]:
     """只在候选中删除指定文字，并在需要时嵌入子集替换字体。"""
 
@@ -1135,9 +1527,12 @@ def _create_text_repair_candidate(
         if list(page.annots(types=(fitz.PDF_ANNOT_REDACT,)) or []):
             raise ValueError(f"第{page_number}页已有 redaction 标注，拒绝批量应用")
 
+        placement_evidence: dict[str, object]
         if replacement:
             if font_file is None or font_size is None:
                 raise ValueError("非空 replacement 必须提供 font-file 和 font-size")
+            if single_line and ("\n" in replacement or "\r" in replacement):
+                raise ValueError("single-line replacement 不能包含换行")
             subset_bytes, font_evidence = _subset_repair_font(font_file, replacement)
             font_resource_name = str(font_evidence["font_resource_name"])
         else:
@@ -1155,6 +1550,7 @@ def _create_text_repair_candidate(
                 "font_program_bytes_after_subset": 0,
                 "font_subset_bytes_saved": 0,
             }
+            placement_evidence = {"placement_mode": "removal-only"}
         # redaction 只负责移除文字；透明填充避免白色覆盖层遮住矩形内仍保留的
         # 图片或矢量对象。下面的 images/graphics NONE 则禁止删除这些对象本身。
         page.add_redact_annot(rectangle, fill=False, cross_out=False)
@@ -1171,17 +1567,48 @@ def _create_text_repair_candidate(
                 fontname=font_resource_name,
                 fontbuffer=subset_bytes,
             )
-            remaining_height = page.insert_textbox(
-                rectangle,
-                replacement,
-                fontname=font_resource_name,
-                fontsize=font_size,
-                color=(0, 0, 0),
-            )
-            if remaining_height < 0:
-                raise ValueError(
-                    "replacement 无法放入 rect；请扩大矩形或减小 --font-size"
+            if single_line:
+                repair_font = fitz.Font(fontbuffer=subset_bytes)
+                text_width = repair_font.text_length(replacement, fontsize=font_size)
+                text_height = font_size * (
+                    repair_font.ascender - repair_font.descender
                 )
+                if text_width > rectangle.width or text_height > rectangle.height:
+                    raise ValueError(
+                        "single-line replacement 无法放入 rect："
+                        f"text=({text_width:.3f}, {text_height:.3f}), "
+                        f"rect=({rectangle.width:.3f}, {rectangle.height:.3f})"
+                    )
+                baseline = rectangle.y0 + font_size * repair_font.ascender
+                page.insert_text(
+                    fitz.Point(rectangle.x0, baseline),
+                    replacement,
+                    fontname=font_resource_name,
+                    fontsize=font_size,
+                    color=(0, 0, 0),
+                )
+                placement_evidence = {
+                    "placement_mode": "single-line",
+                    "text_width": round(float(text_width), 3),
+                    "text_height": round(float(text_height), 3),
+                    "baseline": round(float(baseline), 3),
+                }
+            else:
+                remaining_height = page.insert_textbox(
+                    rectangle,
+                    replacement,
+                    fontname=font_resource_name,
+                    fontsize=font_size,
+                    color=(0, 0, 0),
+                )
+                if remaining_height < 0:
+                    raise ValueError(
+                        "replacement 无法放入 rect；请扩大矩形或减小 --font-size"
+                    )
+                placement_evidence = {
+                    "placement_mode": "textbox",
+                    "remaining_height": round(float(remaining_height), 3),
+                }
 
             embedded_font = document.extract_font(font_xref)[-1]
             if hashlib.sha256(embedded_font).hexdigest() != font_evidence[
@@ -1194,6 +1621,7 @@ def _create_text_repair_candidate(
 
     return {
         "before_text": before_text,
+        **placement_evidence,
         **font_evidence,
     }
 
@@ -1273,10 +1701,13 @@ def apply_text_repair(
     font_file: Path | None,
     font_size: float | None,
     description: str,
+    single_line: bool = False,
 ) -> Path:
     """在一个明确矩形内受控替换文字，并强制重新执行机器与人工 QA。"""
 
     removal_only = replacement == ""
+    if removal_only and single_line:
+        raise ValueError("single-line 只适用于非空 replacement")
     if not removal_only and not replacement.strip():
         raise ValueError("replacement 不能只包含空白字符")
     if not description.strip():
@@ -1313,6 +1744,7 @@ def apply_text_repair(
             replacement=replacement,
             font_file=resolved_font,
             font_size=font_size,
+            single_line=single_line,
         )
         structure = _verify_text_repair(
             before=rendered,
@@ -1383,6 +1815,7 @@ def run_to_qa(
     reference_policy: str = "preserve",
     max_segments: int = 200,
     max_characters: int = 30000,
+    unattended: bool = False,
 ) -> dict[str, object]:
     """从当前断点沿唯一生产路径推进到机器 QA，保留人工验收边界。
 
@@ -1406,6 +1839,7 @@ def run_to_qa(
             max_segments=max_segments,
             max_characters=max_characters,
             reference_policy=reference_policy,
+            unattended=unattended,
         )
         manifest = load_manifest(root)
     if manifest["status"] == "translated":

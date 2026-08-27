@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from .contracts import read_jsonl, segment_id, validate_translation, write_jsonl_atomic
@@ -176,11 +177,70 @@ def translate_segment_file(
             ordered.extend(accepted)
             write_jsonl_atomic(translations_path, ordered)
         if rejected:
+            # 先保存首轮失败证据。即使随后同 Provider 调用遇到网络错误，
+            # 已通过译文和原始候选仍可从断点复核，不会重复消耗整批额度。
             write_jsonl_atomic(rejected_path, rejected)
-            raise ValueError(
-                f"本批有 {len(rejected)} 条新译文未通过门禁；"
-                f"合格译文已保存，失败候选见 {rejected_path}"
+            rejected_by_id = {str(row["id"]): row for row in rejected}
+            repair_batch = [
+                segment for segment in batch if segment.id in rejected_by_id
+            ]
+            repair_context = replace(
+                context,
+                repair_feedback={
+                    segment.id: (
+                        str(rejected_by_id[segment.id]["target"]),
+                        tuple(str(error) for error in rejected_by_id[segment.id]["errors"]),
+                    )
+                    for segment in repair_batch
+                },
             )
+            repaired = provider.translate(repair_batch, repair_context)
+            if [item.id for item in repaired] != [item.id for item in repair_batch]:
+                raise ValueError("Provider 修复重试返回顺序或 ID 与输入批次不一致")
+
+            repaired_accepted: list[dict[str, object]] = []
+            final_rejected: list[dict[str, object]] = []
+            for source_segment, result in zip(repair_batch, repaired):
+                if source_segment.id in reference_segment_ids:
+                    errors = validate_translation(source_segment.source, result.target, None)
+                else:
+                    errors = validate_translation(source_segment.source, result.target, domain)
+                if errors:
+                    initial = rejected_by_id[source_segment.id]
+                    final_rejected.append(
+                        {
+                            "id": result.id,
+                            "source": source_segment.source,
+                            "target": result.target,
+                            "errors": errors,
+                            "attempts": [
+                                {
+                                    "target": initial["target"],
+                                    "errors": initial["errors"],
+                                },
+                                {"target": result.target, "errors": errors},
+                            ],
+                        }
+                    )
+                    continue
+                repaired_accepted.append(
+                    {
+                        "id": result.id,
+                        "source": source_segment.source,
+                        "target": result.target,
+                    }
+                )
+
+            if repaired_accepted:
+                ordered.extend(repaired_accepted)
+                write_jsonl_atomic(translations_path, ordered)
+            if final_rejected:
+                write_jsonl_atomic(rejected_path, final_rejected)
+                raise ValueError(
+                    f"同一 Provider 定向重试后仍有 {len(final_rejected)} 条译文"
+                    f"未通过门禁；合格译文已保存，失败候选见 {rejected_path}"
+                )
+            rejected_path.unlink()
         if rejected_path.exists():
             # 成功重试后清除已经解决的诊断文件，避免把旧失败误认为当前状态。
             rejected_path.unlink()

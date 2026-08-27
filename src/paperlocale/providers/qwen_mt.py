@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from ..contracts import FORMULA_RE, STYLE_RE, protected_counts
+from ..contracts import FORMULA_RE, STYLE_RE, protected_counts, source_term_is_present
 from .base import Segment, Translation, TranslationContext, TranslationProvider
 
 
@@ -116,9 +116,8 @@ class QwenMTProvider(TranslationProvider):
             # 官方术语干预同时承担两项职责：固定领域译法，并强制模型原样保留
             # 公式占位符、缩写、单位、URL 与 DOI。重复源词只保留第一条映射。
             terms_by_source: dict[str, str] = {}
-            source_folded = segment.source.casefold()
             for entry in context.domain.glossary:
-                if entry.source.casefold() in source_folded:
+                if source_term_is_present(segment.source, entry.source):
                     terms_by_source.setdefault(entry.source, entry.target)
             counts = protected_counts(segment.source)
             for category in ("url", "doi", "number", "abbreviation", "unit"):

@@ -12,8 +12,8 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 
 class CliTest(unittest.TestCase):
-    def test_package_version_matches_v041_candidate_line(self) -> None:
-        self.assertEqual(__version__, "0.4.1")
+    def test_package_version_matches_v042_release_line(self) -> None:
+        self.assertEqual(__version__, "0.4.2")
 
     def test_cli_reports_package_version(self) -> None:
         """发布包必须能直接报告可核对的版本。"""
@@ -39,6 +39,7 @@ class CliTest(unittest.TestCase):
                 "high",
                 "--domain",
                 "atmospheric-science",
+                "--unattended",
             ]
         )
         self.assertEqual(args.command, "run")
@@ -46,6 +47,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.domain, "atmospheric-science")
         self.assertEqual(args.reasoning_effort, "high")
         self.assertEqual(args.reference_policy, "preserve")
+        self.assertTrue(args.unattended)
 
     def test_confirm_references_accepts_repeated_manual_ids(self) -> None:
         """人工复核命令应把多个乱序参考文献片段明确传给工作流。"""
@@ -123,6 +125,7 @@ class CliTest(unittest.TestCase):
                 "NotoSansCJKsc-Regular.otf",
                 "--font-size",
                 "9.5",
+                "--single-line",
                 "--description",
                 "修复跨对象碎裂图注",
             ]
@@ -131,6 +134,54 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.page, 27)
         self.assertEqual(args.rect, [40.0, 120.0, 500.0, 160.0])
         self.assertEqual(args.font_size, 9.5)
+        self.assertTrue(args.single_line)
+
+    def test_restore_source_vectors_requires_run_and_description(self) -> None:
+        """源矢量重放必须通过显式、可审计的 PaperLocale 命令执行。"""
+
+        args = build_parser().parse_args(
+            [
+                "restore-source-vectors",
+                "--run-dir",
+                "run",
+                "--description",
+                "restore machine-QA missing source vectors",
+            ]
+        )
+        self.assertEqual(args.command, "restore-source-vectors")
+        self.assertEqual(args.run_dir, Path("run"))
+
+    def test_rollback_last_repair_passes_reason_and_reports_result(self) -> None:
+        """CLI 必须把显式回滚原因传给工作流，并打印恢复后的 PDF 路径。"""
+
+        restored = Path("/tmp/restored.pdf")
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "paperlocale",
+                    "rollback-last-repair",
+                    "--run-dir",
+                    "run",
+                    "--reason",
+                    "remove audited repair",
+                ],
+            ),
+            patch(
+                "paperlocale.cli.rollback_last_repair",
+                return_value=restored,
+            ) as rollback,
+            patch("builtins.print") as output,
+        ):
+            self.assertEqual(cli.main(), 0)
+
+        rollback.assert_called_once_with(
+            Path("run"),
+            reason="remove audited repair",
+        )
+        output.assert_called_once_with(
+            f"最后一次修复已回滚并记录：{restored}；请重新执行 qa"
+        )
 
     def test_codex_provider_requires_explicit_model_for_auditing(self) -> None:
         """忽略用户配置后不能把未知默认模型写成可审计运行。"""
@@ -201,6 +252,7 @@ class CliTest(unittest.TestCase):
             qa_generated = {
                 "status": "qa_generated",
                 "qa_output_dir": str(run_dir / "qa"),
+                "rendered_pdf": str(run_dir / "render_output" / "translated.pdf"),
             }
             with (
                 patch(
@@ -228,6 +280,7 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(cli.main(), 0)
             build_provider.assert_not_called()
             self.assertIsNone(run.call_args.kwargs["provider"])
+            self.assertFalse(run.call_args.kwargs["unattended"])
 
 
 if __name__ == "__main__":

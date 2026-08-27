@@ -28,7 +28,17 @@ jobs:
       - name: Install the exact built wheel
         run: |
           python -m pip install --force-reinstall dist/*.whl
+          expected_version="${GITHUB_REF_NAME#v}"
+          EXPECTED_VERSION="$expected_version" python -c 'import importlib.metadata, os, paperlocale; expected = os.environ["EXPECTED_VERSION"]; assert importlib.metadata.version("paperlocale") == paperlocale.__version__ == expected'
+          paperlocale --version | grep -Fx "paperlocale $expected_version"
           paperlocale domain-check atmospheric-science
+      - name: Resolve layout extra from the exact built wheel
+        run: |
+          # 从标签实际构建的 wheel 读取 extra 元数据，避免只验证源码目录而漏掉
+          # 发布附件中的依赖冲突。这里只做完整求解，真实 CLI 另由兼容性工作流执行。
+          wheel_path=$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)
+          test -n "$wheel_path"
+          python -m pip install --dry-run "${wheel_path}[layout]"
       - name: Preserve reviewed release artifacts
         uses: actions/upload-artifact@v7
         with:

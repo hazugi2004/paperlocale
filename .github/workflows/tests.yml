@@ -8,12 +8,57 @@ permissions:
   contents: read
 
 jobs:
+  macos-noneditable-path-install:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install and run from Chinese and space paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 真实论文试运行曾在 macOS editable 安装中遇到异常 .pth；普通用户路径已
+          # 改为非 editable。这里同时把源码和虚拟环境放入含中文与空格的隔离路径，
+          # 验证推荐安装方式不依赖仓库原路径，也能直接启动已安装的 CLI 入口。
+          isolated_root="$(mktemp -d)"
+          source_root="$isolated_root/中文 项目"
+          venv_root="$isolated_root/中文 环境"
+          mkdir -p "$source_root"
+          git archive HEAD | tar -x -C "$source_root"
+          python -m venv "$venv_root"
+          "$venv_root/bin/python" -m pip install "$source_root"
+          "$venv_root/bin/python" -m pip check
+          "$venv_root/bin/paperlocale" domain-check atmospheric-science
+          "$venv_root/bin/python" -c \
+            'import paperlocale; print(paperlocale.__version__)'
+
+  layout-dependency-resolution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Resolve layout dependencies
+        # 单元测试只安装 test extra，无法发现核心依赖与 pdf2zh-next 的版本冲突；
+        # dry-run 会执行完整依赖求解，但不会下载并安装体积较大的版面工具链。
+        run: python -m pip install --dry-run ".[layout]"
+
   unit-tests:
     strategy:
       matrix:
         # 项目声明支持 3.10–3.13，因此 CI 必须覆盖完整范围。
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
@@ -24,8 +69,15 @@ jobs:
       - name: Install PDF rendering dependency
         # 两项 PDF QA 测试会真实调用 pdftoppm，CI 镜像默认不包含 Poppler。
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes poppler-utils
+          # Hosted runner 的 Azure 主镜像曾在单个矩阵任务中持续 5 分钟无响应；
+          # 固定到同时提供四个 noble pocket 的 Ubuntu 官方主镜像。
+          echo "https://archive.ubuntu.com/ubuntu/" \
+            | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          timeout 5m sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          timeout 5m sudo apt-get install --yes --no-install-recommends poppler-utils
       - name: Install project
         run: python -m pip install ".[test]"
       - name: Run unit tests

@@ -1,17 +1,21 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "paperlocale"
-version = "0.1.1"
+version = "0.4.2"
 description = "Verified, layout-preserving academic PDF translation with pluggable providers and domain packs."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "AGPL-3.0-only" }
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [{ name = "PaperLocale contributors" }]
 dependencies = [
+  "fonttools>=4.55",
   "Pillow>=10",
+  # pdf2zh-next 2.9.x 当前要求 PyMuPDF<1.25.3；1.25.2 已通过真实两阶段版面测试。
+  "PyMuPDF>=1.25.2,<1.25.3",
   "pypdf>=6",
 ]
 keywords = [
@@ -24,7 +28,6 @@ keywords = [
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
-  "License :: OSI Approved :: GNU Affero General Public License v3",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",

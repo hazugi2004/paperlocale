@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="260" viewBox="0 0 1200 260" role="img" aria-labelledby="title description">
+  <title id="title">PaperLocale verified PDF translation workflow</title>
+  <desc id="description">Seven stages connect a source PDF to human acceptance, with strict validation and hash-bound PDF quality assurance.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="260" rx="18" fill="#f8fafc"/>
+  <text x="600" y="32" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#0f172a">Verified, resumable, and fail-closed</text>
+
+  <g stroke="#64748b" stroke-width="3" marker-end="url(#arrow)">
+    <line x1="190" y1="105" x2="208" y2="105"/>
+    <line x1="350" y1="105" x2="368" y2="105"/>
+    <line x1="510" y1="105" x2="528" y2="105"/>
+    <line x1="670" y1="105" x2="688" y2="105"/>
+    <line x1="830" y1="105" x2="848" y2="105"/>
+    <line x1="990" y1="105" x2="1008" y2="105"/>
+  </g>
+
+  <g font-family="Arial, sans-serif" text-anchor="middle">
+    <g transform="translate(50 62)">
+      <rect width="140" height="86" rx="12" fill="#334155"/>
+      <text x="70" y="36" font-size="17" font-weight="700" fill="white">PDF</text>
+      <text x="70" y="61" font-size="12" fill="#e2e8f0">source SHA-256</text>
+    </g>
+    <g transform="translate(210 62)">
+      <rect width="140" height="86" rx="12" fill="#0369a1"/>
+      <text x="70" y="36" font-size="17" font-weight="700" fill="white">COLLECT</text>
+      <text x="70" y="61" font-size="12" fill="#e0f2fe">stable segment IDs</text>
+    </g>
+    <g transform="translate(370 62)">
+      <rect width="140" height="86" rx="12" fill="#0f766e"/>
+      <text x="70" y="36" font-size="17" font-weight="700" fill="white">TRANSLATE</text>
+      <text x="70" y="61" font-size="12" fill="#ccfbf1">Codex or BYOK API</text>
+    </g>
+    <g transform="translate(530 62)">
+      <rect width="140" height="86" rx="12" fill="#b45309"/>
+      <text x="70" y="36" font-size="17" font-weight="700" fill="white">VALIDATE</text>
+      <text x="70" y="61" font-size="12" fill="#ffedd5">formulas + terms</text>
+    </g>
+    <g transform="translate(690 62)">
+      <rect width="140" height="86" rx="12" fill="#1d4ed8"/>
+      <text x="70" y="36" font-size="17" font-weight="700" fill="white">RENDER</text>
+      <text x="70" y="61" font-size="12" fill="#dbeafe">candidate SHA-256</text>
+    </g>
+    <g transform="translate(850 62)">
+      <rect width="140" height="86" rx="12" fill="#7e22ce"/>
+      <text x="70" y="36" font-size="17" font-weight="700" fill="white">QA</text>
+      <text x="70" y="61" font-size="12" fill="#f3e8ff">machine + visual</text>
+    </g>
+    <g transform="translate(1010 62)">
+      <rect width="140" height="86" rx="12" fill="#15803d"/>
+      <text x="70" y="36" font-size="17" font-weight="700" fill="white">ACCEPT</text>
+      <text x="70" y="61" font-size="12" fill="#dcfce7">human sign-off</text>
+    </g>
+  </g>
+
+  <rect x="164" y="178" width="872" height="48" rx="24" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="600" y="208" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#334155">Any missing formula, term, page, hash, or reviewed artifact stops the workflow.</text>
+</svg>

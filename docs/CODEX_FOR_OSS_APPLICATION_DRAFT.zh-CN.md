@@ -4,12 +4,17 @@
 
 本文件不保存邮箱、ChatGPT 账号或其他私人申请信息。提交时只在 OpenAI 官方表单中填写这些内容。
 
+官方入口：[Codex for Open Source application](https://openai.com/form/codex-for-oss/)。
+提交前应确认使用有效 ChatGPT 账号、仓库与维护权限信息准确完整，并且材料不包含
+API Key、登录凭据、未公开论文或其他机密信息。申请和提交材料不保证入选；权益
+种类、范围和时长以 OpenAI 最终批准结果为准。
+
 ## 项目与维护者
 
 - Project: PaperLocale
 - Repository: https://github.com/hazugi2004/paperlocale
 - Core maintainer: `hazugi2004`
-- Role evidence: 仓库管理员、提交者和 `v0.1.0` 发布者
+- Role evidence: 仓库管理员、提交者和 `v0.1.0` / `v0.1.1` / `v0.2.0` / `v0.3.0` / `v0.3.1` / `v0.3.2` / `v0.3.3` 发布者
 - License: AGPL-3.0-only
 
 ## 英文项目简介
@@ -26,21 +31,53 @@
 
 ## 已有证据链接
 
-- Release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0
+- Latest release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.3.3
+- PyPI distribution: https://pypi.org/project/paperlocale/0.3.3/
+- Attested PyPI publish: https://github.com/hazugi2004/paperlocale/actions/runs/32445150459
+- v0.3.3 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32444041611
+- v0.3.3 controlled text-repair PR: https://github.com/hazugi2004/paperlocale/pull/27
+- v0.3.3 release evidence: https://github.com/hazugi2004/paperlocale/blob/main/docs/releases/v0.3.3.md
+- v0.3.2 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32234314229
+- v0.3.2 layout compatibility run: https://github.com/hazugi2004/paperlocale/actions/runs/32234356256
+- Durable v0.3.2 compatibility artifact: https://github.com/hazugi2004/paperlocale/releases/download/v0.3.2/paperlocale-v0.3.2-layout-compatibility.zip
+- v0.3.2 reference-section PR: https://github.com/hazugi2004/paperlocale/pull/17
+- v0.3.2 audited passthrough PR: https://github.com/hazugi2004/paperlocale/pull/18
+- v0.3.2 segment-safety PR: https://github.com/hazugi2004/paperlocale/pull/19
+- BabelDOC object-preserve issue: https://github.com/funstory-ai/BabelDOC/issues/610
+- BabelDOC object-preserve PR: https://github.com/funstory-ai/BabelDOC/pull/611
+- v0.3.1 hotfix PR: https://github.com/hazugi2004/paperlocale/pull/11
+- v0.3.1 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32221420406
+- v0.3.1 layout compatibility run: https://github.com/hazugi2004/paperlocale/actions/runs/32221715819
+- Durable v0.3.1 compatibility artifact: https://github.com/hazugi2004/paperlocale/releases/download/v0.3.1/paperlocale-v0.3.1-layout-compatibility.zip
+- v0.3.0 implementation PR: https://github.com/hazugi2004/paperlocale/pull/6
+- v0.3.0 release build: https://github.com/hazugi2004/paperlocale/actions/runs/32219122015
+- Initial release: https://github.com/hazugi2004/paperlocale/releases/tag/v0.1.0
 - CI: https://github.com/hazugi2004/paperlocale/actions/workflows/tests.yml
 - Security policy: https://github.com/hazugi2004/paperlocale/security/policy
+- Code of Conduct: https://github.com/hazugi2004/paperlocale/blob/main/CODE_OF_CONDUCT.md
+- Citation metadata: https://github.com/hazugi2004/paperlocale/blob/main/CITATION.cff
+- GitHub Community Standards (100%): https://github.com/hazugi2004/paperlocale/community
 - Good first issues: https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 - Architecture: https://github.com/hazugi2004/paperlocale/blob/main/docs/ARCHITECTURE.md
 - Adoption ledger: https://github.com/hazugi2004/paperlocale/blob/main/docs/ADOPTION_EVIDENCE.zh-CN.md
+- Upstream integration discussion: https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/issues/354
+- First external contribution: https://github.com/hazugi2004/paperlocale/pull/4
+- Provider evaluation evidence: https://github.com/hazugi2004/paperlocale/blob/main/docs/PROVIDER_EVALUATION.zh-CN.md
 
 ## 提交前仍需补强
 
-以下任意两类真实证据出现后，申请说服力会显著提高：
+项目已发布七个 GitHub 版本，并把 v0.3.2 与当前最新版 v0.3.3 通过带数字
+attestation 的 Trusted Publishing 发布到 PyPI；首个非维护者贡献 PR #4 也已通过
+评审、测试并合并。它证明
+贡献入口有效，但仍不能代替真实使用。以下再完成至少一类独立证据后，申请说服力
+会显著提高：
 
-1. 至少一个非维护者提交的可复现 Issue、试用反馈或 PR；
-2. 一个被合并的新领域包或兼容性修复；
-3. 一个公开下游使用、课程、研究方法说明或工具清单引用；
-4. 与 BabelDOC/PDFMathTranslate-next 的公开 Issue 或 PR；
-5. 第二个经过 CI 和变更记录验证的 Release。
+1. 至少一个非维护者提交的真实试用反馈或可复现问题报告；
+2. 一个公开下游使用、课程、研究方法说明或工具清单引用；
+3. BabelDOC/PDFMathTranslate-next 维护者对现有上游 Issue 或 PR 的技术反馈或合并；
 
-如果在这些证据出现前申请，应明确写“new public project”，并依照官方说明解释其生态重要性，不能把维护者创建的 Issue、测试调用或自己的 Star 描述为外部采用。
+如果在这些证据出现前申请，应明确写“new public project”，并依照官方说明解释其生态重要性，不能把维护者创建的 Issue、测试调用、自己的 Star 或单个已合并测试 PR 描述为真实用户采用。
+
+提交时可诚实强调的选择因素是：维护者拥有管理员权限、发布后连续修复真实问题、
+保留失败与成功证据、提供上游兼容性工作流，以及项目服务于科学文献可访问性。
+当前最弱的选择因素是 repository usage，不能用维护者自己的运行或下载补齐。

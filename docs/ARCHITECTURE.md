@@ -6,6 +6,8 @@
 PDF
   -> 版面解析与片段收集
   -> segments.jsonl
+  -> 参考文献复核与确认映射
+  -> 可选的非正文人工透传确认
   -> 领域包 + 单一 Provider
   -> translations.jsonl
   -> 科学信息硬门禁
@@ -14,6 +16,27 @@ PDF
 ```
 
 同一次运行不得静默切换 Provider。失败必须保留断点并明确退出，避免一篇论文混用多个模型后无法追溯。
+
+CLITranslator 片段没有页码且顺序不等于阅读顺序。默认 `preserve` 因此先从源
+PDF 精确定位唯一 `REFERENCES` 区域，只自动接受完整规范化文本落入该区域的
+长片段，并把全部片段写入 `reference_review.jsonl`。人工确认后的
+`reference_map.json` 同时绑定源 PDF 与 `segments.jsonl` 哈希；没有确认映射时
+不得调用模型。`translate-titles` 复用同一映射，参考文献不执行正文术语门禁。
+
+纯公式、作者姓名串等非正文片段不能通过削弱全局中文门禁解决。用户可用
+`confirm-passthrough` 按稳定 ID 显式确认；`passthrough_map.json` 绑定源 PDF 与
+`segments.jsonl` 哈希，并逐条记录原因、确认人和时间。此类片段必须严格
+`target == source` 且不会进入 Provider；映射文件由 schema 4 清单哈希锁定。
+
+Provider 调用前还会生成 `segment_safety_review.jsonl`：片段必须在源 PDF 可见
+文本中逐字命中，且不得从同一个 ASCII 单词内部开始或结束；短 ASCII 片段若在
+全部可见页文本中均不存在，也进入复核。命中的危险片段必须出现在人工透传映射
+中，否则状态保持 `collected`。该规则只阻止不安全的独立翻译，不尝试推断前后
+固定对象或自动拼接译文。
+
+`paperlocale run` 只是上述单一生产路径的状态编排器：它读取清单后依次调用现有阶段函数，从最后成功状态推进到 `qa_generated`。它不实现第二套翻译或渲染逻辑，也不会自动执行必须由人完成的 `accept`。
+
+PDF 机器 QA 将页数、页面框、图片对象和直接页面内容流中的矢量绘制数量逐页对照。译文少于原文时视为硬错误，以捕获图片、矢量表格或图形丢失；矢量缺失还会记录边界框与面积，并在对照图两侧红框定位。复杂内容流无法解析时记录警告并保留全页人工视觉复核，不能据此自动验收。
 
 ## 稳定中间格式
 
@@ -26,7 +49,9 @@ PDF
 `run_manifest.json`，避免在每条片段中重复。每个后续阶段都会重新核对源 PDF
 身份；源文件变化后必须创建新运行。
 
-schema 2 还会在 `render` 后记录候选 PDF 的 SHA-256。`qa_report.json` 同时记录
+schema 4 还会记录领域包内容 SHA-256、Provider/模型/推理强度、Codex CLI 与
+collect/render 版面引擎版本，并在 `render` 后记录候选 PDF 的 SHA-256。
+`qa_report.json` 同时记录
 源文件和候选文件的路径与哈希；`accept` 只有在四者仍与运行清单闭合时才记录
 人工批准。v0.1.0 的 schema 1 清单必须重新执行 `qa`，不能复用旧报告直接验收。
 
@@ -37,6 +62,8 @@ schema 2 还会在 `render` 后记录候选 PDF 的 SHA-256。`qa_report.json` �
 - `target`。
 
 渲染前必须确认两份文件的 ID 集合完全一致，并逐片段通过合同。
+同一批次有个别候选失败时，其他合格行先原子写入 `translations.jsonl`，失败候选
+及门禁原因写入 `rejected_translations.jsonl`；运行状态保持 `collected`。
 
 ## Provider 边界
 
@@ -44,6 +71,19 @@ Provider 只负责把带稳定 ID 的片段批量翻译为结构化结果。它�
 
 Codex Provider 只在本机调用官方 CLI 或 SDK，并使用只读沙箱。API Provider 的密钥只从环境变量读取。
 
+## 上游版面接口边界
+
+当前生产路径以 `pdf2zh-next 2.x` 的 `CLITranslator` 标准输入/输出契约为兼容基线，并已经在 `2.9.0` 上完成真实双阶段冒烟。等待上游讨论确认期间，PaperLocale 按该契约继续开发，但不把当前行为表述为上游长期承诺。
+
+参考文献真正保持原版面对象依赖 BabelDOC 对“译文等于输入”返回值的正确识别。
+PaperLocale 已提交 [BabelDOC #610](https://github.com/funstory-ai/BabelDOC/issues/610)
+和 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)，但在上游合并并发布前
+仍把重新排版风险列为已知边界，不在下游复制或覆盖 PDF 区域。
+
+依赖范围暂时固定为 `pdf2zh-next>=2.9,<3`。每周兼容性工作流会安装该范围内的最新版本，实际执行 `collect -> translate -> validate -> render -> qa`；失败时保留日志和 QA 产物，由维护者判断是上游接口变化还是运行环境问题，不静默切换版面引擎。
+
 ## 领域包边界
 
 领域包只提供术语与翻译约束，不包含可执行代码。内置包与外部包使用同一格式，因此新增专业方向不需要修改核心模块。
+
+Provider 质量评估使用领域包自带的公开案例，保存参考译文、真实候选和可证明的内容合同结果。系统只统计逐字匹配，不计算自动语义准确率；措辞不同可能同样正确，因此报告必须保留领域人员人工语义复核状态。

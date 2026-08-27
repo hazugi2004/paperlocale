@@ -4,21 +4,43 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import shutil
+import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import pymupdf as fitz
+import reportlab
+from reportlab.pdfgen import canvas
+
 from paperlocale.contracts import segment_id, write_jsonl_atomic
 from paperlocale.domains import load_domain_pack
-from paperlocale.providers import Segment, Translation, TranslationContext, TranslationProvider
+from paperlocale.providers import (
+    Segment,
+    Translation,
+    TranslationContext,
+    TranslationProvider,
+)
 from paperlocale.workflow import (
+    _layout_provenance,
+    _resolve_pdf2zh,
     accept_run,
+    apply_text_repair,
+    apply_vector_repair,
     collect_run,
+    confirm_passthrough_run,
+    confirm_reference_run,
     initialize_run,
     load_manifest,
     qa_run,
     render_run,
+    restore_source_vectors,
+    rollback_last_repair,
+    run_to_qa,
     save_manifest,
     translate_run,
     validate_run,
@@ -34,7 +56,70 @@ class _Provider(TranslationProvider):
         return [Translation(segment.id, "土壤湿度为10 mm。") for segment in segments]
 
 
+class _IdentityProvider(TranslationProvider):
+    """模拟模型正确原样保留非正文，但因此触发全局中文门禁。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def translate(
+        self,
+        segments: list[Segment],
+        context: TranslationContext,
+    ) -> list[Translation]:
+        self.calls += 1
+        return [Translation(segment.id, segment.source) for segment in segments]
+
+
+class _SafetyProvider(TranslationProvider):
+    """记录实际收到的片段，验证危险片段不会进入 Provider。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.sources: list[str] = []
+
+    def translate(
+        self,
+        segments: list[Segment],
+        context: TranslationContext,
+    ) -> list[Translation]:
+        self.calls += 1
+        self.sources.extend(segment.source for segment in segments)
+        return [Translation(segment.id, "土壤湿度为10 mm。") for segment in segments]
+
+
+class _ProvenanceProvider(TranslationProvider):
+    """使用显式 provenance 和映射译文模拟 Codex 断点续跑。"""
+
+    def __init__(
+        self,
+        provenance: dict[str, object],
+        translations: dict[str, str],
+    ) -> None:
+        self._provenance = provenance
+        self._translations = translations
+
+    def provenance(self) -> dict[str, object]:
+        return dict(self._provenance)
+
+    def translate(
+        self,
+        segments: list[Segment],
+        context: TranslationContext,
+    ) -> list[Translation]:
+        return [
+            Translation(segment.id, self._translations[segment.source])
+            for segment in segments
+        ]
+
+
 class WorkflowTest(unittest.TestCase):
+    layout_provenance = {
+        "executable": "/fake/pdf2zh_next",
+        "pdf2zh_next_version": "2.9.0",
+        "babeldoc_version": "0.6.2",
+    }
+
     def _make_qa_ready_run(self, root: Path) -> tuple[Path, Path]:
         """建立一份哈希、路径和 QA 报告完全闭合的最小运行。"""
 
@@ -49,6 +134,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
+        self.assertEqual(manifest["paperlocale_version"], "0.4.2")
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)
@@ -71,12 +157,225 @@ class WorkflowTest(unittest.TestCase):
         save_manifest(run_dir, manifest)
         return run_dir, translated
 
+    def _make_source_vector_repair_run(
+        self,
+        root: Path,
+    ) -> tuple[Path, Path, Path]:
+        """建立两页矢量差异及与当前候选哈希绑定的 QA 夹具。
+
+        两页源 PDF 都比译文多一条线，但 QA 只允许第 1 页恢复。这样既能验证
+        真正的路径重放，也能防止实现绕过 QA 页集合去扫描并修改第 2 页。
+        """
+
+        source = root / "source.pdf"
+        translated = root / "translated.pdf"
+        source_document = fitz.open()
+        translated_document = fitz.open()
+        try:
+            for page_number in (1, 2):
+                source_page = source_document.new_page()
+                translated_page = translated_document.new_page()
+                text = f"stable text page {page_number}"
+                source_page.insert_text((50, 50), text)
+                translated_page.insert_text((50, 50), text)
+                source_page.draw_rect(
+                    fitz.Rect(50, 80, 100, 100),
+                    color=(0, 0, 0),
+                )
+                translated_page.draw_rect(
+                    fitz.Rect(50, 80, 100, 100),
+                    color=(0, 0, 0),
+                )
+                source_page.draw_line(
+                    (50, 120),
+                    (150, 120),
+                    color=(1, 0, 0),
+                )
+            source_document.save(source)
+            translated_document.save(translated)
+        finally:
+            translated_document.close()
+            source_document.close()
+
+        run_dir = root / "run"
+        manifest = initialize_run(
+            source_pdf=source,
+            run_dir=run_dir,
+            source_language="en",
+            target_language="zh-CN",
+        )
+        translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
+        report_path = run_dir / "qa" / "qa_report.json"
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text(
+            json.dumps(
+                {
+                    "source_sha256": manifest["source_sha256"],
+                    "translated_sha256": translated_hash,
+                    "pages": [
+                        {
+                            "page": 1,
+                            "source_vector_drawings": 2,
+                            "translated_vector_drawings": 1,
+                        },
+                        {
+                            "page": 2,
+                            "source_vector_drawings": 1,
+                            "translated_vector_drawings": 1,
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        manifest["status"] = "qa_generated"
+        manifest["rendered_pdf"] = str(translated.resolve())
+        manifest["rendered_sha256"] = translated_hash
+        manifest["qa_report"] = str(report_path.resolve())
+        save_manifest(run_dir, manifest)
+        return run_dir, translated, report_path
+
+    def _make_repair_chain_run(
+        self,
+        root: Path,
+    ) -> tuple[Path, Path, Path, Path]:
+        """建立 before0 -> after1 -> after2 的两项可逆修复链。"""
+
+        source = root / "source.pdf"
+        source.write_bytes(b"source-pdf")
+        rendered = root / "rendered.pdf"
+        before_first = b"rendered-before-first-repair"
+        after_first = b"rendered-after-first-repair"
+        after_second = b"rendered-after-second-repair"
+        rendered.write_bytes(after_second)
+
+        run_dir = root / "run"
+        manifest = initialize_run(
+            source_pdf=source,
+            run_dir=run_dir,
+            source_language="en",
+            target_language="zh-CN",
+        )
+        backup_dir = run_dir / "repair_backups"
+        backup_dir.mkdir()
+        first_backup = backup_dir / "before-first.pdf"
+        second_backup = backup_dir / "before-second.pdf"
+        first_backup.write_bytes(before_first)
+        second_backup.write_bytes(after_first)
+
+        before_first_hash = hashlib.sha256(before_first).hexdigest()
+        after_first_hash = hashlib.sha256(after_first).hexdigest()
+        after_second_hash = hashlib.sha256(after_second).hexdigest()
+        manifest["repair_history"] = [
+            {
+                "type": "vector",
+                "description": "first repair",
+                "backup_pdf": str(first_backup.resolve()),
+                "before_sha256": before_first_hash,
+                "after_sha256": after_first_hash,
+            },
+            {
+                "type": "text-overlay",
+                "description": "second repair",
+                "backup_pdf": str(second_backup.resolve()),
+                "before_sha256": after_first_hash,
+                "after_sha256": after_second_hash,
+            },
+        ]
+        qa_report = run_dir / "qa" / "qa_report.json"
+        qa_report.parent.mkdir(parents=True)
+        qa_report.write_text(
+            json.dumps(
+                {
+                    "translated_sha256": after_second_hash,
+                    "visual_accepted": True,
+                    "visual_reviewed_by": "reviewer",
+                }
+            ),
+            encoding="utf-8",
+        )
+        manifest["status"] = "accepted"
+        manifest["rendered_pdf"] = str(rendered.resolve())
+        manifest["rendered_sha256"] = after_second_hash
+        manifest["qa_report"] = str(qa_report.resolve())
+        manifest["accepted_by"] = "reviewer"
+        save_manifest(run_dir, manifest)
+        return run_dir, rendered, second_backup, qa_report
+
+    def _make_text_repair_run(
+        self, root: Path
+    ) -> tuple[Path, Path, tuple[float, float, float, float], Path]:
+        """建立可审计修复夹具。
+
+        夹具包含两处损坏图注、稳定相邻正文和完全不应变化的第二页。
+        """
+
+        source = root / "source.pdf"
+        rendered = root / "rendered.pdf"
+        for path in (source, rendered):
+            document = canvas.Canvas(str(path))
+            # 黑色标记位于待修复矩形右侧空白处，用于确认文字删除不会用白色填充
+            # 遮盖同一矩形内原本可见的矢量对象。
+            document.rect(470, 690, 10, 8, stroke=1, fill=1)
+            document.drawString(40, 700, "FiguFigure 5 broken caption perio d")
+            document.drawString(40, 660, "Stable outside text 10 mm")
+            document.drawString(40, 620, "Second damaged caption")
+            document.showPage()
+            document.drawString(40, 700, "Second page unchanged")
+            document.save()
+
+        # 在非目标页嵌入另一套完整字体，回归验证本次修复只子集新字体，不能调用
+        # Document.subset_fonts() 顺带重写既有字体程序。
+        existing_font = Path(reportlab.__file__).parent / "fonts" / "VeraBI.ttf"
+        opened = fitz.open(rendered)
+        try:
+            opened[1].insert_font(
+                fontname="ExistingStableFont",
+                fontfile=str(existing_font),
+            )
+            opened[1].insert_text(
+                (40, 200),
+                "Existing embedded font unchanged",
+                fontname="ExistingStableFont",
+                fontsize=10,
+            )
+            with_embedded_font = root / "rendered-with-embedded-font.pdf"
+            opened.save(with_embedded_font, garbage=4, deflate=True)
+        finally:
+            opened.close()
+        with_embedded_font.replace(rendered)
+
+        opened = fitz.open(rendered)
+        try:
+            found = opened[0].search_for("FiguFigure 5 broken caption perio d")[0]
+            rectangle = (35.0, found.y0 - 3, 500.0, found.y1 + 8)
+        finally:
+            opened.close()
+
+        run_dir = root / "run"
+        manifest = initialize_run(
+            source_pdf=source,
+            run_dir=run_dir,
+            source_language="en",
+            target_language="zh-CN",
+        )
+        manifest["status"] = "accepted"
+        manifest["rendered_pdf"] = str(rendered.resolve())
+        manifest["rendered_sha256"] = hashlib.sha256(rendered.read_bytes()).hexdigest()
+        manifest["qa_report"] = str(root / "old-qa.json")
+        manifest["accepted_by"] = "reviewer"
+        save_manifest(run_dir, manifest)
+        font_file = Path(reportlab.__file__).parent / "fonts" / "Vera.ttf"
+        return run_dir, rendered, rectangle, font_file
+
     def test_state_machine_reaches_rendered(self) -> None:
         domain = load_domain_pack("atmospheric-science")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source.pdf"
-            source.write_bytes(b"synthetic-pdf-placeholder")
+            document = canvas.Canvas(str(source))
+            document.drawString(40, 780, "Synthetic PDF without references")
+            document.save()
             run_dir = root / "run"
             initialize_run(
                 source_pdf=source,
@@ -94,13 +393,39 @@ class WorkflowTest(unittest.TestCase):
                     [{"id": segment_id(text), "source": text}],
                 )
 
-            with patch("paperlocale.workflow._invoke", side_effect=fake_collect):
+            with (
+                patch("paperlocale.workflow._invoke", side_effect=fake_collect),
+                patch(
+                    "paperlocale.workflow._layout_provenance",
+                    return_value=self.layout_provenance,
+                ),
+            ):
                 collect_run(run_dir, "/fake/pdf2zh_next")
-            self.assertEqual(load_manifest(run_dir)["status"], "collected")
+            collected_manifest = load_manifest(run_dir)
+            self.assertEqual(collected_manifest["status"], "collected")
+            self.assertEqual(collected_manifest["layout_engine"], self.layout_provenance)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="test reviewer",
+            )
 
             self.assertEqual(
                 translate_run(run_dir=run_dir, provider=_Provider(), domain=domain),
                 (0, 1),
+            )
+            translated_manifest = load_manifest(run_dir)
+            self.assertEqual(
+                translated_manifest["domain_pack"]["content_sha256"],
+                domain.content_sha256,
+            )
+            self.assertEqual(translated_manifest["reference_policy"], "preserve")
+            self.assertEqual(translated_manifest["reference_segment_count"], 0)
+            self.assertTrue(translated_manifest["reference_map_sha256"])
+            self.assertTrue(
+                translated_manifest["translation_provider"]["provider"].endswith(
+                    "test_workflow._Provider"
+                )
             )
             validate_run(run_dir, domain)
             self.assertEqual(load_manifest(run_dir)["status"], "validated")
@@ -111,7 +436,13 @@ class WorkflowTest(unittest.TestCase):
                 output.mkdir(parents=True, exist_ok=True)
                 (output / "translated.pdf").write_bytes(b"translated-pdf-placeholder")
 
-            with patch("paperlocale.workflow._invoke", side_effect=fake_render):
+            with (
+                patch("paperlocale.workflow._invoke", side_effect=fake_render),
+                patch(
+                    "paperlocale.workflow._layout_provenance",
+                    return_value=self.layout_provenance,
+                ),
+            ):
                 result = render_run(run_dir, "/fake/pdf2zh_next")
             self.assertEqual(result.name, "translated.pdf")
             rendered_manifest = load_manifest(run_dir)
@@ -119,6 +450,150 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(
                 rendered_manifest["rendered_sha256"],
                 hashlib.sha256(result.read_bytes()).hexdigest(),
+            )
+
+    def test_run_to_qa_advances_initialized_run_without_accepting(self) -> None:
+        """默认仍停在人工边界；无人值守可自动生成完整候选 PDF。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            document = canvas.Canvas(str(source))
+            # 真实 QA 会拒绝疑似空白页，因此夹具提供足够正文，而不是降低门禁。
+            for row in range(24):
+                document.drawString(
+                    40,
+                    780 - row * 24,
+                    f"Synthetic paragraph {row + 1}: Soil moisture was 10 mm.",
+                )
+            document.save()
+            run_dir = root / "run"
+            initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+
+            def fake_layout(
+                command: list[str],
+                log_path: Path,
+                timeout_seconds: int = 7200,
+            ) -> None:
+                manifest = load_manifest(run_dir)
+                bridge = command[command.index("--clitranslator-command") + 1]
+                if " collect " in f" {bridge} ":
+                    text = "Soil moisture was 10 mm."
+                    write_jsonl_atomic(
+                        Path(str(manifest["segments_path"])),
+                        [{"id": segment_id(text), "source": text}],
+                    )
+                    return
+                output = Path(str(manifest["render_output_dir"]))
+                output.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, output / "translated.pdf")
+
+            with (
+                patch("paperlocale.workflow._invoke", side_effect=fake_layout),
+                patch(
+                    "paperlocale.workflow._layout_provenance",
+                    return_value=self.layout_provenance,
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "参考文献映射尚未人工确认"):
+                    run_to_qa(
+                        run_dir=run_dir,
+                        provider=_Provider(),
+                        domain=domain,
+                        pdf2zh_bin="/fake/pdf2zh_next",
+                        dpi=72,
+                    )
+                manifest = run_to_qa(
+                    run_dir=run_dir,
+                    provider=_Provider(),
+                    domain=domain,
+                    pdf2zh_bin="/fake/pdf2zh_next",
+                    dpi=72,
+                    unattended=True,
+                )
+            self.assertEqual(manifest["status"], "qa_generated")
+            self.assertEqual(manifest["execution_mode"], "unattended")
+            self.assertEqual(manifest["unattended_reference_segment_count"], 0)
+            self.assertNotIn("accepted_by", manifest)
+            self.assertTrue(Path(str(manifest["qa_report"])).is_file())
+            self.assertTrue(
+                (Path(str(manifest["qa_output_dir"])) / "comparisons/page-001.png").is_file()
+            )
+
+    def test_unattended_run_preserves_deterministic_unsafe_segment(self) -> None:
+        """无人值守只自动透传确定性安全清单，不把危险片段交给模型。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        provider = _SafetyProvider()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            document = canvas.Canvas(str(source))
+            for row in range(24):
+                document.drawString(
+                    40,
+                    780 - row * 24,
+                    f"Synthetic paragraph {row + 1}: visible body text.",
+                )
+            document.save()
+            run_dir = root / "run"
+            initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+
+            def fake_layout(
+                command: list[str],
+                log_path: Path,
+                timeout_seconds: int = 7200,
+            ) -> None:
+                manifest = load_manifest(run_dir)
+                bridge = command[command.index("--clitranslator-command") + 1]
+                if " collect " in f" {bridge} ":
+                    # 该短 ASCII 对象不在页面可见文字中，必须由安全规则原样保留。
+                    text = "XY"
+                    write_jsonl_atomic(
+                        Path(str(manifest["segments_path"])),
+                        [{"id": segment_id(text), "source": text}],
+                    )
+                    return
+                output = Path(str(manifest["render_output_dir"]))
+                output.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, output / "translated.pdf")
+
+            with (
+                patch("paperlocale.workflow._invoke", side_effect=fake_layout),
+                patch(
+                    "paperlocale.workflow._layout_provenance",
+                    return_value=self.layout_provenance,
+                ),
+            ):
+                manifest = run_to_qa(
+                    run_dir=run_dir,
+                    provider=provider,
+                    domain=domain,
+                    pdf2zh_bin="/fake/pdf2zh_next",
+                    dpi=72,
+                    unattended=True,
+                )
+
+            self.assertEqual(manifest["status"], "qa_generated")
+            self.assertEqual(manifest["unattended_passthrough_segment_count"], 1)
+            self.assertEqual(provider.calls, 0)
+            mapping = json.loads(
+                (run_dir / "passthrough_map.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                mapping["entries"][0]["confirmed_by"],
+                "paperlocale-unattended",
             )
 
     def test_collect_cannot_run_twice(self) -> None:
@@ -157,6 +632,56 @@ class WorkflowTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "发生变化"):
                 collect_run(run_dir, "/fake/pdf2zh_next")
 
+    def test_layout_cli_is_found_next_to_current_interpreter(self) -> None:
+        """未激活 venv 时仍应找到由同一解释器安装的版面命令。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            interpreter = bin_dir / "python"
+            interpreter.touch()
+            layout_cli = bin_dir / "pdf2zh_next"
+            layout_cli.touch()
+            with (
+                patch("paperlocale.workflow.shutil.which", return_value=None),
+                patch("paperlocale.workflow.sys.executable", str(interpreter)),
+            ):
+                self.assertEqual(_resolve_pdf2zh(None), str(layout_cli))
+
+    def test_layout_version_probe_retries_one_cold_start_timeout(self) -> None:
+        """干净安装的首次版本探测超时后，只重试一次并保留实际版本。"""
+
+        successful_probe = subprocess.CompletedProcess(
+            args=["/fake/pdf2zh_next", "--version"],
+            returncode=0,
+            stdout="pdf2zh-next version: 2.9.0\n",
+            stderr="",
+        )
+        with (
+            patch(
+                "paperlocale.workflow.subprocess.run",
+                side_effect=[
+                    subprocess.TimeoutExpired(
+                        cmd=["/fake/pdf2zh_next", "--version"],
+                        timeout=60,
+                    ),
+                    successful_probe,
+                ],
+            ) as run_probe,
+            patch(
+                "paperlocale.workflow.importlib.metadata.version",
+                return_value="0.6.2",
+            ),
+            patch(
+                "paperlocale.workflow.shutil.which",
+                return_value="/fake/pdf2zh_next",
+            ),
+        ):
+            provenance = _layout_provenance("/fake/pdf2zh_next")
+
+        self.assertEqual(run_probe.call_count, 2)
+        self.assertEqual(provenance, self.layout_provenance)
+
     def test_domain_language_mismatch_is_rejected(self) -> None:
         """运行语言必须和领域包声明一致，不能静默套用错误提示。"""
 
@@ -177,6 +702,435 @@ class WorkflowTest(unittest.TestCase):
             save_manifest(run_dir, manifest)
             with self.assertRaisesRegex(ValueError, "领域包语言"):
                 translate_run(run_dir=run_dir, provider=_Provider(), domain=domain)
+
+    def test_partial_translation_keeps_run_in_collected_state(self) -> None:
+        """批内部分成功只更新断点证据，不得推进为 translated。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(40, 780, "Synthetic PDF without references")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            sources = ("Soil moisture was 10 mm.", "Air temperature was 20 °C.")
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [{"id": segment_id(text), "source": text} for text in sources],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="test reviewer",
+            )
+
+            with self.assertRaisesRegex(ValueError, "合格译文已保存"):
+                translate_run(run_dir=run_dir, provider=_Provider(), domain=domain)
+
+            failed_manifest = load_manifest(run_dir)
+            self.assertEqual(failed_manifest["status"], "collected")
+            self.assertEqual(failed_manifest["translation_count"], 1)
+            self.assertTrue(Path(str(failed_manifest["rejected_translations"])).is_file())
+            self.assertEqual(
+                failed_manifest["domain_pack"]["content_sha256"],
+                domain.content_sha256,
+            )
+
+    def test_codex_cli_version_change_resumes_and_records_history(self) -> None:
+        """同模型与推理强度下只变更 CLI 版本时应续跑并留下证据。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(40, 780, "Soil moisture was 10 mm.")
+            document.drawString(40, 750, "Air temperature was 20 °C.")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            sources = (
+                "Soil moisture was 10 mm.",
+                "Air temperature was 20 °C.",
+            )
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [{"id": segment_id(text), "source": text} for text in sources],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="reviewer",
+            )
+            write_jsonl_atomic(
+                Path(str(manifest["translations_path"])),
+                [
+                    {
+                        "id": segment_id(sources[0]),
+                        "source": sources[0],
+                        "target": "土壤湿度为10 mm。",
+                    }
+                ],
+            )
+            recorded = {
+                "provider": "codex-local",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "codex_cli_version": "codex-cli 0.149.0-alpha.4.1",
+            }
+            current = {
+                **recorded,
+                "codex_cli_version": "codex-cli 0.150.0-alpha.8",
+            }
+            manifest["status"] = "collected"
+            manifest["translation_count"] = 1
+            manifest["translation_provider"] = recorded
+            save_manifest(run_dir, manifest)
+
+            result = translate_run(
+                run_dir=run_dir,
+                provider=_ProvenanceProvider(
+                    current,
+                    {sources[1]: "气温为20 °C。"},
+                ),
+                domain=domain,
+            )
+
+            self.assertEqual(result, (1, 1))
+            translated_manifest = load_manifest(run_dir)
+            self.assertEqual(translated_manifest["translation_provider"], recorded)
+            history = translated_manifest["translation_provider_history"]
+            self.assertEqual(
+                [entry["translation_count_before"] for entry in history],
+                [0, 1],
+            )
+            self.assertEqual(history[-1]["provenance"], current)
+
+    def test_codex_model_change_still_rejects_resume(self) -> None:
+        """CLI 兼容补丁不得放宽模型或推理强度身份。"""
+
+        recorded = {
+            "provider": "codex-local",
+            "model": "gpt-5.6-sol",
+            "reasoning_effort": "high",
+            "codex_cli_version": "codex-cli 0.149.0-alpha.4.1",
+        }
+        current = {
+            **recorded,
+            "model": "different-model",
+            "codex_cli_version": "codex-cli 0.150.0-alpha.8",
+        }
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            text = "Soil moisture was 10 mm."
+            document.drawString(40, 780, text)
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [{"id": segment_id(text), "source": text}],
+            )
+            manifest["status"] = "collected"
+            manifest["translation_provider"] = recorded
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="reviewer",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Provider 配置"):
+                translate_run(
+                    run_dir=run_dir,
+                    provider=_ProvenanceProvider(
+                        current,
+                        {text: "土壤湿度为10 mm。"},
+                    ),
+                    domain=domain,
+                )
+
+    def test_validate_rejects_domain_changed_after_translation(self) -> None:
+        """断点续跑不得把翻译时记录的领域包换成另一个同语言包。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            source.write_bytes(b"placeholder")
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            manifest["status"] = "translated"
+            manifest["domain_pack"] = {"id": domain.pack_id, "version": domain.version}
+            save_manifest(run_dir, manifest)
+
+            changed_domain = replace(domain, pack_id="different-domain")
+            with self.assertRaisesRegex(ValueError, "与翻译记录不一致"):
+                validate_run(run_dir, changed_domain)
+
+    def test_validate_rejects_reference_map_changed_after_translation(self) -> None:
+        """人工确认映射一旦产生译文就必须由清单哈希锁定。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            document = canvas.Canvas(str(source))
+            document.drawString(40, 780, "Synthetic PDF without references")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            text = "Soil moisture was 10 mm."
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [{"id": segment_id(text), "source": text}],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="test reviewer",
+            )
+            translate_run(run_dir=run_dir, provider=_Provider(), domain=domain)
+
+            map_path = run_dir / "reference_map.json"
+            map_path.write_text(
+                map_path.read_text(encoding="utf-8") + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "映射在翻译后发生变化"):
+                validate_run(run_dir, domain)
+
+    def test_partial_failure_can_be_confirmed_as_hash_bound_passthrough(self) -> None:
+        """失败片段可经人工确认后透传，且不能绕过清单哈希改写映射。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(40, 780, "Synthetic PDF without references")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            source = (
+                "Alice Smith, Bob Jones, Carol White, David Brown, "
+                "Edward Green, and Frances Black"
+            )
+            sid = segment_id(source)
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [{"id": sid, "source": source}],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="reviewer",
+            )
+
+            provider = _IdentityProvider()
+            with self.assertRaisesRegex(ValueError, "未通过门禁"):
+                translate_run(run_dir=run_dir, provider=provider, domain=domain)
+            confirm_passthrough_run(
+                run_dir,
+                segment_ids=[sid],
+                reason="作者姓名串没有可翻译正文",
+                confirmed_by="reviewer",
+            )
+            self.assertEqual(
+                translate_run(run_dir=run_dir, provider=provider, domain=domain),
+                (0, 1),
+            )
+            self.assertEqual(provider.calls, 2)
+            translated_manifest = load_manifest(run_dir)
+            self.assertEqual(translated_manifest["schema_version"], 4)
+            self.assertEqual(translated_manifest["passthrough_segment_count"], 1)
+            self.assertTrue(translated_manifest["passthrough_map_sha256"])
+            validate_run(run_dir, domain)
+
+            map_path = run_dir / "passthrough_map.json"
+            map_path.write_text(
+                map_path.read_text(encoding="utf-8") + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "透传映射在翻译后发生变化"):
+                validate_run(run_dir, domain)
+
+    def test_split_token_review_blocks_provider_until_passthrough_confirmation(self) -> None:
+        """碎词和不可见短文本必须先人工透传，普通正文才可调用模型。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(
+                40,
+                780,
+                "Figure 5 Assessments of agricultural drought for the period",
+            )
+            normal = "Soil moisture was 10 mm."
+            document.drawString(40, 740, normal)
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            split = "re 5 Assessments of agricultural drought for the perio"
+            hidden = "Hello"
+            rows = [
+                {"id": segment_id(text), "source": text}
+                for text in (split, hidden, normal)
+            ]
+            write_jsonl_atomic(Path(str(manifest["segments_path"])), rows)
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[],
+                confirmed_by="reviewer",
+            )
+
+            provider = _SafetyProvider()
+            with self.assertRaisesRegex(ValueError, "不可安全独立翻译"):
+                translate_run(run_dir=run_dir, provider=provider, domain=domain)
+            self.assertEqual(provider.calls, 0)
+            confirm_passthrough_run(
+                run_dir,
+                segment_ids=[segment_id(split), segment_id(hidden)],
+                reason="源 PDF 显示碎词边界或不可见短文本",
+                confirmed_by="reviewer",
+            )
+            self.assertEqual(
+                translate_run(run_dir=run_dir, provider=provider, domain=domain),
+                (0, 3),
+            )
+            self.assertEqual(provider.calls, 1)
+            self.assertEqual(provider.sources, [normal])
+            translated = load_manifest(run_dir)
+            self.assertEqual(translated["segment_safety_required_count"], 2)
+            self.assertTrue(translated["segment_safety_summary_sha256"])
+            validate_run(run_dir, domain)
+
+    def test_reference_fragment_is_exempt_from_duplicate_safety_passthrough(self) -> None:
+        """已确认 preserve 的参考文献碎片不能再被要求重复透传。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_pdf = root / "source.pdf"
+            document = canvas.Canvas(str(source_pdf))
+            document.drawString(40, 780, "Soil moisture was 10 mm.")
+            document.showPage()
+            document.drawString(40, 780, "References")
+            document.drawString(40, 740, "Publisher note")
+            document.save()
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source_pdf,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            body = "Soil moisture was 10 mm."
+            reference_fragment = "blisher note"
+            write_jsonl_atomic(
+                Path(str(manifest["segments_path"])),
+                [
+                    {"id": segment_id(text), "source": text}
+                    for text in (body, reference_fragment)
+                ],
+            )
+            manifest["status"] = "collected"
+            save_manifest(run_dir, manifest)
+            confirm_reference_run(
+                run_dir,
+                additional_segment_ids=[segment_id(reference_fragment)],
+                confirmed_by="reviewer",
+            )
+
+            provider = _SafetyProvider()
+            self.assertEqual(
+                translate_run(run_dir=run_dir, provider=provider, domain=domain),
+                (0, 2),
+            )
+            self.assertEqual(provider.sources, [body])
+            translated = load_manifest(run_dir)
+            self.assertEqual(translated["segment_safety_required_count"], 0)
+            self.assertEqual(translated["segment_safety_reference_exempt_count"], 1)
+            validate_run(run_dir, domain)
+
+    def test_validate_rejects_domain_content_changed_without_version_bump(self) -> None:
+        """相同 id/version 不能掩盖提示词或术语表内容变化。"""
+
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            source.write_bytes(b"placeholder")
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            manifest["status"] = "translated"
+            manifest["domain_pack"] = {
+                "id": domain.pack_id,
+                "version": domain.version,
+                "content_sha256": domain.content_sha256,
+            }
+            save_manifest(run_dir, manifest)
+
+            changed_domain = replace(domain, content_sha256="0" * 64)
+            with self.assertRaisesRegex(ValueError, "领域包内容"):
+                validate_run(run_dir, changed_domain)
 
     def test_legacy_rendered_run_binds_hash_when_qa_is_regenerated(self) -> None:
         """v0.1.0 清单可以重新 QA，但不能跳过重新检查直接验收。"""
@@ -209,7 +1163,7 @@ class WorkflowTest(unittest.TestCase):
             with patch("paperlocale.workflow.inspect_pdf_pair", return_value=report):
                 qa_run(run_dir)
             upgraded = load_manifest(run_dir)
-            self.assertEqual(upgraded["schema_version"], 2)
+            self.assertEqual(upgraded["schema_version"], 4)
             self.assertEqual(upgraded["status"], "qa_generated")
             self.assertEqual(upgraded["rendered_sha256"], report["translated_sha256"])
 
@@ -237,6 +1191,539 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(manifest["accepted_by"], "reviewer")
             self.assertTrue(report["visual_accepted"])
             self.assertEqual(report["visual_reviewed_by"], "reviewer")
+
+    def test_apply_vector_repair_records_history_and_resets_qa(self) -> None:
+        """修复导入必须保留旧 PDF，并强制重新执行机器和人工 QA。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            rendered = root / "rendered.pdf"
+            repaired = root / "repaired.pdf"
+
+            for path, with_icon in ((source, False), (rendered, False), (repaired, True)):
+                document = canvas.Canvas(str(path))
+                document.drawString(40, 780, "Stable scientific text")
+                if with_icon:
+                    document.ellipse(420, 740, 432, 748, stroke=1, fill=0)
+                document.save()
+
+            run_dir = root / "run"
+            manifest = initialize_run(
+                source_pdf=source,
+                run_dir=run_dir,
+                source_language="en",
+                target_language="zh-CN",
+            )
+            manifest["status"] = "accepted"
+            manifest["rendered_pdf"] = str(rendered.resolve())
+            manifest["rendered_sha256"] = hashlib.sha256(rendered.read_bytes()).hexdigest()
+            manifest["qa_report"] = str(root / "old-qa.json")
+            manifest["accepted_by"] = "reviewer"
+            save_manifest(run_dir, manifest)
+
+            result = apply_vector_repair(
+                run_dir,
+                repaired_pdf=repaired,
+                description="恢复首页链接矢量图标",
+            )
+            updated = load_manifest(run_dir)
+            history = updated["repair_history"][0]
+            self.assertEqual(result, rendered.resolve())
+            self.assertEqual(updated["status"], "rendered")
+            self.assertNotIn("qa_report", updated)
+            self.assertNotIn("accepted_by", updated)
+            self.assertEqual(history["type"], "vector")
+            self.assertEqual(history["vector_changes"][0]["page"], 1)
+            self.assertTrue(Path(history["backup_pdf"]).is_file())
+            self.assertEqual(
+                updated["rendered_sha256"],
+                hashlib.sha256(rendered.read_bytes()).hexdigest(),
+            )
+
+    def test_restore_source_vectors_replays_only_missing_paths(self) -> None:
+        """内置修复只处理 QA 明确报告矢量减少的页面。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, translated, _ = self._make_source_vector_repair_run(root)
+
+            repaired = restore_source_vectors(
+                run_dir,
+                description="restore one missing source line",
+            )
+
+            self.assertEqual(repaired, translated.resolve())
+            repaired_document = fitz.open(repaired)
+            try:
+                self.assertEqual(len(repaired_document[0].get_drawings()), 2)
+                self.assertEqual(len(repaired_document[1].get_drawings()), 1)
+                self.assertEqual(
+                    repaired_document[0].get_text(),
+                    "stable text page 1\n",
+                )
+                self.assertEqual(
+                    repaired_document[1].get_text(),
+                    "stable text page 2\n",
+                )
+            finally:
+                repaired_document.close()
+            repaired_manifest = load_manifest(run_dir)
+            self.assertEqual(repaired_manifest["status"], "rendered")
+            restoration = repaired_manifest["repair_history"][-1][
+                "source_vector_restoration"
+            ]
+            self.assertEqual([item["page"] for item in restoration], [1])
+            self.assertEqual(restoration[0]["restored_count"], 1)
+            self.assertEqual(
+                [
+                    item["page"]
+                    for item in repaired_manifest["repair_history"][-1][
+                        "vector_changes"
+                    ]
+                ],
+                [1],
+            )
+
+    def test_restore_source_vectors_binds_both_qa_hashes(self) -> None:
+        """源或译文哈希任一不属于当前候选时都必须拒绝修复。"""
+
+        for field, message in (
+            ("source_sha256", "不属于当前源 PDF"),
+            ("translated_sha256", "不属于当前译文 PDF"),
+        ):
+            with (
+                self.subTest(field=field),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                run_dir, translated, report_path = self._make_source_vector_repair_run(
+                    Path(directory)
+                )
+                before = translated.read_bytes()
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                report[field] = "0" * 64
+                report_path.write_text(json.dumps(report), encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, message):
+                    restore_source_vectors(run_dir, description="must reject stale QA")
+
+                self.assertEqual(translated.read_bytes(), before)
+                self.assertNotIn("repair_history", load_manifest(run_dir))
+
+    def test_restore_source_vectors_rejects_qa_without_loss_pages(self) -> None:
+        """QA 没有 source > translated 页时不得生成无依据的矢量修复。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, translated, report_path = self._make_source_vector_repair_run(
+                Path(directory)
+            )
+            before = translated.read_bytes()
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            for page in report["pages"]:
+                page["translated_vector_drawings"] = page["source_vector_drawings"]
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "没有报告矢量绘图减少页"):
+                restore_source_vectors(run_dir, description="must reject empty gate")
+
+            self.assertEqual(translated.read_bytes(), before)
+            self.assertNotIn("repair_history", load_manifest(run_dir))
+            self.assertEqual(list(run_dir.glob(".source-vector-repair-*.pdf")), [])
+
+    def test_rollback_last_repair_restores_only_chain_tail(self) -> None:
+        """回滚应逆向恢复末项备份、移动历史并解除旧 QA/accept 绑定。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, rendered, second_backup, qa_report = self._make_repair_chain_run(
+                Path(directory)
+            )
+            original = load_manifest(run_dir)
+            first_entry = original["repair_history"][0]
+            last_entry = original["repair_history"][1]
+
+            result = rollback_last_repair(
+                run_dir,
+                reason="remove audited second repair",
+            )
+
+            updated = load_manifest(run_dir)
+            self.assertEqual(result, rendered.resolve())
+            self.assertEqual(rendered.read_bytes(), second_backup.read_bytes())
+            self.assertEqual(updated["status"], "rendered")
+            self.assertEqual(
+                updated["rendered_sha256"],
+                last_entry["before_sha256"],
+            )
+            self.assertEqual(updated["repair_history"], [first_entry])
+            rolled_back = updated["repair_rollback_history"][-1]
+            self.assertEqual(
+                rolled_back["before_sha256"],
+                last_entry["before_sha256"],
+            )
+            self.assertEqual(
+                rolled_back["after_sha256"],
+                last_entry["after_sha256"],
+            )
+            self.assertEqual(
+                rolled_back["rollback_reason"],
+                "remove audited second repair",
+            )
+            self.assertIn("rolled_back_at", rolled_back)
+            self.assertNotIn("qa_report", updated)
+            self.assertNotIn("accepted_by", updated)
+            # 旧 QA 是审计证据，只从当前清单解绑，不能随回滚一并删除。
+            self.assertTrue(qa_report.is_file())
+            self.assertTrue(json.loads(qa_report.read_text())["visual_accepted"])
+            self.assertEqual(list(run_dir.glob(".rollback-current-*.pdf")), [])
+            self.assertEqual(list(rendered.parent.glob("*.rollback.tmp")), [])
+
+    def test_rollback_last_repair_requires_current_tail_after_hash(self) -> None:
+        """当前 PDF 即使哈希自洽，也不能跳过修复链末项直接回滚前项。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, rendered, second_backup, _ = self._make_repair_chain_run(
+                Path(directory)
+            )
+            rendered.write_bytes(second_backup.read_bytes())
+            manifest = load_manifest(run_dir)
+            manifest["rendered_sha256"] = hashlib.sha256(
+                rendered.read_bytes()
+            ).hexdigest()
+            save_manifest(run_dir, manifest)
+
+            with self.assertRaisesRegex(ValueError, "已不是最后一次修复的产物"):
+                rollback_last_repair(run_dir, reason="must not skip chain tail")
+
+            self.assertEqual(len(load_manifest(run_dir)["repair_history"]), 2)
+
+    def test_rollback_last_repair_validates_backup_presence_and_hash(self) -> None:
+        """链尾备份缺失或不等于 before 哈希时不得改写当前 PDF。"""
+
+        for scenario in ("missing", "wrong-hash"):
+            with (
+                self.subTest(scenario=scenario),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                run_dir, rendered, second_backup, _ = self._make_repair_chain_run(
+                    Path(directory)
+                )
+                before = rendered.read_bytes()
+                if scenario == "missing":
+                    second_backup.unlink()
+                else:
+                    second_backup.write_bytes(b"not-the-bound-before-pdf")
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "备份不存在或哈希不一致",
+                ):
+                    rollback_last_repair(run_dir, reason="must reject invalid backup")
+
+                self.assertEqual(rendered.read_bytes(), before)
+                self.assertEqual(len(load_manifest(run_dir)["repair_history"]), 2)
+
+    def test_apply_text_repair_subsets_font_and_resets_qa(self) -> None:
+        """文字修复必须备份旧 PDF、子集字体并留下可追溯记录。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, rendered, rectangle, font_file = self._make_text_repair_run(root)
+            before_hash = hashlib.sha256(rendered.read_bytes()).hexdigest()
+            before_document = fitz.open(rendered)
+            try:
+                existing_font_hashes = sorted(
+                    {
+                        hashlib.sha256(
+                            before_document.extract_font(font[0])[-1]
+                        ).hexdigest()
+                        for font in before_document[1].get_fonts(full=True)
+                        if before_document.extract_font(font[0])[-1]
+                    }
+                )
+            finally:
+                before_document.close()
+
+            result = apply_text_repair(
+                run_dir,
+                page_number=1,
+                rectangle=rectangle,
+                replacement="Figure 5 corrected caption",
+                font_file=font_file,
+                font_size=10,
+                description="修复跨对象碎裂图注",
+            )
+
+            updated = load_manifest(run_dir)
+            history = updated["repair_history"][0]
+            repaired = fitz.open(rendered)
+            try:
+                page_text = repaired[0].get_text()
+                self.assertIn("Figure 5 corrected caption", page_text)
+                self.assertNotIn("broken caption", page_text)
+                marker = repaired[0].get_pixmap(
+                    matrix=fitz.Matrix(2, 2),
+                    alpha=False,
+                ).pixel(
+                    round(475 * 2),
+                    round((repaired[0].rect.height - 694) * 2),
+                )
+                self.assertLess(
+                    max(marker[:3]),
+                    40,
+                    "文字修复不得以白色 redaction 填充遮住目标矩形内的既有矢量",
+                )
+                self.assertEqual(
+                    repaired[1].get_text().splitlines(),
+                    [
+                        "Second page unchanged",
+                        "Existing embedded font unchanged",
+                    ],
+                )
+                repaired_font_hashes = sorted(
+                    {
+                        hashlib.sha256(repaired.extract_font(font[0])[-1]).hexdigest()
+                        for font in repaired[1].get_fonts(full=True)
+                        if repaired.extract_font(font[0])[-1]
+                    }
+                )
+                self.assertEqual(repaired_font_hashes, existing_font_hashes)
+            finally:
+                repaired.close()
+
+            self.assertEqual(result, rendered.resolve())
+            self.assertEqual(updated["status"], "rendered")
+            self.assertNotIn("qa_report", updated)
+            self.assertNotIn("accepted_by", updated)
+            self.assertEqual(history["type"], "text-overlay")
+            self.assertEqual(history["page"], 1)
+            self.assertEqual(history["before_sha256"], before_hash)
+            self.assertLess(
+                history["font_program_bytes_after_subset"],
+                history["font_program_bytes_before_subset"],
+            )
+            self.assertTrue(Path(history["backup_pdf"]).is_file())
+            self.assertEqual(
+                updated["rendered_sha256"],
+                hashlib.sha256(rendered.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(list(run_dir.glob(".text-repair-*.pdf")), [])
+
+    def test_apply_text_repair_single_line_uses_font_metrics(self) -> None:
+        """浅矩形单行模式应按子集字体实际宽高写入，不触发换行。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, rendered, _rectangle, font_file = self._make_text_repair_run(root)
+            document = fitz.open(rendered)
+            try:
+                found = document[0].search_for(
+                    "FiguFigure 5 broken caption perio d"
+                )[0]
+                shallow = (35.0, found.y0, 300.0, found.y0 + 10.0)
+            finally:
+                document.close()
+
+            apply_text_repair(
+                run_dir,
+                page_number=1,
+                rectangle=shallow,
+                replacement="Figure 5 corrected caption",
+                font_file=font_file,
+                font_size=7.0,
+                description="single-line shallow repair",
+                single_line=True,
+            )
+
+            repaired = fitz.open(rendered)
+            try:
+                self.assertIn("Figure 5 corrected caption", repaired[0].get_text())
+                self.assertNotIn("broken caption", repaired[0].get_text())
+            finally:
+                repaired.close()
+            history = load_manifest(run_dir)["repair_history"][-1]
+            self.assertEqual(history["placement_mode"], "single-line")
+            self.assertLessEqual(history["text_height"], shallow[3] - shallow[1])
+
+    def test_apply_text_repair_can_remove_a_bound_fragment_without_font(self) -> None:
+        """只删除模式必须严格限定矩形，且不嵌入空字体子集。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, rendered, rectangle, _font_file = self._make_text_repair_run(root)
+            apply_text_repair(
+                run_dir,
+                page_number=1,
+                rectangle=rectangle,
+                replacement="",
+                font_file=None,
+                font_size=None,
+                description="删除跨对象残留文字",
+            )
+
+            repaired = fitz.open(rendered)
+            try:
+                text = repaired[0].get_text()
+            finally:
+                repaired.close()
+            history = load_manifest(run_dir)["repair_history"][0]
+            self.assertNotIn("broken caption", text)
+            self.assertIn("Stable outside text 10 mm", text)
+            self.assertEqual(history["type"], "text-removal")
+            self.assertIsNone(history["font_file"])
+            self.assertEqual(history["font_program_bytes_after_subset"], 0)
+
+    def test_apply_text_repair_uses_distinct_subsets_across_repairs(self) -> None:
+        """同一字体的连续修复必须为新增字形建立不同资源，不能复用缺字子集。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, rendered, first_rectangle, font_file = self._make_text_repair_run(
+                root
+            )
+            apply_text_repair(
+                run_dir,
+                page_number=1,
+                rectangle=first_rectangle,
+                replacement="Figure 5 corrected caption",
+                font_file=font_file,
+                font_size=10,
+                description="第一次文字修复",
+            )
+
+            repaired = fitz.open(rendered)
+            try:
+                found = repaired[0].search_for("Second damaged caption")[0]
+                second_rectangle = (35.0, found.y0 - 3, 500.0, found.y1 + 8)
+            finally:
+                repaired.close()
+            apply_text_repair(
+                run_dir,
+                page_number=1,
+                rectangle=second_rectangle,
+                replacement="XYZ revised caption",
+                font_file=font_file,
+                font_size=10,
+                description="第二次文字修复",
+            )
+
+            final_document = fitz.open(rendered)
+            try:
+                final_text = final_document[0].get_text()
+            finally:
+                final_document.close()
+            history = load_manifest(run_dir)["repair_history"]
+            self.assertIn("Figure 5 corrected caption", final_text)
+            self.assertIn("XYZ revised caption", final_text)
+            self.assertNotEqual(
+                history[0]["font_resource_name"],
+                history[1]["font_resource_name"],
+            )
+
+    def test_apply_text_repair_rejects_missing_glyph_without_mutation(self) -> None:
+        """字体不含中文时必须在删除原文字前失败。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, rendered, rectangle, font_file = self._make_text_repair_run(root)
+            before_bytes = rendered.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "缺少 replacement 所需字形"):
+                apply_text_repair(
+                    run_dir,
+                    page_number=1,
+                    rectangle=rectangle,
+                    replacement="图5 农业干旱评估",
+                    font_file=font_file,
+                    font_size=10,
+                    description="测试缺字拒绝",
+                )
+
+            self.assertEqual(rendered.read_bytes(), before_bytes)
+            self.assertEqual(load_manifest(run_dir)["status"], "accepted")
+            self.assertFalse((run_dir / "repair_backups").exists())
+
+    def test_apply_text_repair_rejects_overflow_without_mutation(self) -> None:
+        """替换文字放不下时只报错，不得覆盖当前已验收 PDF。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, rendered, rectangle, font_file = self._make_text_repair_run(root)
+            before_bytes = rendered.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "无法放入 rect"):
+                apply_text_repair(
+                    run_dir,
+                    page_number=1,
+                    rectangle=rectangle,
+                    replacement="corrected caption " * 200,
+                    font_file=font_file,
+                    font_size=10,
+                    description="测试溢出拒绝",
+                )
+
+            self.assertEqual(rendered.read_bytes(), before_bytes)
+            self.assertEqual(load_manifest(run_dir)["status"], "accepted")
+            self.assertFalse((run_dir / "repair_backups").exists())
+
+    def test_apply_text_repair_rejects_nonfinite_font_size(self) -> None:
+        """NaN 或无穷字号不能穿过公开 Python API 进入 PDF 写入路径。"""
+
+        for font_size in (math.nan, math.inf):
+            with self.subTest(font_size=font_size):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    run_dir, rendered, rectangle, font_file = (
+                        self._make_text_repair_run(root)
+                    )
+                    before_bytes = rendered.read_bytes()
+
+                    with self.assertRaisesRegex(ValueError, "有限且大于 0"):
+                        apply_text_repair(
+                            run_dir,
+                            page_number=1,
+                            rectangle=rectangle,
+                            replacement="Figure 5 corrected caption",
+                            font_file=font_file,
+                            font_size=font_size,
+                            description="测试非法字号拒绝",
+                        )
+
+                    self.assertEqual(rendered.read_bytes(), before_bytes)
+                    self.assertEqual(load_manifest(run_dir)["status"], "accepted")
+                    self.assertFalse((run_dir / "repair_backups").exists())
+
+    def test_apply_text_repair_rejects_existing_redaction(self) -> None:
+        """页面已有 redaction 时不得顺带执行，以免删除无关内容。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, rendered, rectangle, font_file = self._make_text_repair_run(root)
+            document = fitz.open(rendered)
+            document[0].add_redact_annot(fitz.Rect(35, 170, 90, 185))
+            annotated = root / "annotated.pdf"
+            document.save(annotated)
+            document.close()
+            annotated.replace(rendered)
+            manifest = load_manifest(run_dir)
+            manifest["rendered_sha256"] = hashlib.sha256(
+                rendered.read_bytes()
+            ).hexdigest()
+            save_manifest(run_dir, manifest)
+            before_bytes = rendered.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "已有 redaction 标注"):
+                apply_text_repair(
+                    run_dir,
+                    page_number=1,
+                    rectangle=rectangle,
+                    replacement="Figure 5 corrected caption",
+                    font_file=font_file,
+                    font_size=10,
+                    description="测试既有标注拒绝",
+                )
+
+            self.assertEqual(rendered.read_bytes(), before_bytes)
+            self.assertEqual(load_manifest(run_dir)["status"], "accepted")
 
 
 if __name__ == "__main__":

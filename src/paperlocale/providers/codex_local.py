@@ -22,6 +22,8 @@ from .base import (
     parse_payload,
 )
 
+REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+
 
 class CodexLocalProvider(TranslationProvider):
     """通过官方 Codex CLI 的结构化非交互模式翻译一个批次。"""
@@ -29,6 +31,7 @@ class CodexLocalProvider(TranslationProvider):
     def __init__(
         self,
         model: str | None = None,
+        reasoning_effort: str | None = None,
         codex_bin: str | Path | None = None,
         timeout_seconds: int = 1800,
     ) -> None:
@@ -37,7 +40,35 @@ class CodexLocalProvider(TranslationProvider):
             raise FileNotFoundError("未找到 codex；请先安装 Codex CLI 并执行 codex login")
         self.codex_bin = resolved
         self.model = model
+        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError(
+                "reasoning_effort 必须是 " + ", ".join(REASONING_EFFORTS)
+            )
+        self.reasoning_effort = reasoning_effort
         self.timeout_seconds = timeout_seconds
+
+    def provenance(self) -> dict[str, object]:
+        """读取实际 Codex CLI 版本，不把登录信息或用户配置写入清单。"""
+
+        completed = subprocess.run(
+            [self.codex_bin, "--version"],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        version = (completed.stdout.strip() or completed.stderr.strip()).splitlines()
+        if completed.returncode != 0 or not version:
+            raise RuntimeError(
+                f"无法读取 Codex CLI 版本，exit={completed.returncode}"
+            )
+        return {
+            "provider": "codex-local",
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "codex_cli_version": version[-1].strip(),
+        }
 
     def translate(
         self,
@@ -71,6 +102,15 @@ class CodexLocalProvider(TranslationProvider):
             ]
             if self.model:
                 command.extend(["--model", self.model])
+            if self.reasoning_effort:
+                # ``-c`` 接收 TOML 值；JSON 字符串同时也是合法 TOML 字符串，
+                # 可避免手工拼接引号或把用户输入解释成新的配置表达式。
+                command.extend(
+                    [
+                        "-c",
+                        "model_reasoning_effort=" + json.dumps(self.reasoning_effort),
+                    ]
+                )
             command.append("-")
             completed = subprocess.run(
                 command,

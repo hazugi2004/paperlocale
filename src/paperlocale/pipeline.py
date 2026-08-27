@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from .contracts import read_jsonl, segment_id, validate_translation, write_jsonl_atomic
@@ -50,6 +51,9 @@ def translate_segment_file(
     domain: DomainPack,
     max_segments: int = 200,
     max_characters: int = 30000,
+    reference_segment_ids: set[str] | frozenset[str] = frozenset(),
+    reference_policy: str = "preserve",
+    passthrough_segment_ids: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[int, int]:
     """翻译尚未通过门禁的片段，并在每批成功后原子写入断点。
 
@@ -57,6 +61,8 @@ def translate_segment_file(
     覆盖人工修订或把错误缓存继续带入 PDF。
     """
 
+    if reference_policy not in {"preserve", "translate-titles"}:
+        raise ValueError(f"参考文献策略非法：{reference_policy}")
     raw_segments = read_jsonl(segments_path)
     segments: list[Segment] = []
     seen: set[str] = set()
@@ -70,7 +76,18 @@ def translate_segment_file(
         seen.add(sid)
         segments.append(Segment(id=sid, source=source))
 
+    unknown_reference_ids = set(reference_segment_ids) - seen
+    if unknown_reference_ids:
+        raise ValueError(f"参考文献映射包含未知片段 ID：{sorted(unknown_reference_ids)}")
+    unknown_passthrough_ids = set(passthrough_segment_ids) - seen
+    if unknown_passthrough_ids:
+        raise ValueError(f"透传映射包含未知片段 ID：{sorted(unknown_passthrough_ids)}")
+    overlap = set(reference_segment_ids) & set(passthrough_segment_ids)
+    if overlap:
+        raise ValueError(f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}")
+
     existing_rows = read_jsonl(translations_path) if translations_path.exists() else []
+    rejected_path = translations_path.with_name("rejected_translations.jsonl")
     existing: dict[str, dict[str, object]] = {}
     for row in existing_rows:
         sid = str(row.get("id", ""))
@@ -80,31 +97,74 @@ def translate_segment_file(
         target = str(row.get("target", ""))
         if sid not in seen or source != next(item.source for item in segments if item.id == sid):
             raise ValueError(f"既有译文不属于当前片段集合：{sid}")
-        errors = validate_translation(source, target, domain)
+        if sid in passthrough_segment_ids:
+            errors = [] if target == source else ["人工透传片段必须与原文完全相同"]
+        elif sid in reference_segment_ids and reference_policy == "preserve":
+            errors = [] if target == source else ["preserve 策略要求参考文献原样保留"]
+        elif sid in reference_segment_ids:
+            errors = validate_translation(source, target, None)
+        else:
+            errors = validate_translation(source, target, domain)
         if errors:
             raise ValueError(f"既有译文未通过门禁：{sid}: {errors}")
         existing[sid] = row
+
+    reused_count = len(existing)
+    ordered = list(existing.values())
+    # 参考文献 preserve 和人工透传都不应进入 Provider。先原子保存原文，
+    # 即使后续模型批次失败，这些人工决定也可在断点中稳定复用。
+    preserved_ids = set(passthrough_segment_ids)
+    if reference_policy == "preserve":
+        preserved_ids.update(reference_segment_ids)
+    preserved_count = 0
+    for segment in segments:
+        if segment.id in preserved_ids and segment.id not in existing:
+            row = {"id": segment.id, "source": segment.source, "target": segment.source}
+            existing[segment.id] = row
+            ordered.append(row)
+            preserved_count += 1
+    if preserved_count:
+        write_jsonl_atomic(translations_path, ordered)
 
     pending = [segment for segment in segments if segment.id not in existing]
     context = TranslationContext(
         source_language=domain.source_language,
         target_language=domain.target_language,
         domain=domain,
+        reference_policy=reference_policy,
+        reference_segment_ids=frozenset(reference_segment_ids),
     )
-    ordered = list(existing.values())
+    provider_limit = provider.max_batch_segments
+    effective_max_segments = (
+        min(max_segments, provider_limit)
+        if provider_limit is not None
+        else max_segments
+    )
     for batch in make_batches(
         pending,
-        max_segments=max_segments,
+        max_segments=effective_max_segments,
         max_characters=max_characters,
     ):
         translated = provider.translate(batch, context)
         if [item.id for item in translated] != [item.id for item in batch]:
             raise ValueError("Provider 返回顺序或 ID 与输入批次不一致")
         accepted: list[dict[str, object]] = []
+        rejected: list[dict[str, object]] = []
         for source_segment, result in zip(batch, translated):
-            errors = validate_translation(source_segment.source, result.target, domain)
+            if source_segment.id in reference_segment_ids:
+                errors = validate_translation(source_segment.source, result.target, None)
+            else:
+                errors = validate_translation(source_segment.source, result.target, domain)
             if errors:
-                raise ValueError(f"新译文未通过门禁：{result.id}: {errors}")
+                rejected.append(
+                    {
+                        "id": result.id,
+                        "source": source_segment.source,
+                        "target": result.target,
+                        "errors": errors,
+                    }
+                )
+                continue
             accepted.append(
                 {
                     "id": result.id,
@@ -112,6 +172,80 @@ def translate_segment_file(
                     "target": result.target,
                 }
             )
-        ordered.extend(accepted)
-        write_jsonl_atomic(translations_path, ordered)
-    return len(existing), len(pending)
+        if accepted:
+            # 即使同批另有失败项，也先保存已通过门禁的结果，避免重复消耗模型额度。
+            ordered.extend(accepted)
+            write_jsonl_atomic(translations_path, ordered)
+        if rejected:
+            # 先保存首轮失败证据。即使随后同 Provider 调用遇到网络错误，
+            # 已通过译文和原始候选仍可从断点复核，不会重复消耗整批额度。
+            write_jsonl_atomic(rejected_path, rejected)
+            rejected_by_id = {str(row["id"]): row for row in rejected}
+            repair_batch = [
+                segment for segment in batch if segment.id in rejected_by_id
+            ]
+            repair_context = replace(
+                context,
+                repair_feedback={
+                    segment.id: (
+                        str(rejected_by_id[segment.id]["target"]),
+                        tuple(str(error) for error in rejected_by_id[segment.id]["errors"]),
+                    )
+                    for segment in repair_batch
+                },
+            )
+            repaired = provider.translate(repair_batch, repair_context)
+            if [item.id for item in repaired] != [item.id for item in repair_batch]:
+                raise ValueError("Provider 修复重试返回顺序或 ID 与输入批次不一致")
+
+            repaired_accepted: list[dict[str, object]] = []
+            final_rejected: list[dict[str, object]] = []
+            for source_segment, result in zip(repair_batch, repaired):
+                if source_segment.id in reference_segment_ids:
+                    errors = validate_translation(source_segment.source, result.target, None)
+                else:
+                    errors = validate_translation(source_segment.source, result.target, domain)
+                if errors:
+                    initial = rejected_by_id[source_segment.id]
+                    final_rejected.append(
+                        {
+                            "id": result.id,
+                            "source": source_segment.source,
+                            "target": result.target,
+                            "errors": errors,
+                            "attempts": [
+                                {
+                                    "target": initial["target"],
+                                    "errors": initial["errors"],
+                                },
+                                {"target": result.target, "errors": errors},
+                            ],
+                        }
+                    )
+                    continue
+                repaired_accepted.append(
+                    {
+                        "id": result.id,
+                        "source": source_segment.source,
+                        "target": result.target,
+                    }
+                )
+
+            if repaired_accepted:
+                ordered.extend(repaired_accepted)
+                write_jsonl_atomic(translations_path, ordered)
+            if final_rejected:
+                write_jsonl_atomic(rejected_path, final_rejected)
+                raise ValueError(
+                    f"同一 Provider 定向重试后仍有 {len(final_rejected)} 条译文"
+                    f"未通过门禁；合格译文已保存，失败候选见 {rejected_path}"
+                )
+            rejected_path.unlink()
+        if rejected_path.exists():
+            # 成功重试后清除已经解决的诊断文件，避免把旧失败误认为当前状态。
+            rejected_path.unlink()
+    # 失败片段后来被人工确认为透传时，pending 可能为空，不会进入上方模型循环；
+    # 此时也必须清除已经失效的 rejected_translations.jsonl。
+    if rejected_path.exists():
+        rejected_path.unlink()
+    return reused_count, preserved_count + len(pending)

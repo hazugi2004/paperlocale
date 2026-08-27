@@ -74,22 +74,58 @@ every candidate remains marked for manual domain review.
 ## Install
 
 Python 3.10–3.13 and Poppler's `pdftoppm` are required for the complete workflow.
-PaperLocale 0.4.1 is published on PyPI through attested Trusted Publishing.
-The audited maintainer procedure and release evidence are documented in
+Stable PaperLocale releases are published on PyPI through attested Trusted
+Publishing. The audited maintainer procedure and release evidence are documented in
 [docs/PYPI_PUBLISHING.zh-CN.md](docs/PYPI_PUBLISHING.zh-CN.md).
+PaperLocale 0.4.2 adds `--unattended` and the audited repair commands documented
+below. To run this checkout, use the normal non-editable install path
+`python -m pip install ".[layout]"`.
 The v0.4.0 manual ChatGPT Web bridge is documented in
 [docs/CHATGPT_WEB_MANUAL.zh-CN.md](docs/CHATGPT_WEB_MANUAL.zh-CN.md) for its
 copy/paste workflow and usage-limit boundary.
 
+After v0.4.2 is published, install the exact public release with:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.4.1"
+python -m pip install "paperlocale[layout]==0.4.2"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 ## Quick start
+
+For a single non-interactive command that produces a complete candidate PDF,
+use `--unattended`. The `codex-local` provider invokes structured
+`codex exec --ephemeral` in the background; it does not open or wait for a Codex
+conversation window:
+
+```bash
+paperlocale run paper.pdf --run-dir runs/paper \
+  --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
+  --domain atmospheric-science \
+  --unattended
+```
+
+The command automatically adopts only deterministic reference matches and
+deterministic layout-safety passthroughs, then translates, validates, rebuilds,
+and generates all-page machine QA. On success it prints the exact candidate PDF
+path under `runs/paper/render_output/`. References remain unchanged under the
+default `preserve` policy, and unsafe split layout objects remain byte-for-byte
+unchanged with an audit record. A "complete candidate PDF" therefore means that
+all pages and collected segments are closed, not that formulas, references, or
+unsafe fragments are forcibly converted to Chinese.
+
+Unattended mode does not fabricate human visual acceptance: the final state is
+still `qa_generated`. Provider, content-contract, or machine-QA failures exit
+with an explicit error and retain valid checkpoints; rerun the same command to
+resume. PaperLocale never silently switches providers.
+
+The supervised workflow remains available when reference boundaries should be
+reviewed manually:
 
 Use the same resumable command to initialize the run, collect layout segments,
 translate, validate, rebuild, and generate all-page QA:
@@ -170,13 +206,26 @@ paragraph. The object-level fix is proposed upstream in
 not carry a local PDF overlay workaround while that review is pending.
 
 The schema 4 run manifest binds the domain-pack content hash, provider, model,
-reasoning effort, Codex CLI version, collect/render layout-engine versions, and
-any human-confirmed passthrough map. A Codex run therefore requires an explicit
+reasoning effort, Codex CLI version history, collect/render layout-engine versions,
+and any human-confirmed passthrough map. A Codex run therefore requires an explicit
 `--model`.
 
 When vector objects disappear, QA records their page, bounding box, and area,
-and draws red boxes at the expected locations in both comparison panels. Import
-an independently repaired candidate through the audited path:
+and draws red boxes at the expected locations in both comparison panels. When
+the original source paths should remain at those locations, replay only the
+exactly missing paths through PaperLocale's controlled command:
+
+```bash
+paperlocale restore-source-vectors --run-dir runs/paper \
+  --description "Restore source vectors confirmed missing by machine QA"
+```
+
+The command requires a current QA report whose source and translated hashes
+match the manifest. It only inspects pages where QA records
+`source_vector_drawings > translated_vector_drawings`, matches missing paths at
+0.01 PDF-point precision, rejects text, page-geometry, or image changes, backs
+up the candidate, and records `repair_history`. Other independently repaired
+candidates can still use the audited import path:
 
 ```bash
 paperlocale apply-vector-repair --run-dir runs/paper \
@@ -198,6 +247,7 @@ paperlocale apply-text-repair --run-dir runs/paper \
   --replacement "Figure 5 corrected caption" \
   --font-file /path/to/NotoSansCJKsc-Regular.otf \
   --font-size 9.5 \
+  --single-line \
   --description "Repair a split-token figure caption"
 ```
 
@@ -210,7 +260,9 @@ geometry, PDF hashes, and backup in `repair_history`. QA and human acceptance
 must then run again. Use a locally licensed font and do not commit it to the
 repository; a TTF/OTF usually produces cleaner extraction metadata than a font
 collection, but every result still goes through the same QA warnings and visual
-review.
+review. `--single-line` measures the subset font's actual width, ascender, and
+descender and rejects a shallow rectangle before modification if the line does
+not fit; omit it when normal textbox wrapping is intended.
 
 For a reviewed fragment that must only be removed, pass an explicit empty
 replacement and omit the font options:
@@ -225,6 +277,19 @@ Removal mode embeds no font, records `text-removal` in `repair_history`, and
 still enforces the same rectangle, outside-text, page, image, link, vector,
 backup, QA, and human-acceptance gates. Whitespace-only replacements are
 rejected.
+
+Every recorded PDF repair can be reversed from the current chain tail only:
+
+```bash
+paperlocale rollback-last-repair --run-dir runs/paper \
+  --reason "Remove the last audited repair before rebuilding QA"
+```
+
+The command requires the current PDF to match the tail `after_sha256` and its
+backup to match `before_sha256`. It restores that exact backup, moves the entry
+from `repair_history` to `repair_rollback_history`, returns the run to
+`rendered`, and invalidates the old QA and visual-acceptance binding. It cannot
+skip newer repairs; run machine QA and full visual review again after rollback.
 
 For a BYOK OpenAI-compatible endpoint:
 

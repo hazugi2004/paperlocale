@@ -54,6 +54,8 @@ class ProviderTest(unittest.TestCase):
             self.assertIn("model_reasoning_effort=\"high\"", command)
             self.assertNotIn("auth.json", " ".join(command))
             self.assertIn("待翻译 JSON", str(kwargs["input"]))
+            self.assertIn('"must_preserve"', str(kwargs["input"]))
+            self.assertIn('"mm": 1', str(kwargs["input"]))
             return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         provider = CodexLocalProvider(
@@ -172,6 +174,31 @@ class ProviderTest(unittest.TestCase):
         ):
             result = provider.translate([self.segment], self.context)
         self.assertEqual(result, [type(result[0])("id-1", "土壤湿度为10 mm。")])
+
+    def test_qwen_mt_does_not_send_substring_glossary_term(self) -> None:
+        """spatiotemporal 不能让 Qwen 收到并不存在的 temporal 术语干预。"""
+
+        segment = Segment("id-spatiotemporal", "High spatiotemporal resolution data.")
+
+        def fake_urlopen(request, timeout: int):
+            body = json.loads(request.data.decode("utf-8"))
+            sources = {entry["source"] for entry in body["translation_options"]["terms"]}
+            self.assertNotIn("temporal resolution", sources)
+            return _Response(
+                {"choices": [{"message": {"content": "高时空分辨率资料。"}}]}
+            )
+
+        provider = QwenMTProvider(
+            base_url="https://example.test/compatible-mode/v1",
+            api_key="secret-key",
+            model="qwen-mt-plus",
+        )
+        with patch(
+            "paperlocale.providers.qwen_mt.urllib.request.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            result = provider.translate([segment], self.context)
+        self.assertEqual(result[0].target, "高时空分辨率资料。")
 
     def test_qwen_mt_restores_formula_placeholders(self) -> None:
         """模型只看到稳定哨兵，Provider 必须在返回前恢复原公式占位符。"""

@@ -34,6 +34,8 @@ from .workflow import (
     prepare_reference_review_run,
     qa_run,
     render_run,
+    restore_source_vectors,
+    rollback_last_repair,
     run_to_qa,
     translate_run,
     validate_run,
@@ -141,7 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--target-language", default="zh-CN")
     initialize.add_argument("--pages")
 
-    run = subparsers.add_parser("run", help="从当前断点一键推进到机器 QA")
+    run = subparsers.add_parser("run", help="从当前断点推进到完整候选 PDF 和机器 QA")
     run.add_argument("source_pdf", type=Path)
     run.add_argument("--run-dir", type=Path, required=True)
     run.add_argument("--source-language", default="en")
@@ -166,6 +168,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--pdf2zh-bin")
     run.add_argument("--dpi", type=int, default=144)
     run.add_argument("--pdftoppm-bin")
+    run.add_argument(
+        "--unattended",
+        action="store_true",
+        help=(
+            "自动采用确定性参考文献和片段安全结果，"
+            "无人交互地生成完整候选 PDF 与机器 QA"
+        ),
+    )
 
     collect = subparsers.add_parser("collect", help="收集 PDF 待译片段")
     collect.add_argument("--run-dir", type=Path, required=True)
@@ -286,6 +296,20 @@ def build_parser() -> argparse.ArgumentParser:
     repair.add_argument("--repaired-pdf", type=Path, required=True)
     repair.add_argument("--description", required=True)
 
+    source_vector_repair = subparsers.add_parser(
+        "restore-source-vectors",
+        help="重放译文中按精确边界缺失的源 PDF 矢量路径",
+    )
+    source_vector_repair.add_argument("--run-dir", type=Path, required=True)
+    source_vector_repair.add_argument("--description", required=True)
+
+    rollback_repair = subparsers.add_parser(
+        "rollback-last-repair",
+        help="使用 repair_history 绑定备份回滚最后一次 PDF 修复",
+    )
+    rollback_repair.add_argument("--run-dir", type=Path, required=True)
+    rollback_repair.add_argument("--reason", required=True)
+
     text_repair = subparsers.add_parser(
         "apply-text-repair",
         help="在明确页面矩形内替换或删除文字，并记录修复历史",
@@ -319,6 +343,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--font-size",
         type=float,
         help="非空 replacement 必需；只删除模式不使用",
+    )
+    text_repair.add_argument(
+        "--single-line",
+        action="store_true",
+        help="按字体实际宽高在浅矩形中写入一行，不自动换行",
     )
     text_repair.add_argument("--description", required=True)
 
@@ -425,11 +454,18 @@ def main() -> int:
             reference_policy=args.reference_policy,
             max_segments=args.max_segments,
             max_characters=args.max_characters,
+            unattended=args.unattended,
         )
         if final_manifest["status"] == "qa_generated":
             comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"
-            print(f"运行已推进到机器 QA；请逐页检查：{comparisons}")
-            print("确认无误后执行 paperlocale accept，人工验收不会自动完成")
+            rendered_pdf = Path(str(final_manifest["rendered_pdf"]))
+            if args.unattended:
+                print(f"无人值守翻译完成：{rendered_pdf}")
+                print(f"机器 QA 逐页对照：{comparisons}")
+                print("候选 PDF 尚未人工视觉验收；请逐页检查后执行 paperlocale accept")
+            else:
+                print(f"运行已推进到机器 QA；请逐页检查：{comparisons}")
+                print("确认无误后执行 paperlocale accept，人工验收不会自动完成")
         else:
             print(f"运行当前状态：{final_manifest['status']}")
         return 0
@@ -530,6 +566,20 @@ def main() -> int:
         )
         print(f"矢量修复已导入并记录历史：{repaired}；请重新执行 qa 和 accept")
         return 0
+    if args.command == "restore-source-vectors":
+        repaired = restore_source_vectors(
+            args.run_dir,
+            description=args.description,
+        )
+        print(f"缺失源矢量已重放并记录：{repaired}；请重新执行 qa 和 accept")
+        return 0
+    if args.command == "rollback-last-repair":
+        restored = rollback_last_repair(
+            args.run_dir,
+            reason=args.reason,
+        )
+        print(f"最后一次修复已回滚并记录：{restored}；请重新执行 qa")
+        return 0
     if args.command == "apply-text-repair":
         repaired = apply_text_repair(
             args.run_dir,
@@ -539,6 +589,7 @@ def main() -> int:
             font_file=args.font_file,
             font_size=args.font_size,
             description=args.description,
+            single_line=args.single_line,
         )
         print(
             f"文字修复已应用并记录历史：{repaired}；"

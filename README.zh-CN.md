@@ -58,15 +58,19 @@ paperlocale provider-eval \
 ## 安装
 
 需要 Python 3.10–3.13。完整 PDF 流程还需要 Poppler 的 `pdftoppm`：macOS 可执行 `brew install poppler`，Ubuntu 可执行 `sudo apt-get install poppler-utils`。
-PaperLocale 0.4.1 已通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
+PaperLocale 稳定版本通过带数字 attestation 的 Trusted Publishing 发布到 PyPI；
 维护者发布流程与公开核验证据见 [PyPI 发布手册](docs/PYPI_PUBLISHING.zh-CN.md)。
+PaperLocale 0.4.2 增加下文所述的 `--unattended` 与可审计修复命令；运行
+当前检出请使用普通非 editable 安装：`python -m pip install ".[layout]"`。
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
+
+v0.4.2 发布后，可按以下方式安装精确公开版本：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.4.1"
+python -m pip install "paperlocale[layout]==0.4.2"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -74,6 +78,34 @@ paperlocale domain-check atmospheric-science
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
 ## 开始翻译
+
+如果希望输入一条命令后直接得到整篇候选 PDF，使用 `--unattended`。
+`codex-local` 会在后台调用结构化的 `codex exec --ephemeral`，不打开、
+不等待任何 Codex 对话窗口：
+
+```bash
+codex login
+paperlocale run paper.pdf \
+  --run-dir runs/paper \
+  --provider codex-local \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
+  --domain atmospheric-science \
+  --unattended
+```
+
+命令会连续完成初始化、片段收集、确定性参考文献映射、必要的版面
+安全透传、全文翻译、内容门禁、PDF 重建和全页机器 QA。成功后直接
+打印 `runs/paper/render_output/` 中候选 PDF 的精确路径。默认
+`preserve` 策略仍保留参考文献；被确定性判定为不能安全独立翻译的
+碎片也会原样保留并在清单中留痕。因此“完整候选 PDF”表示所有页面和
+片段都已闭合，不表示参考文献、公式或碎片会被强行改成中文。
+
+`--unattended` 不把机器 QA 伪装成人工逐页验收，运行状态仍是
+`qa_generated`。如果 Provider、内容合同或机器 QA 失败，命令会明确退出并
+保留已通过的断点；重新执行同一条命令即可续跑，不会静默切换 Provider。
+
+以下是需要人工复核参考文献边界的受监督模式。
 
 使用同一条可断点续跑命令推进初始化、片段收集、翻译、内容门禁、PDF 重建和全页 QA。使用本机 Codex 登录态：
 
@@ -180,10 +212,21 @@ paperlocale confirm-passthrough \
 需要上游提供相邻对象上下文或合并能力，不能靠提示词猜测。
 
 schema 4 运行清单会记录 PaperLocale 版本、领域包内容哈希、Provider、模型、推理强度、Codex CLI
-版本、collect/render 使用的版面引擎版本，以及人工透传映射的哈希。`codex-local`
+版本与断点间的 CLI 版本历史、collect/render 使用的版面引擎版本，以及人工透传映射的哈希。`codex-local`
 因此要求显式提供 `--model`；没有填写推理强度时会如实记录为空，不伪造实际设置。
 
-若机器 QA 报告矢量对象减少，报告会列出缺失对象的页码、边界框和面积，并在对照图两侧用红框标出位置。完成独立文件形式的矢量修复后，使用受控导入命令：
+若机器 QA 报告矢量对象减少，报告会列出缺失对象的页码、边界框和面积，并在对照图两侧用红框标出位置。若这些位置应保留源 PDF 的原始路径，可使用 PaperLocale 内置的受控重放：
+
+```bash
+paperlocale restore-source-vectors \
+  --run-dir runs/paper \
+  --description "恢复机器 QA 确认缺失的源矢量路径"
+```
+
+该命令要求当前 QA 报告的源/译哈希与 manifest 一致，并且只检查 QA 中
+`source_vector_drawings > translated_vector_drawings` 的页面；随后仅重放按
+0.01 PDF 点边界缺失的源路径，仍拒绝文字、页尺寸或图片变化，备份原候选并
+写入 `repair_history`。完成独立文件形式的其他矢量修复后，仍可使用受控导入命令：
 
 ```bash
 paperlocale apply-vector-repair \
@@ -205,6 +248,7 @@ paperlocale apply-text-repair \
   --replacement "图5 农业干旱评估" \
   --font-file /path/to/NotoSansCJKsc-Regular.otf \
   --font-size 9.5 \
+  --single-line \
   --description "修复跨对象碎裂图注"
 ```
 
@@ -214,7 +258,8 @@ paperlocale apply-text-repair \
 字体程序；清单记录原字体与子集哈希、子集前后字节、修复前后文字、矩形、PDF 哈希
 和旧 PDF 备份。完成后仍必须重新执行 `qa` 和 `accept`。字体须由用户在本机合法
 取得，不能提交到仓库；TTF/OTF 通常比字体集合产生更干净的抽取元数据，但任何
-CMap 警告和最终视觉效果仍由同一 QA 流程检查。
+CMap 警告和最终视觉效果仍由同一 QA 流程检查。`--single-line` 会按子集字体
+实际宽度、升部和降部验证一行能否放入浅矩形；若不应禁止自动换行，则不要传入该参数。
 
 若损坏对象只是已确认的孤立残片（例如固定首字母与可译对象切分后遗留
 `limate`），可显式传入空 replacement：
@@ -230,6 +275,19 @@ paperlocale apply-text-repair \
 
 只删除模式不需要 `--font-file` 或 `--font-size`，不会嵌入空字体子集；
 清单以 `text-removal` 独立记录。只包含空格的 replacement 仍会被拒绝。
+
+所有已记录的 PDF 修复都只能从当前修复链尾逆序回滚：
+
+```bash
+paperlocale rollback-last-repair \
+  --run-dir runs/paper \
+  --reason "移除最后一次审计修复并重新生成 QA"
+```
+
+命令要求当前 PDF 匹配链尾 `after_sha256`，绑定备份匹配 `before_sha256`；
+恢复后把该项从 `repair_history` 移入 `repair_rollback_history`，将运行退回
+`rendered`，并解除旧 QA 与人工验收绑定。它不能跳过更新的修复；回滚后必须
+重新执行机器 QA 和完整逐页视觉验收。
 
 需要逐阶段控制时，仍可使用同一生产路径的 `init-run -> collect -> reference-review/confirm-references -> 可选 confirm-passthrough -> translate -> validate -> render -> qa -> accept` 命令序列。
 
@@ -261,7 +319,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 97 项单元测试不联网运行，覆盖内容合同、三种 Provider、ChatGPT 网页人工桥接、单片段批处理边界、Provider 评估、一键断点续跑、双栏参考文献空间边界、自动误匹配显式排除、参考文献与透传人工确认映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控文字修复、页面 QA、隔离环境入口和演示产物；
+- 119 项单元测试不联网运行，覆盖内容合同、三种 Provider、ChatGPT 网页人工桥接、单片段批处理边界、Provider 评估、无人值守与受监督断点续跑、Codex CLI 版本漂移审计、受控源矢量重放与链尾回滚、双栏参考文献空间边界、自动误匹配显式排除、参考文献与透传映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控单行/多行文字修复、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 版面兼容性夹具包含公式占位、矢量表格与嵌入图片；源文/译文均为 1 个图片对象和 8 次矢量绘制；
 - v0.3.3 两页中文文字修复夹具将 23,278,008 字节原始字体独立子集化为 22,912 字节，最终 PDF 为 19,594 字节；机器 QA 为 0 errors / 0 warnings，并已逐页视觉验收。两类夹具均为项目自有，不提交任何受版权限制的论文；

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
+from ..contracts import protected_counts
 from ..domains import DomainPack
 
 
@@ -35,6 +36,11 @@ class TranslationContext:
     domain: DomainPack
     reference_policy: str = "preserve"
     reference_segment_ids: frozenset[str] = frozenset()
+    # 首轮候选未通过内容合同时，流水线只把失败片段、上一版候选和具体错误
+    # 交还同一 Provider。映射为空表示普通首轮翻译，不改变既有调用方。
+    repair_feedback: Mapping[str, tuple[str, tuple[str, ...]]] = field(
+        default_factory=dict
+    )
 
 
 class TranslationProvider(ABC):
@@ -99,8 +105,10 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
         f"- {entry.source} => {entry.target}"
         for entry in context.domain.glossary
     )
-    payload = [
-        {
+    payload: list[dict[str, object]] = []
+    for segment in segments:
+        counts = protected_counts(segment.source)
+        item: dict[str, object] = {
             "id": segment.id,
             "kind": (
                 "reference"
@@ -108,14 +116,32 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
                 else "body"
             ),
             "source": segment.source,
+            # 精确列出当前片段必须保留的标记及次数，避免模型把 US、NDVI、
+            # 图号或带连字符变量自然改写后再被门禁稳定拒绝。
+            "must_preserve": {
+                category: dict(values)
+                for category, values in counts.items()
+                if values
+            },
         }
-        for segment in segments
-    ]
+        feedback = context.repair_feedback.get(segment.id)
+        if feedback is not None:
+            previous_target, errors = feedback
+            item["previous_target"] = previous_target
+            item["validation_errors"] = list(errors)
+        payload.append(item)
     reference_instruction = ""
     if context.reference_policy == "translate-titles":
         reference_instruction = """
 5. 对 kind=reference 的条目，只把作品标题译为目标语言；作者、年份、期刊或出版社、
    卷期页码、DOI、URL 和其他书目信息必须保持原样，不套用正文固定术语。
+"""
+    repair_instruction = ""
+    if context.repair_feedback:
+        repair_instruction = """
+6. 本批是合同修复重试。逐条依据 validation_errors 修正 previous_target；
+   must_preserve 中每个表面形式必须至少保留指定次数，不要省略重复图号、
+   变量、单位或引文。仍需返回完整 target，不能只返回差异或解释。
 """
     return f"""{context.domain.prompt}
 
@@ -125,6 +151,7 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
 3. 保留所有数字、正负号、单位、变量缩写、数据集名、URL、DOI 和引文标记。
 4. 只返回符合约定结构的 JSON，不添加解释、Markdown 或原文之外的信息。
 {reference_instruction}
+{repair_instruction}
 
 固定术语（仅适用于 kind=body）：
 {glossary}

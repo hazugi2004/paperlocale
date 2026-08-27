@@ -51,6 +51,25 @@ class _SingleSegmentProvider(_MappingProvider):
         return super().translate(segments, context)
 
 
+class _RepairingProvider(TranslationProvider):
+    """首轮返回坏候选，收到同一 Provider 修复反馈后返回合格译文。"""
+
+    def __init__(self, source: str, initial: str, repaired: str) -> None:
+        self.source = source
+        self.initial = initial
+        self.repaired = repaired
+        self.contexts: list[TranslationContext] = []
+
+    def translate(
+        self,
+        segments: list[Segment],
+        context: TranslationContext,
+    ) -> list[Translation]:
+        self.contexts.append(context)
+        target = self.repaired if context.repair_feedback else self.initial
+        return [Translation(segment.id, target) for segment in segments]
+
+
 class PipelineTest(unittest.TestCase):
     def test_batches_respect_character_limit(self) -> None:
         segments = [Segment(str(index), "x" * 10) for index in range(5)]
@@ -170,6 +189,61 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(len(read_jsonl(translations)), 3)
             self.assertFalse(rejected_path.exists())
 
+    def test_contract_failure_is_repaired_by_the_same_provider(self) -> None:
+        """失败片段携带候选和错误定向重试，不重译同批已合格片段。"""
+
+        source = "The NDVI value was 2.0."
+        provider = _RepairingProvider(
+            source,
+            initial="该值为2.0。",
+            repaired="NDVI值为2.0。",
+        )
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            segments = root / "segments.jsonl"
+            translations = root / "translations.jsonl"
+            write_jsonl_atomic(segments, [{"id": segment_id(source), "source": source}])
+
+            self.assertEqual(
+                translate_segment_file(
+                    segments_path=segments,
+                    translations_path=translations,
+                    provider=provider,
+                    domain=domain,
+                ),
+                (0, 1),
+            )
+            self.assertEqual(len(provider.contexts), 2)
+            feedback = provider.contexts[1].repair_feedback[segment_id(source)]
+            self.assertEqual(feedback[0], "该值为2.0。")
+            self.assertTrue(any("NDVI" in error for error in feedback[1]))
+            self.assertEqual(read_jsonl(translations)[0]["target"], "NDVI值为2.0。")
+            self.assertFalse((root / "rejected_translations.jsonl").exists())
+
+    def test_second_contract_failure_keeps_both_attempts(self) -> None:
+        """一次定向重试仍失败时停止，并把两轮候选留作审计证据。"""
+
+        source = "The NDVI value was 2.0."
+        provider = _RepairingProvider(source, initial="该值为2.0。", repaired="数值为2.0。")
+        domain = load_domain_pack("atmospheric-science")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            segments = root / "segments.jsonl"
+            translations = root / "translations.jsonl"
+            write_jsonl_atomic(segments, [{"id": segment_id(source), "source": source}])
+
+            with self.assertRaisesRegex(ValueError, "定向重试后仍有"):
+                translate_segment_file(
+                    segments_path=segments,
+                    translations_path=translations,
+                    provider=provider,
+                    domain=domain,
+                )
+            rejected = read_jsonl(root / "rejected_translations.jsonl")
+            self.assertEqual(len(rejected[0]["attempts"]), 2)
+            self.assertEqual(len(provider.contexts), 2)
+
     def test_preserve_policy_skips_provider_and_body_glossary_for_references(self) -> None:
         """参考文献原样写入，正文仍走模型和领域术语门禁。"""
 
@@ -285,7 +359,9 @@ class PipelineTest(unittest.TestCase):
                 ),
                 (0, 1),
             )
-            self.assertEqual(provider.calls, 1)
+            # 0.4.2 先用同一 Provider 做一次定向合同修复；两次候选
+            # 均失败后才等待透传确认，不再反复调用模型。
+            self.assertEqual(provider.calls, 2)
             self.assertFalse(rejected.exists())
             self.assertEqual(read_jsonl(translations)[0]["target"], source)
             validate_translation_files(

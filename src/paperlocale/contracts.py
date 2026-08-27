@@ -34,11 +34,96 @@ NUMBER_RE = re.compile(
     r"\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?"
 )
 ABBREVIATION_RE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Z][A-Z0-9-]{1,})(?![A-Za-z0-9])")
-ABBREVIATION_EXCLUSIONS = frozenset({"ABSTRACT", "KEYWORDS", "REFERENCES"})
+# 真实论文常把章节名、出版元数据和图件标签排成全大写。它们是应翻译的
+# 普通英语词，而不是必须逐字保留的变量缩写。这里只列入批量运行中已经
+# 观察到的明确类别；NDVI、MOE、DH、CO 等科学标记仍继续走硬门禁。
+TRANSLATABLE_UPPERCASE_WORDS = frozenset(
+    {
+        "ABSTRACT",
+        "ACCEPTED",
+        "ACCESS",
+        "AND",
+        "APR",
+        "APRIL",
+        "ARTICLE",
+        "AUG",
+        "AUGUST",
+        "AUTHOR",
+        "AVAILABILITY",
+        "BY",
+        "CITATION",
+        "CONCLUSION",
+        "CONCLUSIONS",
+        "CONTRIBUTIONS",
+        "COPULA-BASED",
+        "COPYRIGHT",
+        "CORRESPONDENCE",
+        "DATA",
+        "DEC",
+        "DECEMBER",
+        "DISCUSSION",
+        "EDITED",
+        "EXTREMES",
+        "FEB",
+        "FEBRUARY",
+        "FIGURE",
+        "FOR",
+        "FUNDING",
+        "INTRODUCTION",
+        "JAN",
+        "JANUARY",
+        "JUL",
+        "JULY",
+        "JUN",
+        "JUNE",
+        "KEYWORDS",
+        "LETTER",
+        "MAR",
+        "MARCH",
+        "MATERIAL",
+        "MATERIALS",
+        "MAY",
+        "METHODS",
+        "MODELLED",
+        "NOV",
+        "NOVEMBER",
+        "OCT",
+        "OCTOBER",
+        "OF",
+        "OPEN",
+        "ORIGINAL",
+        "PATTERNS",
+        "PERMISSIONS",
+        "PRECIPITATION",
+        "PUBLICATION",
+        "PUBLISHED",
+        "RECEIVED",
+        "REFERENCES",
+        "RESEARCH",
+        "RESULTS",
+        "REVISED",
+        "REVIEWED",
+        "SEP",
+        "SEPT",
+        "SEPTEMBER",
+        "SPATIO-TEMPORAL",
+        "STATEMENT",
+        "SUPPLEMENTARY",
+        "TOOLS",
+        "TYPE",
+        "VOL",
+    }
+)
+# 国家缩写在机构地址和普通正文中可自然译为中文国名；继续要求保留其英文
+# 表面形式会把正确的“美国”“英国”误判为信息丢失。
+GEOGRAPHIC_ABBREVIATION_EXCLUSIONS = frozenset({"US", "USA", "UK"})
+ADDRESS_REGION_RE = re.compile(r"\b([A-Z]{2})(?=,\s*USA\b)")
 UNIT_RE = re.compile(
-    r"(?<![A-Za-z])(?:%|°[CF]?|mm|cm|m|km|Pa|hPa|K|W\s*m-?2|"
-    r"g\s*C\s*m-?2(?:\s*d-?1)?|µmol\s*m-?2\s*s-?1)(?![A-Za-z])",
-    re.IGNORECASE,
+    # 边界拒绝与任意非中日韩文字母粘连，避免把 Météorologiques 的 M
+    # 识别成 metre；同时允许中文译文直接写成“10 mm降水”。单位大小写
+    # 具有科学含义，因此不能再对整条正则使用 IGNORECASE。
+    r"(?<![^\W\d_\u3400-\u9fff])(?:%|°[CF]?|mm|cm|m|km|Pa|hPa|K|W\s*m-?2|"
+    r"g\s*C\s*m-?2(?:\s*d-?1)?|µmol\s*m-?2\s*s-?1)(?![^\W\d_\u3400-\u9fff])",
 )
 CJK_RE = re.compile(r"[\u3400-\u9fff]")
 ENGLISH_RE = re.compile(r"[A-Za-z]")
@@ -77,16 +162,28 @@ def protected_counts(text: str) -> dict[str, Counter[str]]:
     # PDF 版面引擎可能在连字符后插入断行空格，例如 ``HDI- MSDI`` 或
     # ``SSP5- 8.5``。缩写门禁只消除这一种版面空格，使正确合并后的译文
     # 仍可通过；原始文字、数字和其他标点检查保持不变。
-    abbreviation_text = re.sub(r"(?<=[a-z])(?=[A-Z]{2})", " ", text)
+    # 只拆分从词首开始的 ``andHDI`` 版面粘连。旧规则会在期刊艺术字
+    # ``ChaNGE`` 内部制造不存在的 ``NGE`` 缩写。
+    abbreviation_text = re.sub(
+        r"(?<![A-Za-z0-9])([a-z]+)(?=[A-Z]{2})",
+        r"\1 ",
+        text,
+    )
     abbreviation_text = re.sub(
         r"(?<=[A-Z0-9])-\s+(?=[A-Z0-9])",
         "-",
         abbreviation_text,
     )
+    address_regions = set(ADDRESS_REGION_RE.findall(abbreviation_text))
+    abbreviation_exclusions = (
+        TRANSLATABLE_UPPERCASE_WORDS
+        | GEOGRAPHIC_ABBREVIATION_EXCLUSIONS
+        | address_regions
+    )
     abbreviations = (
         value
         for value in ABBREVIATION_RE.findall(abbreviation_text)
-        if value not in ABBREVIATION_EXCLUSIONS
+        if value not in abbreviation_exclusions
     )
     return {
         "formula": Counter(FORMULA_RE.findall(text)),
@@ -97,6 +194,18 @@ def protected_counts(text: str) -> dict[str, Counter[str]]:
         "abbreviation": Counter(abbreviations),
         "unit": Counter(match.group(0) for match in UNIT_RE.finditer(text)),
     }
+
+
+def source_term_is_present(text: str, term: str) -> bool:
+    """按左侧词边界判断领域术语是否真实出现。
+
+    术语表使用单数词形时仍允许命中复数，例如 ``event`` 命中
+    ``events``；但 ``temporal resolution`` 不能从 ``spatiotemporal`` 或
+    ``spatio-temporal`` 的词尾截取出来。
+    """
+
+    left_boundary = r"(?<![A-Za-z0-9\-\u2010\u2011])"
+    return re.search(left_boundary + re.escape(term), text, re.IGNORECASE) is not None
 
 
 def validate_translation(
@@ -134,10 +243,9 @@ def validate_translation(
         errors.append("长正文片段缺少中文译文")
 
     if domain is not None:
-        source_folded = source.casefold()
         target_folded = target.casefold()
         for entry in domain.glossary:
-            if entry.required and entry.source.casefold() in source_folded:
+            if entry.required and source_term_is_present(source, entry.source):
                 if entry.target.casefold() not in target_folded:
                     errors.append(
                         f"领域术语缺失：{entry.source!r} 必须译为包含 {entry.target!r}"

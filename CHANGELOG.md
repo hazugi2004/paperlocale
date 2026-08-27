@@ -2,6 +2,46 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
+## 0.4.2 - 2026-08-28
+
+### Added
+
+- `paperlocale run --unattended` 可在单条非交互命令中自动完成确定性
+  参考文献映射、版面安全透传、全文翻译、内容门禁、PDF 重建与全页
+  机器 QA；成功后直接打印完整候选 PDF 路径；
+- 无人值守决定以 `paperlocale-unattended` 身份和明确原因写入哈希
+  绑定映射，运行清单记录自动参考文献与透传数量，不冒充人工复核；
+- 新增 `restore-source-vectors`，先以源/译哈希绑定当前机器 QA，再只在
+  `source_vector_drawings > translated_vector_drawings` 的页面重放按
+  0.01 PDF 点边界确认缺失的源矢量路径，复用现有文字、页面、图片、
+  备份和修复历史门禁；
+- `apply-text-repair --single-line` 可按子集字体的实际宽度、升部与降部
+  在浅矩形中写入一行，容量超界仍在修改 PDF 前拒绝；
+- 新增 `rollback-last-repair`，只允许从 `repair_history` 链尾按
+  after/before 哈希和绑定备份逆向恢复，将回滚项移入
+  `repair_rollback_history`，并清除已过期的 QA/人工验收绑定。
+
+### Changed
+
+- Provider 首轮译文未通过内容合同时，用同一 Provider 传入原候选与
+  具体错误定向修复一次；合格片段继续原子保存，两次失败证据保留在
+  `rejected_translations.jsonl`；
+- Qwen-MT 继续保持单片段调用边界，对真实运行中观察到的临时连接断开
+  做有界重试，HTTP 业务错误仍立即失败。
+
+### Fixed
+
+- 修正真实论文中全大写章节词、国家/地址缩写、非 ASCII 单词中单位
+  误匹配、术语左边界与期刊艺术字大小写造成的内容合同误拒绝；
+- 断点续跑不再因为 Codex CLI 补丁版本变化而拒绝同一
+  `codex-local` 模型与推理强度；新旧 CLI 版本和切换前译文数量保存在
+  `translation_provider_history`，Provider、模型或推理强度变化仍明确失败。
+
+### Safety boundary
+
+- `--unattended` 只自动采用确定性算法结果，不把普通翻译失败静默改为
+  透传，不自动执行 `accept`；无人值守候选仍如实标记为 `qa_generated`。
+
 ## 0.4.1 - 2026-08-23
 
 ### Fixed

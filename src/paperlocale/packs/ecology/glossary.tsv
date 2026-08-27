@@ -1,0 +1,21 @@
+source	target	required	note
+ecosystem	生态系统	true	整体系统概念；不要与 ecosystem service（生态系统服务）混淆
+habitat	栖息地	true	物种实际生活的环境；不要与 ecological niche（生态位）混淆
+ecological niche	生态位	true	物种在生态系统中的功能位置和资源关系；不等同于 habitat
+biodiversity	生物多样性	true	总体概念；不要直接等同于 species richness（物种丰富度）
+species richness	物种丰富度	true	群落中的物种数；不要与 species evenness（物种均匀度）混淆
+species evenness	物种均匀度	true	各物种相对丰度的均衡程度；不要译成物种丰富度
+biomass	生物量	true	某一时刻的生物有机物存量；不要与 productivity（生产力）混淆
+primary productivity	初级生产力	true	生产速率或通量概念；不要与 biomass（生物量）混淆
+gross primary productivity	总初级生产力	true	保留缩写 GPP；通常指植物总碳固定量
+net primary productivity	净初级生产力	true	保留缩写 NPP；通常指 GPP 扣除植物呼吸后的生产量
+net ecosystem exchange	净生态系统交换	true	保留缩写 NEE；不要与 NPP 混为一谈
+trophic level	营养级	true	食物网中的摄食层级；不要与 trophic position 的具体估计方法混淆
+food web	食物网	true	多个食物关系组成的网络；不要缩减为单一 food chain（食物链）
+invasive species	入侵物种	true	造成或可能造成生态影响的入侵种；不等同于所有 non-native species
+endemic species	特有种	true	地理分布受限于某一区域的物种；不必然表示受威胁
+habitat fragmentation	栖息地破碎化	true	连续栖息地被分割为斑块的过程；不等同于 habitat loss（生境丧失）
+ecological restoration	生态修复	true	恢复受损生态系统结构或功能的过程；不要与保护现状混淆
+ecosystem service	生态系统服务	true	生态系统向人类提供的收益；不要与 ecosystem function（生态系统功能）混淆
+carrying capacity	环境容纳量	true	特定条件下可长期维持的种群规模上限；按生态学语境翻译
+phenology	物候学	true	生物季节性事件及其时间变化的研究；不要泛译为气候学

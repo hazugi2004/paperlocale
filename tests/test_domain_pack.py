@@ -25,6 +25,19 @@ class DomainPackTest(unittest.TestCase):
                 msg=case["source"],
             )
 
+    def test_builtin_ecology_pack(self) -> None:
+        pack = load_domain_pack("ecology")
+        self.assertEqual(pack.pack_id, "ecology")
+        self.assertEqual((pack.source_language, pack.target_language), ("en", "zh-CN"))
+        self.assertGreaterEqual(len(pack.glossary), 10)
+        self.assertGreaterEqual(len(pack.eval_cases), 3)
+        for case in pack.eval_cases:
+            self.assertEqual(
+                validate_translation(case["source"], case["target"], pack),
+                [],
+                msg=case["source"],
+            )
+
     def test_content_hash_changes_when_pack_content_changes(self) -> None:
         """同一 id/version 下改写提示词也必须产生不同内容身份。"""
 

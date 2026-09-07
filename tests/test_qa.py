@@ -8,12 +8,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pymupdf as fitz
+
 from PIL import Image
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.pdfgen import canvas
 from pypdf import PdfReader
 
-from paperlocale.qa import _extract_text, inspect_pdf_pair
+from paperlocale.qa import _extract_text, _image_counts, inspect_pdf_pair
 
 
 def _build_pdf(
@@ -98,6 +100,43 @@ class PdfQaTest(unittest.TestCase):
         self.assertEqual(logger.handlers, original_handlers)
         self.assertEqual(logger.level, original_level)
         self.assertEqual(logger.propagate, original_propagate)
+
+    def test_image_count_ignores_resource_only_soft_mask(self) -> None:
+        """资源表额外挂载软蒙版的真实复现：清理资源不应误报图片减少。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "alpha.png"
+            Image.new("RGBA", (30, 20), (30, 80, 150, 128)).save(image)
+            source, clean = root / "source.pdf", root / "clean.pdf"
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_image((40, 40, 100, 80), filename=str(image))
+                doc.save(clean)
+                mask = page.get_images(full=True)[0][1]
+                self.assertGreater(mask, 0)
+                resource = int(doc.xref_get_key(page.xref, "Resources")[1].split()[0])
+                doc.xref_set_key(resource, "XObject/UnusedMask", f"{mask} 0 R")
+                doc.save(source)
+            self.assertEqual(len(PdfReader(source).pages[0].images), 2)
+            self.assertEqual(_image_counts(source), [1])
+            self.assertEqual(_image_counts(clean), [1])
+            with fitz.open(source) as a, fitz.open(clean) as b:
+                self.assertEqual(a[0].get_pixmap().samples, b[0].get_pixmap().samples)
+
+    def test_image_count_includes_repeated_placements_inside_form(self) -> None:
+        """同一图片重复放置也需计数，避免资源数不变掩盖真实插图丢失。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "figure.png"
+            Image.new("RGB", (30, 20), "steelblue").save(image)
+            with fitz.open() as form, fitz.open() as doc:
+                p = form.new_page()
+                xref = p.insert_image((40, 40, 100, 80), filename=str(image))
+                p.insert_image((40, 100, 100, 140), xref=xref)
+                page = doc.new_page()
+                page.show_pdf_page(page.rect, form, 0)
+                doc.save(root / "source.pdf")
+            self.assertEqual(_image_counts(root / "source.pdf"), [2])
 
     def test_matching_layout_generates_comparison(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

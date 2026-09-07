@@ -45,10 +45,15 @@ def _box(page: object, name: str) -> tuple[float, float, float, float]:
     return tuple(float(value) for value in rectangle)  # type: ignore[return-value]
 
 
-def _image_count(page: object) -> int:
-    """统计页面可枚举图片；解析失败时交给调用方记录警告。"""
+def _image_counts(pdf_path: Path) -> list[int]:
+    """统计内容流实际调用的图片（含嵌套 Form 与同图多次放置）。
 
-    return len(list(page.images))  # type: ignore[attr-defined]
+    资源表中的软蒙版和未调用图片不是独立页面插图，不能按 page.images
+    数量判定缺图；否则清理冗余资源就会误报。仍检查实际放置次数减少。
+    """
+
+    with fitz.open(pdf_path) as document:
+        return [len(page.get_image_info()) for page in document]
 
 
 def _vector_paint_count(page: object) -> int:
@@ -284,6 +289,14 @@ def inspect_pdf_pair(
             f"页数不一致：source={len(source_reader.pages)}, translated={len(target_reader.pages)}"
         )
 
+    try:
+        source_image_counts = _image_counts(source_path)
+        target_image_counts = _image_counts(target_path)
+    except Exception as exc:  # noqa: BLE001  # 特殊内容流的解析异常类型不固定。
+        source_image_counts = [-1] * len(source_reader.pages)
+        target_image_counts = [-1] * len(target_reader.pages)
+        warnings.append(f"图片实际放置无法枚举：{exc}")
+
     checked_pages = min(len(source_reader.pages), len(target_reader.pages))
     for index in range(checked_pages):
         source_page = source_reader.pages[index]
@@ -306,12 +319,8 @@ def inspect_pdf_pair(
         placeholders = PLACEHOLDER_RE.findall(target_text)
         if placeholders:
             errors.append(f"第{index + 1}页仍有内部占位符：{placeholders[:10]!r}")
-        try:
-            source_images = _image_count(source_page)
-            target_images = _image_count(target_page)
-        except Exception as exc:  # noqa: BLE001  # pypdf 可能抛出多类解析异常。
-            source_images = target_images = -1
-            warnings.append(f"第{index + 1}页图片对象无法枚举：{exc}")
+        source_images = source_image_counts[index]
+        target_images = target_image_counts[index]
         if source_images >= 0 and target_images < source_images:
             errors.append(
                 f"第{index + 1}页图片对象减少：source={source_images}, translated={target_images}"

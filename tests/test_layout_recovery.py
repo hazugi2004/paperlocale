@@ -45,6 +45,41 @@ def reference_pair(root, columns=2, landscape=False):
 
 
 class LayoutRecoveryTest(unittest.TestCase):
+    def test_year_led_reference_continuation_does_not_end_region(self):
+        """书目换行以年份起头时仍跨页恢复，但真正编号章节之后的正文保持原样。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, target, candidate = (root / name for name in ("source.pdf", "target.pdf", "fixed.pdf"))
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_text((40, 80), "Body discussion outside bibliography.")
+                page.insert_text((40, 120), "References")
+                page.insert_text((40, 145), "Bevacqua E, Maraun D and Vrac M")
+                page.insert_text((40, 160), "2017 Multivariate statistical modelling of compound events", fontsize=9)
+                page.insert_text((40, 175), "via pair copula constructions. Journal 21 2701-2723", fontsize=9)
+                page = doc.new_page()
+                page.insert_text((40, 80), "Smith A 2020 Climate observations and drought prediction", fontsize=9)
+                page.insert_text((40, 120), "7 Figures")
+                page.insert_text((40, 145), "Figure caption remains outside bibliography.")
+                doc.save(source)
+            with fitz.open(source) as doc:
+                doc[0].insert_text((40, 157), "OVERLAPPING BAD TRANSLATION", fontsize=13)
+                doc.save(target)
+            _headings, text, _numbers, regions = _reference_geometry(source)
+            self.assertIn("2017 Multivariate", text)
+            self.assertIn("Smith A 2020", text)
+            self.assertNotIn("Figure caption", text)
+            self.assertEqual({r["page"] for r in regions}, {1, 2})
+            preserve_reference_layout(source, target, candidate)
+            with fitz.open(source) as src, fitz.open(candidate) as fixed:
+                self.assertNotIn("OVERLAPPING", fixed[0].get_text())
+                self.assertIn("Body discussion", fixed[0].get_text())
+                self.assertEqual(src[1].get_text(sort=True), fixed[1].get_text(sort=True))
+                for region in regions:
+                    i, rect = region["page"] - 1, fitz.Rect(region["rect"])
+                    self.assertEqual(src[i].get_pixmap(clip=rect).samples,
+                                     fixed[i].get_pixmap(clip=rect).samples)
+
     def test_explicit_region_review_binds_both_pdfs_and_is_recorded(self):
         """人工坐标不得消费旧PDF身份；通过后仍经正常备份和QA失效路径。"""
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,6 +2,13 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
+## 0.5.2 - 2026-09-08
+
+- Fix reference-region truncation when a wrapped bibliography line starts with a four-digit year followed by an alphabetic title. These lines no longer match numbered section headings.
+- Count image placements from PDF content streams rather than image resources, avoiding soft-mask/unused-resource false positives while detecting lost placements, including nested Forms.
+- Preserve real section boundaries and the existing body-overlap rejection, atomic repair, and QA requirements.
+- Add a two-page regression with a year-led continuation, overlapping translation, and a subsequent numbered Figures section; verify restored pixels and unchanged surrounding text.
+
 ## 0.5.1 - 2026-09-07
 
 - 修复 Codex 翻译时漏抄长片段哈希导致整批 ID 校验失败的问题：模型只填充

@@ -12,8 +12,14 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 
 class CliTest(unittest.TestCase):
-    def test_package_version_matches_v043_release_line(self) -> None:
-        self.assertEqual(__version__, "0.4.3")
+    def test_package_version_matches_v050_release_line(self) -> None:
+        self.assertEqual(__version__, "0.5.0")
+
+    def test_default_recovery_has_explicit_opt_out(self) -> None:
+        """普通首跑不能依赖用户知道隐藏的修复开关；排障仍可显式禁用。"""
+        base = ["run", "paper.pdf", "--run-dir", "run"]
+        self.assertTrue(build_parser().parse_args(base).restore_source_vectors)
+        self.assertFalse(build_parser().parse_args(base + ["--no-restore-source-vectors"]).restore_source_vectors)
 
     def test_cli_reports_package_version(self) -> None:
         """发布包必须能直接报告可核对的版本。"""

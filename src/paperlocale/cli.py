@@ -35,6 +35,7 @@ from .workflow import (
     qa_run,
     render_run,
     restore_source_vectors,
+    restore_reference_layout,
     rollback_last_repair,
     run_to_qa,
     translate_run,
@@ -170,8 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--pdftoppm-bin")
     run.add_argument(
         "--restore-source-vectors",
-        action="store_true",
-        help="仅当 QA 全部错误为矢量减少时恢复一次源矢量并重跑 QA；仍须逐页验收",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="默认在 QA 仅有矢量减少时恢复一次并重跑 QA；可用 --no-restore-source-vectors 禁用",
     )
     run.add_argument(
         "--unattended",
@@ -300,6 +302,11 @@ def build_parser() -> argparse.ArgumentParser:
     repair.add_argument("--run-dir", type=Path, required=True)
     repair.add_argument("--repaired-pdf", type=Path, required=True)
     repair.add_argument("--description", required=True)
+
+    reference_layout = subparsers.add_parser(
+        "restore-reference-layout", help="按 preserve 策略从源 PDF 保留书目版面，并重置旧 QA"
+    )
+    reference_layout.add_argument("--run-dir", type=Path, required=True)
 
     source_vector_repair = subparsers.add_parser(
         "restore-source-vectors",
@@ -601,6 +608,9 @@ def main() -> int:
             f"文字修复已应用并记录历史：{repaired}；"
             "请重新执行 qa 和 accept"
         )
+        return 0
+    if args.command == "restore-reference-layout":
+        print(f"参考文献版面处理完成：{restore_reference_layout(args.run_dir)}；请重新 QA")
         return 0
     if args.command == "accept":
         accept_run(args.run_dir, reviewed_by=args.reviewed_by)

@@ -144,7 +144,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
-        self.assertEqual(manifest["paperlocale_version"], "0.4.3")
+        self.assertEqual(manifest["paperlocale_version"], "0.5.0")
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)
@@ -1303,8 +1303,8 @@ class WorkflowTest(unittest.TestCase):
                 [1],
             )
 
-    def test_run_restores_vectors_only_when_requested_and_can_resume(self) -> None:
-        """真实 PDF 从失败断点恢复；默认仍停止，显式恢复后不重译、不重复修复。"""
+    def test_run_restores_vectors_by_default_and_can_resume(self) -> None:
+        """真实 PDF 默认恢复，不重译、不重复修复；显式禁用时保留原候选。"""
 
         with tempfile.TemporaryDirectory() as directory:
             run_dir, translated, _ = self._make_source_vector_repair_run(
@@ -1319,9 +1319,9 @@ class WorkflowTest(unittest.TestCase):
                 domain=load_domain_pack("atmospheric-science"), dpi=36,
             )
             with self.assertRaisesRegex(RuntimeError, "矢量绘图减少"):
-                run_to_qa(**arguments)
+                run_to_qa(**arguments, restore_vectors=False)
             self.assertEqual(translated.read_bytes(), before)
-            result = run_to_qa(**arguments, restore_vectors=True)
+            result = run_to_qa(**arguments)
             self.assertEqual(result["status"], "qa_generated")
             self.assertEqual(len(result["repair_history"]), 1)
             self.assertEqual(Path(result["repair_history"][0]["backup_pdf"]).read_bytes(), before)

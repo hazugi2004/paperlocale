@@ -317,8 +317,12 @@ def inspect_pdf_pair(
                 f"第{index + 1}页图片对象减少：source={source_images}, translated={target_images}"
             )
         try:
-            source_vectors = _vector_paint_count(source_page)
-            target_vectors = _vector_paint_count(target_page)
+            # 优先统计实际绘制对象，包含 Form XObject 内的图形。仅统计顶层
+            # 内容流会漏掉嵌套图表，也会把背景修复的操作符误当作缺图已恢复。
+            source_vectors = (len(source_vector_objects[index])
+                              if index < len(source_vector_objects) else _vector_paint_count(source_page))
+            target_vectors = (len(target_vector_objects[index])
+                              if index < len(target_vector_objects) else _vector_paint_count(target_page))
         except Exception as exc:  # noqa: BLE001  # 特殊内容流异常类型不固定。
             source_vectors = target_vectors = -1
             warnings.append(f"第{index + 1}页矢量绘图无法枚举：{exc}")

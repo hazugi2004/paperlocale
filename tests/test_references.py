@@ -149,6 +149,43 @@ def _build_right_column_reference_pdf(path: Path) -> tuple[str, str]:
 
 
 class ReferenceReviewTest(unittest.TestCase):
+    def test_left_column_references_include_right_top_and_stop_at_acknowledgements(self) -> None:
+        """左栏下方开始的书目包括右栏顶部，且不能吞掉无编号致谢正文。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pdf = root / "columns.pdf"
+            document = canvas.Canvas(str(pdf), pagesize=(600, 800))
+            document.setFont("Helvetica", 7)
+            body = "This is ordinary scientific discussion outside references."
+            reference_lines = [
+                "Smith A. Scientific observations and climate responses.",
+                "Journal of Climate volume 20 pages 100 to 120 (2024).",
+                "https://doi.org/10.1000/scientific-reference-example",
+            ]
+            # 特意先绘右栏，再绘左栏，证明结果来自明确栏坐标而非对象插入顺序。
+            for i, line in enumerate(reference_lines):
+                document.drawString(320, 760-i*12, line)
+                document.drawString(40, 760-i*12, body)
+            document.drawString(40, 400, "References")
+            for i, line in enumerate(reference_lines):
+                document.drawString(40, 380-i*12, line.replace("Smith", "Jones"))
+            document.drawString(320, 680, "Acknowledgements")
+            thanks = "We thank the researchers and institutions for open data and financial support for this scientific study."
+            document.drawString(320, 668, thanks)
+            document.save()
+            ref = " ".join(reference_lines)
+            sources = [ref, thanks, body]
+            segments = root / "segments.jsonl"
+            write_jsonl_atomic(segments, [{"id": segment_id(s), "source": s} for s in sources])
+            result = prepare_reference_review(
+                source_pdf=pdf, source_sha256=hashlib.sha256(pdf.read_bytes()).hexdigest(),
+                segments_path=segments, output_dir=root,
+            )
+            self.assertIn(segment_id(ref), result["automatic_reference_segment_ids"])
+            self.assertNotIn(segment_id(thanks), result["automatic_reference_segment_ids"])
+            self.assertNotIn(segment_id(body), result["automatic_reference_segment_ids"])
+
     def test_exact_matches_and_manual_ids_form_bound_map(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -11,6 +11,7 @@ import difflib
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +31,13 @@ REFERENCE_HEADING_RE = re.compile(
 # 文本块视为下一个章节边界；年份、页码和普通参考文献条目都不满足该结构。
 NUMBERED_SECTION_HEADING_RE = re.compile(
     r"^\s*\d+\s+[A-Za-z][A-Za-z ]{0,80}\s*$",
+    re.IGNORECASE,
+)
+# 正式期刊通常在书目后使用不带编号的独立小节标题。只匹配整行，
+# 不把参考文献题名中出现的同名词语当成章节边界。
+POST_REFERENCE_HEADING_RE = re.compile(
+    r"^(?:Acknowledg(?:e)?ments|Author contributions|Competing interests|"
+    r"Additional information|Data availability|Code availability)$",
     re.IGNORECASE,
 )
 MINIMUM_EXACT_MATCH_CHARACTERS = 80
@@ -64,7 +72,7 @@ def _normalized_match_text(
     normalized = re.sub(
         r"[^a-z0-9]+",
         "",
-        FORMULA_PLACEHOLDER_RE.sub("", text).casefold(),
+        unicodedata.normalize("NFKC", FORMULA_PLACEHOLDER_RE.sub("", text)).casefold(),
     )
     for token in ignored_tokens:
         normalized = normalized.replace(token.casefold(), "")
@@ -128,6 +136,7 @@ def _reference_region(
     headings: list[tuple[int, float, float, float]] = []
     page_text_lines: list[list[tuple[float, float, float, float, str]]] = []
     page_line_entries: list[list[tuple[float, float, str]]] = []
+    two_column_pages: set[int] = set()
     try:
         for page_index, page in enumerate(document):
             text_lines: list[tuple[float, float, float, float, str]] = []
@@ -166,6 +175,14 @@ def _reference_region(
                             line_text,
                         )
                     )
+            # 两栏必须同时有多行、各自完全位于中线一侧的正文证据；
+            # 居中的公式、行号或一条短页眉不足以触发栏序重排。
+            middle = float(page.rect.width) / 2
+            left_count = sum(line[2] < middle and len(line[4]) >= 40 for line in text_lines)
+            right_count = sum(line[0] >= middle and len(line[4]) >= 40 for line in text_lines)
+            if left_count >= 3 and right_count >= 3:
+                two_column_pages.add(page_index)
+                text_lines.sort(key=lambda line: (line[0] >= middle, line[1], line[0]))
             page_text_lines.append(text_lines)
             page_line_entries.append(line_entries)
             line_numbers = [entry[2] for entry in line_entries]
@@ -188,7 +205,15 @@ def _reference_region(
     for page_index in range(heading_page, len(page_text_lines)):
         for line in page_text_lines[page_index]:
             if page_index == heading_page and line[1] < heading_bottom:
-                continue
+                # References 从左栏下半部开始时，右栏顶部已经是后续书目；
+                # 不能用标题的 y 坐标把整张纸上方的右栏书目一起排除。
+                follows_in_right_column = (
+                    heading_page in two_column_pages
+                    and not heading_starts_in_right_column
+                    and line[0] >= heading_page_width / 2
+                )
+                if not follows_in_right_column:
+                    continue
             if (
                 page_index == heading_page
                 and heading_starts_in_right_column
@@ -204,7 +229,10 @@ def _reference_region(
             )
             # 参考文献必须止于下一个编号章节，不能把其后的 Figure 或 Table
             # 章节误标为参考文献。标题自身已经在上方排除，不会触发此边界。
-            if NUMBERED_SECTION_HEADING_RE.fullmatch(cleaned):
+            if (
+                NUMBERED_SECTION_HEADING_RE.fullmatch(cleaned)
+                or POST_REFERENCE_HEADING_RE.fullmatch(cleaned)
+            ):
                 region_boundary = (page_index, line[1])
                 break
             region_parts.append(line[4])

@@ -12,8 +12,8 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 
 class CliTest(unittest.TestCase):
-    def test_package_version_matches_v042_release_line(self) -> None:
-        self.assertEqual(__version__, "0.4.2")
+    def test_package_version_matches_v043_release_line(self) -> None:
+        self.assertEqual(__version__, "0.4.3")
 
     def test_cli_reports_package_version(self) -> None:
         """发布包必须能直接报告可核对的版本。"""
@@ -40,6 +40,7 @@ class CliTest(unittest.TestCase):
                 "--domain",
                 "atmospheric-science",
                 "--unattended",
+                "--restore-source-vectors",
             ]
         )
         self.assertEqual(args.command, "run")
@@ -48,6 +49,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.reasoning_effort, "high")
         self.assertEqual(args.reference_policy, "preserve")
         self.assertTrue(args.unattended)
+        self.assertTrue(args.restore_source_vectors)
 
     def test_confirm_references_accepts_repeated_manual_ids(self) -> None:
         """人工复核命令应把多个乱序参考文献片段明确传给工作流。"""

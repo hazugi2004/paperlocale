@@ -65,12 +65,12 @@ PaperLocale 0.4.2 增加下文所述的 `--unattended` 与可审计修复命令�
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
-v0.4.2 发布后，可按以下方式安装精确公开版本：
+v0.4.3 发布后，可按以下方式安装精确公开版本：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.4.2"
+python -m pip install "paperlocale[layout]==0.4.3"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -106,6 +106,14 @@ paperlocale run paper.pdf \
 保留已通过的断点；重新执行同一条命令即可续跑，不会静默切换 Provider。
 
 以下是需要人工复核参考文献边界的受监督模式。
+
+0.4.3 可为 `paperlocale run` 增加 `--restore-source-vectors`：仅当本次
+机器 QA 的全部错误均为矢量数量减少时，核对源/译 PDF 哈希，调用已有
+带备份和历史记录的恢复入口一次，再执行完整 QA。其他错误或第二次 QA
+失败仍会停止；该参数不负责修复文字重叠，也不会自动通过视觉验收。
+参考文献识别现按有双栏坐标证据的阅读顺序收集，并在无编号致谢等后续
+小节处停止；字体连字不再导致完整短标题被误判为透传。已有绑定映射不会
+被新算法偷偷改写，旧产物应通过受控修复入口处理并重新验收。
 
 使用同一条可断点续跑命令推进初始化、片段收集、翻译、内容门禁、PDF 重建和全页 QA。使用本机 Codex 登录态：
 

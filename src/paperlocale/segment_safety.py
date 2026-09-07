@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 import pymupdf as fitz
@@ -41,9 +42,13 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
 
 
 def _normalize_visible_text(text: str) -> str:
-    """只折叠排版空白；字符和标点仍须逐字匹配。"""
+    """折叠排版空白和字体连字；归一化后仍逐字检查单词边界。
 
-    return re.sub(r"\s+", " ", text).strip()
+    源 PDF 的 identiﬁcation 与引擎输出 identification 是同一可见单词，
+    不应因 fi 连字把完整小节标题误标为无法定位而原样透传。
+    """
+
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).strip()
 
 
 def _is_ascii_letter(value: str) -> bool:
@@ -171,7 +176,7 @@ def prepare_segment_safety_review(
     write_jsonl_atomic(review_path, review_rows)
     summary: dict[str, object] = {
         "schema_version": 1,
-        "algorithm": "exact-visible-text-boundary-v1",
+        "algorithm": "exact-visible-text-boundary-v2-nfkc",
         "source_sha256": source_sha256,
         "segments_sha256": _sha256(segments),
         "required_passthrough_segment_ids": required_ids,

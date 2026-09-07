@@ -169,6 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dpi", type=int, default=144)
     run.add_argument("--pdftoppm-bin")
     run.add_argument(
+        "--restore-source-vectors",
+        action="store_true",
+        help="仅当 QA 全部错误为矢量减少时恢复一次源矢量并重跑 QA；仍须逐页验收",
+    )
+    run.add_argument(
         "--unattended",
         action="store_true",
         help=(
@@ -455,6 +460,7 @@ def main() -> int:
             max_segments=args.max_segments,
             max_characters=args.max_characters,
             unattended=args.unattended,
+            restore_vectors=args.restore_source_vectors,
         )
         if final_manifest["status"] == "qa_generated":
             comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"

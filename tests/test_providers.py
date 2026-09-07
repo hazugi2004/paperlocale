@@ -45,7 +45,7 @@ class ProviderTest(unittest.TestCase):
         def fake_run(command: list[str], **kwargs: object):
             output = command[command.index("--output-last-message") + 1]
             with open(output, "w", encoding="utf-8") as handle:
-                json.dump(self.translation_payload, handle, ensure_ascii=False)
+                json.dump({"translations": {"s1": "土壤湿度为10 mm。"}}, handle, ensure_ascii=False)
             self.assertIn("read-only", command)
             self.assertIn("--ephemeral", command)
             self.assertIn("--ignore-user-config", command)
@@ -66,6 +66,7 @@ class ProviderTest(unittest.TestCase):
         with patch("paperlocale.providers.codex_local.subprocess.run", side_effect=fake_run):
             result = provider.translate([self.segment], self.context)
         self.assertEqual(result[0].target, "土壤湿度为10 mm。")
+        self.assertEqual(result[0].id, self.segment.id)
 
     def test_codex_provenance_records_cli_model_and_effort(self) -> None:
         """运行清单需要足以复核本机会员额度调用的非敏感身份。"""

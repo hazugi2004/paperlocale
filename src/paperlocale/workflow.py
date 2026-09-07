@@ -15,6 +15,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -39,6 +40,7 @@ from .references import (
     confirm_reference_review,
     load_reference_map,
     prepare_reference_review,
+    preserve_reference_layout,
 )
 from .segment_safety import (
     load_segment_safety_summary,
@@ -748,6 +750,7 @@ def _invoke(command: list[str], log_path: Path, timeout_seconds: int = 7200) -> 
     """执行版面阶段并保存日志；非零退出时不更新运行状态。"""
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"PaperLocale：开始 {log_path.stem}，阶段日志：{log_path}", file=sys.stderr, flush=True)
     completed = subprocess.run(
         command,
         text=True,
@@ -762,6 +765,7 @@ def _invoke(command: list[str], log_path: Path, timeout_seconds: int = 7200) -> 
     )
     if completed.returncode != 0:
         raise RuntimeError(f"版面阶段失败，exit={completed.returncode}；详见 {log_path}")
+    print(f"PaperLocale：{log_path.stem} 已完成", file=sys.stderr, flush=True)
 
 
 def collect_run(run_dir: Path, pdf2zh_bin: str | Path | None = None) -> None:
@@ -982,8 +986,60 @@ def render_run(run_dir: Path, pdf2zh_bin: str | Path | None = None) -> Path:
     manifest["rendered_sha256"] = _sha256(candidates[0])
     manifest["schema_version"] = SCHEMA_VERSION
     manifest["status"] = "rendered"
+    manifest.pop("reference_layout_preserved", None)
     save_manifest(root, manifest)
     return candidates[0].resolve()
+
+
+def restore_reference_layout(run_dir: Path) -> Path:
+    """按 preserve 策略保留源书目版面，记录备份并使旧 QA/验收失效。
+
+    首次排版及旧 rendered 断点都通过同一入口；已记录的恢复不重复执行。
+    没有唯一书目区域时不猜测、不修改 PDF，仍交由完整 QA 与视觉复核。
+    """
+
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] not in {"rendered", "qa_generated"}:
+        raise ValueError("参考文献版面恢复只接受 rendered 或 qa_generated")
+    source = _verify_source_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest)
+    if manifest.get("reference_policy", "preserve") != "preserve":
+        return rendered
+    if manifest.get("reference_layout_preserved"):
+        return rendered
+    candidate = root / ".reference-layout.tmp.pdf"
+    try:
+        regions = preserve_reference_layout(source, rendered, candidate)
+        if not regions:
+            return rendered
+        before_hash = str(manifest["rendered_sha256"])
+        after_hash = _sha256(candidate)
+        backup_dir = root / "repair_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = backup_dir / f"reference-before-{before_hash[:16]}.pdf"
+        shutil.copy2(rendered, backup)
+        candidate.replace(rendered)
+        try:
+            manifest.setdefault("repair_history", []).append({
+                "type": "reference-layout", "applied_at": _utc_now(),
+                "description": f"PaperLocale {__version__} preserve 源参考文献版面",
+                "before_sha256": before_hash, "after_sha256": after_hash,
+                "backup_pdf": str(backup), "regions": regions,
+            })
+            manifest["reference_layout_preserved"] = {"version": __version__, "regions": regions}
+            manifest["rendered_sha256"] = after_hash
+            manifest["status"] = "rendered"
+            manifest.pop("qa_report", None)
+            manifest.pop("accepted_by", None)
+            save_manifest(root, manifest)
+        except Exception:
+            shutil.copy2(backup, candidate)
+            candidate.replace(rendered)
+            raise
+    finally:
+        candidate.unlink(missing_ok=True)
+    return rendered
 
 
 def qa_run(
@@ -1025,7 +1081,7 @@ def qa_run(
         if restore_vectors and vector_errors and report["errors"] == vector_errors:
             restore_source_vectors(
                 root,
-                description="PaperLocale 显式恢复流程：修复本次 QA 确认的缺失源矢量",
+                description=f"PaperLocale {__version__} 有界恢复：修复本次 QA 确认的缺失源矢量",
             )
             # 复用带备份和哈希绑定的既有修复入口；新 PDF 必须重新通过完整 QA。
             # 第二次不再允许自动修复，避免恢复失败时循环重放路径。
@@ -1039,7 +1095,7 @@ def qa_run(
 
 
 def _verify_vector_repair(before: Path, candidate: Path) -> list[dict[str, int]]:
-    """确认候选只增加矢量绘图，不改变页数、页面尺寸、文字或图片数量。"""
+    """确认候选只增加矢量绘图，保留页框、文字位置、图片及既有路径。"""
 
     before_document = fitz.open(before)
     candidate_document = fitz.open(candidate)
@@ -1057,12 +1113,26 @@ def _verify_vector_repair(before: Path, candidate: Path) -> list[dict[str, int]]
                 raise ValueError(f"矢量修复候选改变了第{index + 1}页尺寸")
             if before_page.get_text() != candidate_page.get_text():
                 raise ValueError(f"矢量修复候选改变了第{index + 1}页文字")
+            if before_page.get_text("words") != candidate_page.get_text("words"):
+                raise ValueError(f"矢量修复候选改变了第{index + 1}页文字位置")
+            if before_page.rotation != candidate_page.rotation or before_page.cropbox != candidate_page.cropbox:
+                raise ValueError(f"矢量修复候选改变了第{index + 1}页旋转或裁切")
             if len(before_page.get_images(full=True)) != len(
                 candidate_page.get_images(full=True)
             ):
                 raise ValueError(f"矢量修复候选改变了第{index + 1}页图片数量")
+            def image_identity(page: fitz.Page) -> Counter:
+                return Counter((item["digest"], tuple(round(v, 2) for v in item["bbox"]))
+                               for item in page.get_image_info(hashes=True))
+            if image_identity(before_page) != image_identity(candidate_page):
+                raise ValueError(f"矢量修复候选改变了第{index + 1}页图片内容或位置")
             before_count = len(before_page.get_drawings())
             candidate_count = len(candidate_page.get_drawings())
+            # 数量增加不能证明原图未被替换；路径、样式和重复次数都必须保留。
+            if Counter(_vector_drawing_key(d) for d in before_page.get_drawings()) - Counter(
+                _vector_drawing_key(d) for d in candidate_page.get_drawings()
+            ):
+                raise ValueError(f"矢量修复候选改变了第{index + 1}页已有路径")
             if candidate_count < before_count:
                 raise ValueError(f"矢量修复候选减少了第{index + 1}页矢量绘图")
             if candidate_count > before_count:
@@ -1081,19 +1151,33 @@ def _verify_vector_repair(before: Path, candidate: Path) -> list[dict[str, int]]
     return changes
 
 
-def _vector_drawing_key(drawing: dict[str, object]) -> tuple[float, ...]:
-    """使用与机器 QA 一致的 0.01 PDF 点边界生成矢量对象身份。"""
+def _vector_drawing_key(drawing: dict[str, object]) -> tuple[object, ...]:
+    """路径及绘制样式共同定义身份，避免同边界的表框、斜线或填充相互冒充。
 
-    return tuple(round(float(value), 2) for value in drawing["rect"])
+    忽略内容流序号等序列化身份；坐标与颜色保留两位小数以容纳 PDF 重写舍入。
+    不把透明度 0 当成缺省值，否则不可见路径会被错误画成不透明对象。
+    """
+
+    def normalized(value: object) -> object:
+        if isinstance(value, (int, float)):
+            return round(float(value), 2)
+        if isinstance(value, (list, tuple, fitz.Point, fitz.Rect, fitz.Quad)):
+            return tuple(normalized(item) for item in value)
+        return value
+
+    return tuple(normalized(drawing.get(key)) for key in (
+        "items", "type", "color", "fill", "width", "lineCap", "lineJoin",
+        "dashes", "even_odd", "closePath", "fill_opacity", "stroke_opacity",
+    ))
 
 
 def _missing_source_vector_drawings(
     source_page: fitz.Page,
     translated_page: fitz.Page,
 ) -> list[dict[str, object]]:
-    """按边界和重复次数返回译文页中缺失的源矢量绘图。"""
+    """按路径、样式和重复次数返回译文页中缺失的源矢量绘图。"""
 
-    translated_counts: dict[tuple[float, ...], int] = {}
+    translated_counts: dict[tuple[object, ...], int] = {}
     for drawing in translated_page.get_drawings():
         key = _vector_drawing_key(drawing)
         translated_counts[key] = translated_counts.get(key, 0) + 1
@@ -1146,8 +1230,8 @@ def _replay_vector_drawing(
         dashes=drawing.get("dashes"),
         even_odd=bool(drawing.get("even_odd", False)),
         closePath=bool(drawing.get("closePath", False)),
-        fill_opacity=float(drawing.get("fill_opacity") or 1.0),
-        stroke_opacity=float(drawing.get("stroke_opacity") or 1.0),
+        fill_opacity=float(drawing["fill_opacity"]) if drawing.get("fill_opacity") is not None else 1.0,
+        stroke_opacity=float(drawing["stroke_opacity"]) if drawing.get("stroke_opacity") is not None else 1.0,
     )
     shape.commit(overlay=True)
 
@@ -1157,7 +1241,7 @@ def restore_source_vectors(
     *,
     description: str,
 ) -> Path:
-    """只重放译文 PDF 中按精确边界缺失的源矢量路径。
+    """只重放译文 PDF 中按路径及样式身份缺失的源矢量路径。
 
     候选先写入独立临时 PDF，再复用 ``apply_vector_repair`` 的文字、
     页面、图片和矢量增量验证与原子替换，不直接改写已绑定产物。
@@ -1313,6 +1397,8 @@ def rollback_last_repair(
             raise ValueError("repair_rollback_history 字段非法")
         rollback_history.append(rolled_back)
         history.pop()
+        if last_entry.get("type") == "reference-layout":
+            manifest.pop("reference_layout_preserved", None)
         manifest["rendered_sha256"] = before_hash
         manifest["status"] = "rendered"
         manifest["schema_version"] = SCHEMA_VERSION
@@ -1841,7 +1927,7 @@ def run_to_qa(
     max_segments: int = 200,
     max_characters: int = 30000,
     unattended: bool = False,
-    restore_vectors: bool = False,
+    restore_vectors: bool = True,
 ) -> dict[str, object]:
     """从当前断点沿唯一生产路径推进到机器 QA，保留人工验收边界。
 
@@ -1875,6 +1961,7 @@ def run_to_qa(
         render_run(root, pdf2zh_bin)
         manifest = load_manifest(root)
     if manifest["status"] == "rendered":
+        restore_reference_layout(root)
         qa_run(
             root, dpi=dpi, pdftoppm_bin=pdftoppm_bin,
             restore_vectors=restore_vectors,

@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -123,9 +124,9 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     temporary.replace(path)
 
 
-def _reference_region(
+def _reference_geometry(
     source_pdf: Path,
-) -> tuple[list[int], str | None, tuple[str, ...]]:
+) -> tuple[list[int], str | None, tuple[str, ...], list[dict[str, object]]]:
     """返回标题页、标题后区域和由 PDF 坐标确定的左侧稿件行号。
 
     参考文献标题可能与整页书目被 PyMuPDF 合并为一个文本块，
@@ -137,8 +138,10 @@ def _reference_region(
     page_text_lines: list[list[tuple[float, float, float, float, str]]] = []
     page_line_entries: list[list[tuple[float, float, str]]] = []
     two_column_pages: set[int] = set()
+    page_sizes: list[tuple[float, float]] = []
     try:
         for page_index, page in enumerate(document):
+            page_sizes.append((page.rect.width, page.rect.height))
             text_lines: list[tuple[float, float, float, float, str]] = []
             line_entries: list[tuple[float, float, str]] = []
             for block in page.get_text("dict")["blocks"]:
@@ -196,14 +199,23 @@ def _reference_region(
 
     heading_pages = [page_index + 1 for page_index, _x0, _bottom, _width in headings]
     if len(headings) != 1:
-        return heading_pages, None, ()
+        return heading_pages, None, (), []
 
     heading_page, heading_x0, heading_bottom, heading_page_width = headings[0]
+    margin_counts = Counter(
+        line[4] for index, lines in enumerate(page_text_lines) for line in lines
+        if line[3] < page_sizes[index][1] * 0.08 or line[1] > page_sizes[index][1] * 0.94
+    )
     heading_starts_in_right_column = heading_x0 >= heading_page_width * 0.45
     region_parts: list[str] = []
+    selected_lines: dict[tuple[int, int], list[tuple]] = {}
     region_boundary: tuple[int, float] | None = None
     for page_index in range(heading_page, len(page_text_lines)):
         for line in page_text_lines[page_index]:
+            width, height = page_sizes[page_index]
+            in_margin = line[3] < height * 0.08 or line[1] > height * 0.94
+            if in_margin and (margin_counts[line[4]] > 1 or line[4].strip().isdigit()):
+                continue
             if page_index == heading_page and line[1] < heading_bottom:
                 # References 从左栏下半部开始时，右栏顶部已经是后续书目；
                 # 不能用标题的 y 坐标把整张纸上方的右栏书目一起排除。
@@ -212,6 +224,16 @@ def _reference_region(
                     and not heading_starts_in_right_column
                     and line[0] >= heading_page_width / 2
                 )
+                if follows_in_right_column:
+                    # 有些期刊在整页正文之后才开始横跨两栏的书目；右栏上方
+                    # 此时是出版商说明的续文。只有右栏首段具备作者-书目开头
+                    # 的明确结构才允许回溯到标题上方，不能仅因它位于右栏就保留。
+                    right_body = [item for item in page_text_lines[page_index]
+                                  if item[0] >= heading_page_width / 2 and len(item[4]) >= 40
+                                  and not (item[3] < height * 0.08 and margin_counts[item[4]] > 1)]
+                    follows_in_right_column = bool(right_body) and bool(re.match(
+                        r"^(?:\d+[.)]?\s+)?[A-ZÀ-ÖØ-Þ][\w'’ -]+,?\s+[A-Z]\.", right_body[0][4]
+                    ))
                 if not follows_in_right_column:
                     continue
             if (
@@ -236,6 +258,9 @@ def _reference_region(
                 region_boundary = (page_index, line[1])
                 break
             region_parts.append(line[4])
+            # 只对真实文字边界取并集；不能把所有页顶文字排除，书目可从页顶开始。
+            column = int(line[0] >= width / 2) if page_index in two_column_pages else 0
+            selected_lines.setdefault((page_index, column), []).append(line)
         if region_boundary is not None:
             break
 
@@ -253,7 +278,97 @@ def _reference_region(
         or page_index < last_region_page
         or bottom <= boundary_top
     )
-    return heading_pages, "\n".join(region_parts), line_numbers
+    # 标题自身属于 preserve 区域；紧凑期刊中译后首条书目可与标题相交，
+    # 必须一起恢复而不是把英文 References 当成待保护的正文阻止修复。
+    for line in page_text_lines[heading_page]:
+        if _heading_block_matches(line[4], [entry[2] for entry in page_line_entries[heading_page]]):
+            column = int(line[0] >= heading_page_width / 2) if heading_page in two_column_pages else 0
+            if (heading_page, column) in selected_lines:
+                selected_lines[(heading_page, column)].append(line)
+    regions = [
+        {"page": page_index + 1, "rect": [min(x[0] for x in lines) - 1,
+         min(x[1] for x in lines) - 1, max(x[2] for x in lines) + 1,
+         max(x[3] for x in lines) + 1]}
+        for (page_index, _column), lines in selected_lines.items()
+    ]
+    return heading_pages, "\n".join(region_parts), line_numbers, regions
+
+
+def _reference_region(source_pdf: Path) -> tuple[list[int], str | None, tuple[str, ...]]:
+    """保持既有片段映射接口；区域几何和文本共用一次边界算法。"""
+
+    pages, text, numbers, _regions = _reference_geometry(source_pdf)
+    return pages, text, numbers
+
+
+def preserve_reference_layout(
+    source_pdf: Path, translated_pdf: Path, candidate_pdf: Path,
+) -> list[dict[str, object]]:
+    """把 preserve 书目区域以原始字形复制到独立候选，避免再次排版造成串栏。
+
+    只处理唯一 References 标题确定的区域，不推断没有标题的书目。源页先删除
+    区域外文字再导入，防止 PDF 裁切仅隐藏原文却留下整页不可见重复文本。
+    译文区域外的文字位置必须完全一致；目标文件始终由工作流原子提交。
+    """
+
+    _headings, _text, _numbers, regions = _reference_geometry(source_pdf)
+    if not regions:
+        return []
+    with fitz.open(source_pdf) as source, fitz.open(translated_pdf) as target:
+        if len(source) != len(target):
+            raise ValueError("参考文献恢复要求源文与译文页数一致")
+        for record in regions:
+            index = int(record["page"]) - 1
+            rectangle = fitz.Rect(record["rect"])
+            page = target[index]
+            if any(list(p.annots(types=(fitz.PDF_ANNOT_REDACT,)) or [])
+                   for p in (source[index], page)):
+                raise ValueError("参考文献区域所在页有待应用删除标注，拒绝执行无关删除")
+            if source[index].rect != page.rect or source[index].rotation != page.rotation:
+                raise ValueError("参考文献恢复要求页面尺寸与旋转一致")
+            # 坏排版可能把一整个书目词伸出源区域；只删相交字符会留下半个词。
+            # 将相交词纳入修复，但扩展不得碰到源页的非书目文字（正文/标题）。
+            original_rectangle = fitz.Rect(rectangle)
+            for word in page.get_text("words"):
+                if fitz.Rect(word[:4]).intersects(original_rectangle):
+                    rectangle |= fitz.Rect(word[:4])
+            for word in source[index].get_text("words"):
+                bounds = fitz.Rect(word[:4])
+                if not bounds.intersects(original_rectangle) and bounds.intersects(rectangle):
+                    raise ValueError("书目越界涉及源页正文，不能安全自动恢复")
+            record["rect"] = list(rectangle)
+            before = [word for word in page.get_text("words")
+                      if not fitz.Rect(word[:4]).intersects(rectangle)]
+            with fitz.open() as excerpt:
+                excerpt.insert_pdf(source, from_page=index, to_page=index)
+                clipped = excerpt[0]
+                bounds = clipped.rect
+                outside = [fitz.Rect(bounds.x0, bounds.y0, bounds.x1, rectangle.y0),
+                           fitz.Rect(bounds.x0, rectangle.y1, bounds.x1, bounds.y1),
+                           fitz.Rect(bounds.x0, rectangle.y0, rectangle.x0, rectangle.y1),
+                           fitz.Rect(rectangle.x1, rectangle.y0, bounds.x1, rectangle.y1)]
+                for area in outside:
+                    if not area.is_empty:
+                        clipped.add_redact_annot(area, fill=False)
+                clipped.apply_redactions(images=0, graphics=0)
+                page.add_redact_annot(rectangle, fill=False)
+                page.apply_redactions(images=0, graphics=0)
+                page.show_pdf_page(rectangle, excerpt, 0, clip=rectangle)
+            after = [word for word in page.get_text("words")
+                     if not fitz.Rect(word[:4]).intersects(rectangle)]
+            # 块号/行号会随删除重排；坐标及词文本才是区域外内容的稳定身份。
+            def word_identity(words: list) -> Counter:
+                return Counter(tuple(round(float(v), 2) for v in word[:4]) + (word[4],)
+                               for word in words)
+            if word_identity(before) != word_identity(after):
+                raise ValueError(f"参考文献恢复改变了第{index + 1}页区域外文字："
+                                 f"{list((word_identity(before) - word_identity(after)).elements())[:3]}")
+            expected = source[index].get_text(clip=rectangle)
+            actual = page.get_text(clip=rectangle)
+            if _normalized_match_text(expected) != _normalized_match_text(actual):
+                raise ValueError(f"第{index + 1}页参考文献复制后文字不一致")
+        target.save(candidate_pdf, garbage=4, deflate=True)
+    return regions
 
 
 def prepare_reference_review(

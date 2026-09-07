@@ -84,12 +84,12 @@ The v0.4.0 manual ChatGPT Web bridge is documented in
 [docs/CHATGPT_WEB_MANUAL.zh-CN.md](docs/CHATGPT_WEB_MANUAL.zh-CN.md) for its
 copy/paste workflow and usage-limit boundary.
 
-For v0.5.0, install the exact public release with:
+For v0.5.1, install the exact public release with:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.5.0"
+python -m pip install "paperlocale[layout]==0.5.1"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -126,6 +126,12 @@ resume. PaperLocale never silently switches providers.
 
 The supervised workflow remains available when reference boundaries should be
 reviewed manually:
+
+0.5.1 makes Codex return a required short-key object instead of copying long
+segment hashes. Hashes stay local; every response key is validated before the
+original IDs are restored. Existing validated caches remain reusable. This
+prevents hash-transcription failures without fuzzy matching or blind retries.
+Other providers retain their existing interfaces; content and PDF checks remain.
 
 In 0.5.0, `run` performs one bounded vector restoration by default; use
 `--no-restore-source-vectors` to disable it. Recovery verifies both PDF hashes,

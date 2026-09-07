@@ -10,6 +10,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import math
 import re
 import unicodedata
 from collections import Counter
@@ -303,6 +304,7 @@ def _reference_region(source_pdf: Path) -> tuple[list[int], str | None, tuple[st
 
 def preserve_reference_layout(
     source_pdf: Path, translated_pdf: Path, candidate_pdf: Path,
+    *, regions: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     """把 preserve 书目区域以原始字形复制到独立候选，避免再次排版造成串栏。
 
@@ -311,12 +313,31 @@ def preserve_reference_layout(
     译文区域外的文字位置必须完全一致；目标文件始终由工作流原子提交。
     """
 
-    _headings, _text, _numbers, regions = _reference_geometry(source_pdf)
+    if regions is None:
+        _headings, _text, _numbers, regions = _reference_geometry(source_pdf)
+    else:
+        # 人工核对的多段书目仅覆盖显式坐标，不修改调用方的审核文件对象。
+        regions = [dict(record) for record in regions]
     if not regions:
         return []
     with fitz.open(source_pdf) as source, fitz.open(translated_pdf) as target:
         if len(source) != len(target):
             raise ValueError("参考文献恢复要求源文与译文页数一致")
+        checked = []
+        for record in regions:
+            number, coordinates = record.get("page"), record.get("rect")
+            if type(number) is not int or not 1 <= number <= len(source):
+                raise ValueError("参考文献区域页码非法")
+            if not isinstance(coordinates, list) or len(coordinates) != 4 or any(
+                type(value) not in (int, float) or not math.isfinite(value) for value in coordinates
+            ):
+                raise ValueError("参考文献区域必须是4个有限坐标")
+            rect = fitz.Rect(coordinates)
+            if rect.is_empty or not rect.is_valid or not source[number - 1].rect.contains(rect):
+                raise ValueError("参考文献区域超出页面或为空")
+            if any(page == number and rect.intersects(other) for page, other in checked):
+                raise ValueError("参考文献审核区域不能重叠")
+            checked.append((number, rect))
         for record in regions:
             index = int(record["page"]) - 1
             rectangle = fitz.Rect(record["rect"])

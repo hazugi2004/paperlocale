@@ -307,6 +307,8 @@ def build_parser() -> argparse.ArgumentParser:
         "restore-reference-layout", help="按 preserve 策略从源 PDF 保留书目版面，并重置旧 QA"
     )
     reference_layout.add_argument("--run-dir", type=Path, required=True)
+    reference_layout.add_argument("--regions-file", type=Path,
+                                  help="可选：绑定当前源/译哈希和复核者的多段书目区域JSON")
 
     source_vector_repair = subparsers.add_parser(
         "restore-source-vectors",
@@ -610,7 +612,7 @@ def main() -> int:
         )
         return 0
     if args.command == "restore-reference-layout":
-        print(f"参考文献版面处理完成：{restore_reference_layout(args.run_dir)}；请重新 QA")
+        print(f"参考文献版面处理完成：{restore_reference_layout(args.run_dir, regions_file=args.regions_file)}；请重新 QA")
         return 0
     if args.command == "accept":
         accept_run(args.run_dir, reviewed_by=args.reviewed_by)

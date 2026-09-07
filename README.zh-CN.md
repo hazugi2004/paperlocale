@@ -65,12 +65,12 @@ PaperLocale 0.4.2 增加下文所述的 `--unattended` 与可审计修复命令�
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
-v0.5.0 发布后，可按以下方式安装精确公开版本：
+v0.5.1 发布后，可按以下方式安装精确公开版本：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.5.0"
+python -m pip install "paperlocale[layout]==0.5.1"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -106,6 +106,11 @@ paperlocale run paper.pdf \
 保留已通过的断点；重新执行同一条命令即可续跑，不会静默切换 Provider。
 
 以下是需要人工复核参考文献边界的受监督模式。
+
+0.5.1 的 Codex Provider 不再要求模型复写长哈希，而是填充必填短键对象。
+原始片段哈希留在本地，严格校验短键后恢复绑定；既有合格缓存继续复用。
+该修复从传输结构上避免哈希漏抄，不做模糊匹配或盲目重试；其它 Provider
+接口、内容合同及 PDF 验收门禁保持不变。
 
 0.5.0 的 `run` 默认执行一次有界矢量恢复，无需额外记忆修复开关；
 可用 `--no-restore-source-vectors` 禁用。恢复只消费当前源/译 PDF 哈希绑定的

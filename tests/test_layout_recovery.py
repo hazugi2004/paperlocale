@@ -45,6 +45,45 @@ def reference_pair(root, columns=2, landscape=False):
 
 
 class LayoutRecoveryTest(unittest.TestCase):
+    def test_author_list_continues_at_right_column_top(self):
+        """左栏书目末尾姓氏与右栏顶部名字缩写相接时，恢复整栏且保留正文。"""
+        for continuation in [True, False]:
+            with self.subTest(continuation=continuation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source, target, candidate = (root / n for n in ("source.pdf", "target.pdf", "fixed.pdf"))
+                with fitz.open() as doc:
+                    page = doc.new_page(width=600, height=800)
+                    for j in range(3):
+                        page.insert_text((40, 90 + 15*j),
+                                         "Body discussion remains outside the bibliography.", fontsize=8)
+                    page.insert_text((40, 350), "References", fontsize=10)
+                    page.insert_text((40, 375), "Smith, A., Taylor, B., Griffiths, G., and Aguilar,", fontsize=8)
+                    right_top = ("E., Brunet, M., Taylor, M., New, M., and Zhai, P." if continuation else
+                                 "organizations, or those of the publisher and reviewers.")
+                    page.insert_text((310, 90), right_top, fontsize=8)
+                    for j in range(1, 3):
+                        page.insert_text((310, 90 + 15*j),
+                                         "Further observations and scientific study details.", fontsize=8)
+                    page.insert_text((310, 390), "Brown, A. (2020). Observations of climate and drought.", fontsize=8)
+                    # 重复期刊页脚不能覆盖真正左栏末行的作者证据。
+                    footer = "Journal of Climate Observations, volume 23, pages 100-120"
+                    page.insert_text((40, 770), footer, fontsize=8)
+                    doc.new_page(width=600, height=800).insert_text((40, 770), footer, fontsize=8)
+                    doc.save(source)
+                with fitz.open(source) as doc:
+                    doc[0].insert_text((40, 379), "OVERLAPPING BAD TRANSLATION", fontsize=12)
+                    doc.save(target)
+                _headings, text, _numbers, regions = _reference_geometry(source)
+                self.assertEqual(right_top in text, continuation)
+                preserve_reference_layout(source, target, candidate)
+                with fitz.open(source) as a, fitz.open(candidate) as b:
+                    self.assertNotIn("OVERLAPPING", b[0].get_text())
+                    for region in regions:
+                        rect = fitz.Rect(region["rect"])
+                        self.assertEqual(a[0].get_pixmap(clip=rect).samples, b[0].get_pixmap(clip=rect).samples)
+                    self.assertIn("Body discussion", b[0].get_text())
+                    self.assertIn(right_top, b[0].get_text())
+
     def test_year_led_reference_continuation_does_not_end_region(self):
         """书目换行以年份起头时仍跨页恢复，但真正编号章节之后的正文保持原样。"""
         with tempfile.TemporaryDirectory() as tmp:

@@ -13,7 +13,7 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 class CliTest(unittest.TestCase):
     def test_package_version_matches_v051_release_line(self) -> None:
-        self.assertEqual(__version__, "0.5.2")
+        self.assertEqual(__version__, "0.5.3")
 
     def test_default_recovery_has_explicit_opt_out(self) -> None:
         """普通首跑不能依赖用户知道隐藏的修复开关；排障仍可显式禁用。"""

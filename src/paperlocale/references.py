@@ -236,6 +236,22 @@ def _reference_geometry(
                     follows_in_right_column = bool(right_body) and bool(re.match(
                         r"^(?:\d+[.)]?\s+)?[A-ZÀ-ÖØ-Þ][\w'’ -]+,?\s+[A-Z]\.", right_body[0][4]
                     ))
+                    if right_body and not follows_in_right_column:
+                        # 同一条书目的作者名单可能在左栏底部断开，右栏从名字缩写
+                        # 继续（如左栏末尾 Aguilar, / 右栏 E., Brunet, M.）。
+                        # 必须同时看到左栏标题后的作者名单及末尾逗号、右栏完整的
+                        # “缩写 + 下一个姓氏及缩写”，不把普通出版商续文当成书目。
+                        left_tail = [item for item in page_text_lines[page_index]
+                                     if item[2] < heading_page_width / 2
+                                     and item[1] >= heading_bottom and len(item[4]) >= 40
+                                     and not (item[1] > height * 0.94
+                                              and margin_counts[item[4]] > 1)]
+                        follows_in_right_column = bool(left_tail) and bool(
+                            re.search(r"[A-ZÀ-ÖØ-Þ][\w'’ -]+,\s+[A-Z]\.", left_tail[-1][4])
+                            and left_tail[-1][4].rstrip().endswith(",")
+                            and re.match(r"^[A-Z]\.(?:\s*[A-Z]\.)*,\s+"
+                                         r"[A-ZÀ-ÖØ-Þ][\w'’ -]+,\s+[A-Z]\.", right_body[0][4])
+                        )
                 if not follows_in_right_column:
                     continue
             if (

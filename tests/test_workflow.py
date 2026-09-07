@@ -27,6 +27,7 @@ from paperlocale.providers import (
 )
 from paperlocale.workflow import (
     _layout_provenance,
+    _normalized_pdf_text,
     _resolve_pdf2zh,
     accept_run,
     apply_text_repair,
@@ -114,6 +115,15 @@ class _ProvenanceProvider(TranslationProvider):
 
 
 class WorkflowTest(unittest.TestCase):
+    def test_text_repair_normalizes_chinese_wraps_without_merging_numbers(self) -> None:
+        """汉字间的换行不应阻止标题修复，但英文词和数字分隔不能被吞掉。"""
+
+        self.assertEqual(_normalized_pdf_text("影响\n不断增强"), "影响不断增强")
+        self.assertEqual(_normalized_pdf_text("使用\n、共享"), "使用、共享")
+        self.assertEqual(_normalized_pdf_text("（H\n）"), "（H）")
+        self.assertNotEqual(_normalized_pdf_text("10\n20"), "1020")
+        self.assertNotEqual(_normalized_pdf_text("soil\nmoisture"), "soilmoisture")
+
     layout_provenance = {
         "executable": "/fake/pdf2zh_next",
         "pdf2zh_next_version": "2.9.0",
@@ -134,7 +144,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
-        self.assertEqual(manifest["paperlocale_version"], "0.4.2")
+        self.assertEqual(manifest["paperlocale_version"], "0.4.3")
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)
@@ -160,6 +170,8 @@ class WorkflowTest(unittest.TestCase):
     def _make_source_vector_repair_run(
         self,
         root: Path,
+        *,
+        dense_text: bool = False,
     ) -> tuple[Path, Path, Path]:
         """建立两页矢量差异及与当前候选哈希绑定的 QA 夹具。
 
@@ -178,6 +190,12 @@ class WorkflowTest(unittest.TestCase):
                 text = f"stable text page {page_number}"
                 source_page.insert_text((50, 50), text)
                 translated_page.insert_text((50, 50), text)
+                if dense_text:
+                    # 真实 QA 还会检查空白页；恢复集成测试需提供足够可见正文，
+                    # 而非放宽空白阈值来掩盖夹具本身过于稀疏的问题。
+                    body = "Scientific text for vector recovery validation.\n" * 24
+                    source_page.insert_text((50, 180), body)
+                    translated_page.insert_text((50, 180), body)
                 source_page.draw_rect(
                     fitz.Rect(50, 80, 100, 100),
                     color=(0, 0, 0),
@@ -1285,6 +1303,54 @@ class WorkflowTest(unittest.TestCase):
                 [1],
             )
 
+    def test_run_restores_vectors_only_when_requested_and_can_resume(self) -> None:
+        """真实 PDF 从失败断点恢复；默认仍停止，显式恢复后不重译、不重复修复。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, translated, _ = self._make_source_vector_repair_run(
+                Path(directory), dense_text=True,
+            )
+            manifest = load_manifest(run_dir)
+            manifest["status"] = "rendered"
+            save_manifest(run_dir, manifest)
+            before = translated.read_bytes()
+            arguments = dict(
+                run_dir=run_dir, provider=None,
+                domain=load_domain_pack("atmospheric-science"), dpi=36,
+            )
+            with self.assertRaisesRegex(RuntimeError, "矢量绘图减少"):
+                run_to_qa(**arguments)
+            self.assertEqual(translated.read_bytes(), before)
+            result = run_to_qa(**arguments, restore_vectors=True)
+            self.assertEqual(result["status"], "qa_generated")
+            self.assertEqual(len(result["repair_history"]), 1)
+            self.assertEqual(Path(result["repair_history"][0]["backup_pdf"]).read_bytes(), before)
+            report = json.loads(Path(result["qa_report"]).read_text())
+            self.assertEqual(report["errors"], [])
+            self.assertFalse(report["visual_accepted"])
+            self.assertEqual(run_to_qa(**arguments, restore_vectors=True), result)
+
+    def test_vector_recovery_stops_on_other_errors_and_after_one_attempt(self) -> None:
+        """混合错误不修复；一次恢复后仍失败则立即抛出，不循环或自动验收。"""
+
+        for extra_error in (None, "第1页图片减少"):
+            with tempfile.TemporaryDirectory() as directory:
+                run_dir, translated, report_path = self._make_source_vector_repair_run(Path(directory))
+                report = json.loads(report_path.read_text())
+                report["errors"] = ["第1页矢量绘图减少：source=2, translated=1"]
+                if extra_error:
+                    report["errors"].append(extra_error)
+                before = translated.read_bytes()
+                with (
+                    patch("paperlocale.workflow.inspect_pdf_pair", return_value=report) as inspect,
+                    patch("paperlocale.workflow.restore_source_vectors") as restore,
+                    self.assertRaisesRegex(RuntimeError, "PDF 机器 QA 失败"),
+                ):
+                    qa_run(run_dir, restore_vectors=True)
+                self.assertEqual(restore.call_count, 0 if extra_error else 1)
+                self.assertEqual(inspect.call_count, 1 if extra_error else 2)
+                self.assertEqual(translated.read_bytes(), before)
+
     def test_restore_source_vectors_binds_both_qa_hashes(self) -> None:
         """源或译文哈希任一不属于当前候选时都必须拒绝修复。"""
 
@@ -1497,6 +1563,7 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(history["type"], "text-overlay")
             self.assertEqual(history["page"], 1)
             self.assertEqual(history["before_sha256"], before_hash)
+
             self.assertLess(
                 history["font_program_bytes_after_subset"],
                 history["font_program_bytes_before_subset"],
@@ -1507,6 +1574,19 @@ class WorkflowTest(unittest.TestCase):
                 hashlib.sha256(rendered.read_bytes()).hexdigest(),
             )
             self.assertEqual(list(run_dir.glob(".text-repair-*.pdf")), [])
+
+    def test_text_repair_allows_explicit_reflow_of_same_words(self) -> None:
+        """内容不变但显式断行变化时，仍可完成有记录的版式修复。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, rendered, rect, font = self._make_text_repair_run(Path(directory))
+            replacement = "FiguFigure 5 broken\ncaption perio d"
+            apply_text_repair(
+                run_dir, page_number=1, rectangle=rect, replacement=replacement,
+                font_file=font, font_size=8, description="明确重新断行",
+            )
+            with fitz.open(rendered) as document:
+                self.assertEqual(document[0].get_textbox(fitz.Rect(rect)), replacement)
 
     def test_apply_text_repair_single_line_uses_font_metrics(self) -> None:
         """浅矩形单行模式应按子集字体实际宽高写入，不触发换行。"""

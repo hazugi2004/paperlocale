@@ -11,12 +11,23 @@ from reportlab.pdfgen import canvas
 
 from paperlocale.contracts import read_jsonl, segment_id, write_jsonl_atomic
 from paperlocale.segment_safety import (
+    _normalize_visible_text,
+    _split_occurrences,
     load_segment_safety_summary,
     prepare_segment_safety_review,
 )
 
 
 class SegmentSafetyReviewTest(unittest.TestCase):
+    def test_ligature_normalization_keeps_real_word_boundaries(self) -> None:
+        """完整 fi 连字标题可以定位，但单词内片段仍不得独立翻译。"""
+
+        page = _normalize_visible_text("Soil-based CDHE identiﬁcation")
+        self.assertEqual(_split_occurrences([page], "Soil-based CDHE identification"), (1, []))
+        count, splits = _split_occurrences([page], "identi")
+        self.assertEqual(count, 1)
+        self.assertEqual(splits[0]["literal_suffix"], "fication")
+
     def test_split_word_and_unlocated_short_text_require_passthrough(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

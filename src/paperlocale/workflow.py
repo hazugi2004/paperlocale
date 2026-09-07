@@ -991,6 +991,7 @@ def qa_run(
     *,
     dpi: int = 144,
     pdftoppm_bin: str | Path | None = None,
+    restore_vectors: bool = False,
 ) -> dict[str, object]:
     """生成机器 QA 与逐页对照图；零机器错误后仍要求人工视觉批准。"""
 
@@ -1007,12 +1008,29 @@ def qa_run(
         dpi=dpi,
         pdftoppm_bin=pdftoppm_bin,
     )
-    if report["errors"]:
-        raise RuntimeError(f"PDF 机器 QA 失败：{report['errors']}")
     if report.get("source_sha256") != manifest["source_sha256"]:
         raise RuntimeError("源 PDF 在 QA 读取期间发生变化")
     if report.get("translated_sha256") != manifest["rendered_sha256"]:
         raise RuntimeError("译文 PDF 在 QA 读取期间发生变化")
+    if report["errors"]:
+        # 只在调用者明确选择恢复、且全部错误均为矢量数量减少时修复一次。
+        # 不捕获任意 RuntimeError，不消费旧 QA，也不掩盖图片、页数等其他错误。
+        vector_errors = [
+            f"第{page['page']}页矢量绘图减少："
+            f"source={page['source_vector_drawings']}, "
+            f"translated={page['translated_vector_drawings']}"
+            for page in report["pages"]
+            if page["source_vector_drawings"] > page["translated_vector_drawings"]
+        ]
+        if restore_vectors and vector_errors and report["errors"] == vector_errors:
+            restore_source_vectors(
+                root,
+                description="PaperLocale 显式恢复流程：修复本次 QA 确认的缺失源矢量",
+            )
+            # 复用带备份和哈希绑定的既有修复入口；新 PDF 必须重新通过完整 QA。
+            # 第二次不再允许自动修复，避免恢复失败时循环重放路径。
+            return qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin)
+        raise RuntimeError(f"PDF 机器 QA 失败：{report['errors']}")
     manifest["qa_report"] = str(Path(str(manifest["qa_output_dir"])) / "qa_report.json")
     manifest["schema_version"] = SCHEMA_VERSION
     manifest["status"] = "qa_generated"
@@ -1390,6 +1408,11 @@ def apply_vector_repair(
 def _normalized_pdf_text(value: str) -> str:
     """忽略 PDF 抽取产生的换行差异，但不改写实际文字内容。"""
 
+    # 中文连续排版在 PDF 抽取时会按视觉行插入空白；它不是译文中的词间空格。
+    # 只合并紧邻汉字或中文标点的排版空白（包括 H 与右括号之间的换行），
+    # 英文词和数字之间的分隔仍须保持一致。
+    cjk = r"\u3400-\u9fff，。；：！？、（）“”《》"
+    value = re.sub(rf"(?<=[{cjk}])\s+|\s+(?=[{cjk}])", "", value)
     return re.sub(r"\s+", " ", value).strip()
 
 
@@ -1519,7 +1542,9 @@ def _create_text_repair_candidate(
         before_text = page.get_textbox(rectangle)
         if not _normalized_pdf_text(before_text):
             raise ValueError("指定 rect 内没有可替换文字")
-        if _normalized_pdf_text(before_text) == _normalized_pdf_text(replacement):
+        # 明确改变换行位置也是有效的版式修复；不能用内容归一化抹掉它。
+        # 完全相同的输入仍拒绝，生成后仍验证实际文字与矩形外内容。
+        if before_text.strip() == replacement.strip():
             raise ValueError("replacement 与 rect 内现有文字相同")
 
         # apply_redactions 会处理页面上的全部 redaction；已有标注必须先由用户处置，
@@ -1816,6 +1841,7 @@ def run_to_qa(
     max_segments: int = 200,
     max_characters: int = 30000,
     unattended: bool = False,
+    restore_vectors: bool = False,
 ) -> dict[str, object]:
     """从当前断点沿唯一生产路径推进到机器 QA，保留人工验收边界。
 
@@ -1849,7 +1875,10 @@ def run_to_qa(
         render_run(root, pdf2zh_bin)
         manifest = load_manifest(root)
     if manifest["status"] == "rendered":
-        qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin)
+        qa_run(
+            root, dpi=dpi, pdftoppm_bin=pdftoppm_bin,
+            restore_vectors=restore_vectors,
+        )
         manifest = load_manifest(root)
 
     if manifest["status"] in {"qa_generated", "accepted"}:

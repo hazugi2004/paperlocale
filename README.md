@@ -84,12 +84,12 @@ The v0.4.0 manual ChatGPT Web bridge is documented in
 [docs/CHATGPT_WEB_MANUAL.zh-CN.md](docs/CHATGPT_WEB_MANUAL.zh-CN.md) for its
 copy/paste workflow and usage-limit boundary.
 
-After v0.4.2 is published, install the exact public release with:
+After v0.4.3 is published, install the exact public release with:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.4.2"
+python -m pip install "paperlocale[layout]==0.4.3"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -126,6 +126,15 @@ resume. PaperLocale never silently switches providers.
 
 The supervised workflow remains available when reference boundaries should be
 reviewed manually:
+
+In 0.4.3, add `--restore-source-vectors` to `paperlocale run` to attempt one
+audited restoration when every machine-QA error is a vector-count loss. The
+command verifies both PDF hashes, uses the existing backup and repair history,
+then runs full QA again. Other errors and a failed second QA still stop the run.
+This option does not repair text overlaps or approve visual acceptance.
+Reference detection now follows evidenced two-column reading order and stops
+at unnumbered post-reference sections; font ligatures no longer force intact
+short headings into passthrough. Existing bound mappings are not rewritten.
 
 Use the same resumable command to initialize the run, collect layout segments,
 translate, validate, rebuild, and generate all-page QA:

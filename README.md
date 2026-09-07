@@ -84,12 +84,12 @@ The v0.4.0 manual ChatGPT Web bridge is documented in
 [docs/CHATGPT_WEB_MANUAL.zh-CN.md](docs/CHATGPT_WEB_MANUAL.zh-CN.md) for its
 copy/paste workflow and usage-limit boundary.
 
-For v0.5.2, install the exact public release with:
+For v0.5.3, install the exact public release with:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.5.2"
+python -m pip install "paperlocale[layout]==0.5.3"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```

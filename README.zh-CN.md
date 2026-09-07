@@ -65,12 +65,12 @@ PaperLocale 0.4.2 增加下文所述的 `--unattended` 与可审计修复命令�
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
-v0.5.2 发布后，可按以下方式安装精确公开版本：
+v0.5.3 发布后，可按以下方式安装精确公开版本：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.5.2"
+python -m pip install "paperlocale[layout]==0.5.3"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```

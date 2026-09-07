@@ -2,6 +2,12 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
+## 0.5.3 - 2026-09-08
+
+- Restore two-column bibliography continuations where an author surname ends the left column and initials begin the right column.
+- Require matching author-list evidence on both sides, ignore repeated footer interference, and retain body/publisher-text exclusion and out-of-region protection.
+- Add pixel and text regressions for initials-led continuation and non-reference publisher prose with repeated journal footers.
+
 ## 0.5.2 - 2026-09-08
 
 - Fix reference-region truncation when a wrapped bibliography line starts with a four-digit year followed by an alphabetic title. These lines no longer match numbered section headings.

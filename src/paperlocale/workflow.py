@@ -991,7 +991,7 @@ def render_run(run_dir: Path, pdf2zh_bin: str | Path | None = None) -> Path:
     return candidates[0].resolve()
 
 
-def restore_reference_layout(run_dir: Path) -> Path:
+def restore_reference_layout(run_dir: Path, *, regions_file: Path | None = None) -> Path:
     """按 preserve 策略保留源书目版面，记录备份并使旧 QA/验收失效。
 
     首次排版及旧 rendered 断点都通过同一入口；已记录的恢复不重复执行。
@@ -1006,11 +1006,25 @@ def restore_reference_layout(run_dir: Path) -> Path:
     rendered = _verify_rendered_pdf(manifest)
     if manifest.get("reference_policy", "preserve") != "preserve":
         return rendered
-    if manifest.get("reference_layout_preserved"):
+    regions = None
+    review = None
+    if regions_file is not None:
+        review = json.loads(regions_file.read_text(encoding="utf-8"))
+        if not isinstance(review, dict):
+            raise ValueError("参考文献区域审核必须是JSON对象")
+        if (review.get("source_sha256") != manifest["source_sha256"]
+                or review.get("translated_sha256") != manifest["rendered_sha256"]):
+            raise ValueError("参考文献区域审核不属于当前源文和译文")
+        if not isinstance(review.get("reviewed_by"), str) or not review["reviewed_by"].strip():
+            raise ValueError("参考文献区域审核缺少复核者")
+        regions = review.get("regions")
+        if not isinstance(regions, list) or not regions or any(not isinstance(r, dict) for r in regions):
+            raise ValueError("参考文献审核必须包含非空区域列表")
+    if manifest.get("reference_layout_preserved") and regions_file is None:
         return rendered
     candidate = root / ".reference-layout.tmp.pdf"
     try:
-        regions = preserve_reference_layout(source, rendered, candidate)
+        regions = preserve_reference_layout(source, rendered, candidate, regions=regions)
         if not regions:
             return rendered
         before_hash = str(manifest["rendered_sha256"])
@@ -1025,7 +1039,7 @@ def restore_reference_layout(run_dir: Path) -> Path:
                 "type": "reference-layout", "applied_at": _utc_now(),
                 "description": f"PaperLocale {__version__} preserve 源参考文献版面",
                 "before_sha256": before_hash, "after_sha256": after_hash,
-                "backup_pdf": str(backup), "regions": regions,
+                "backup_pdf": str(backup), "regions": regions, "region_review": review,
             })
             manifest["reference_layout_preserved"] = {"version": __version__, "regions": regions}
             manifest["rendered_sha256"] = after_hash

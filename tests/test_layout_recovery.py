@@ -5,6 +5,7 @@
 """
 
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,50 @@ def reference_pair(root, columns=2, landscape=False):
 
 
 class LayoutRecoveryTest(unittest.TestCase):
+    def test_explicit_region_review_binds_both_pdfs_and_is_recorded(self):
+        """人工坐标不得消费旧PDF身份；通过后仍经正常备份和QA失效路径。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, target = reference_pair(root)
+            before = target.read_bytes()
+            run = root / "run"
+            manifest = initialize_run(source_pdf=source, run_dir=run,
+                                      source_language="en", target_language="zh-CN")
+            manifest.update(status="rendered", rendered_pdf=str(target),
+                            rendered_sha256=hashlib.sha256(before).hexdigest())
+            save_manifest(run, manifest)
+            review = {"source_sha256": manifest["source_sha256"],
+                      "translated_sha256": manifest["rendered_sha256"],
+                      "reviewed_by": "test reviewer", "regions": _reference_geometry(source)[3]}
+            file = root / "review.json"
+            for field in ["source_sha256", "translated_sha256", "reviewed_by"]:
+                bad = dict(review); bad[field] = ""
+                file.write_text(json.dumps(bad))
+                with self.assertRaises(ValueError):
+                    restore_reference_layout(run, regions_file=file)
+                self.assertEqual(target.read_bytes(), before)
+            file.write_text(json.dumps(review))
+            restore_reference_layout(run, regions_file=file)
+            final = load_manifest(run)
+            self.assertEqual(final["status"], "rendered")
+            self.assertEqual(final["repair_history"][-1]["region_review"], review)
+            self.assertNotEqual(target.read_bytes(), before)
+
+    def test_explicit_regions_reject_invalid_or_overlapping_bounds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, target = reference_pair(root)
+            bad_regions = [
+                [{"page": 0, "rect": [1, 1, 20, 20]}],
+                [{"page": 1, "rect": [1, 1, float("nan"), 20]}],
+                [{"page": 1, "rect": [-1, 1, 20, 20]}],
+                [{"page": 1, "rect": [40, 190, 200, 290]}] * 2,
+            ]
+            for regions in bad_regions:
+                with self.assertRaises(ValueError):
+                    preserve_reference_layout(source, target, root / "candidate.pdf", regions=regions)
+                self.assertFalse((root / "candidate.pdf").exists())
+
     def test_qa_detects_missing_vector_inside_form_xobject(self):
         """图表常封装在 Form 内，顶层绘制操作数量为零也不能漏检。"""
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import unittest
 from unittest.mock import patch
 
@@ -142,7 +143,7 @@ class ProviderTest(unittest.TestCase):
             body = json.loads(request.data.decode("utf-8"))
             self.assertEqual(
                 body["messages"],
-                [{"role": "user", "content": self.segment.source}],
+                [{"role": "user", "content": "Soil moisture was  [PLPROTECTED0001]  mm."}],
             )
             self.assertEqual(body["translation_options"]["source_lang"], "en")
             self.assertEqual(body["translation_options"]["target_lang"], "zh")
@@ -161,13 +162,13 @@ class ProviderTest(unittest.TestCase):
             self.assertNotIn("secret-key", json.dumps(body))
             self.assertEqual(timeout, 300)
             return _Response(
-                {"choices": [{"message": {"content": "土壤湿度为10 mm。"}}]}
+                {"choices": [{"message": {"content": "土壤湿度为[PLPROTECTED0001] mm。"}}]}
             )
 
         provider = QwenMTProvider(
             base_url="https://example.test/compatible-mode/v1",
             api_key="secret-key",
-            model="qwen-mt-plus",
+            model="qwen-mt-plus", min_request_interval_seconds=0,
         )
         with patch(
             "paperlocale.providers.qwen_mt.urllib.request.urlopen",
@@ -192,7 +193,7 @@ class ProviderTest(unittest.TestCase):
         provider = QwenMTProvider(
             base_url="https://example.test/compatible-mode/v1",
             api_key="secret-key",
-            model="qwen-mt-plus",
+            model="qwen-mt-plus", min_request_interval_seconds=0,
         )
         with patch(
             "paperlocale.providers.qwen_mt.urllib.request.urlopen",
@@ -214,7 +215,7 @@ class ProviderTest(unittest.TestCase):
             return _Response(
                 {
                     "choices": [
-                        {"message": {"content": "HDI [PLPROTECTED0001]低于-0.8。"}}
+                        {"message": {"content": "[PLPROTECTED0002] [PLPROTECTED0001]低于[PLPROTECTED0003]。"}}
                     ]
                 }
             )
@@ -222,7 +223,7 @@ class ProviderTest(unittest.TestCase):
         provider = QwenMTProvider(
             base_url="https://example.test/compatible-mode/v1",
             api_key="secret-key",
-            model="qwen-mt-plus",
+            model="qwen-mt-plus", min_request_interval_seconds=0,
         )
         with patch(
             "paperlocale.providers.qwen_mt.urllib.request.urlopen",
@@ -231,16 +232,63 @@ class ProviderTest(unittest.TestCase):
             result = provider.translate([segment], self.context)
         self.assertEqual(result[0].target, "HDI {v1}低于-0.8。")
 
+    def test_qwen_mt_shields_wrapped_urls_and_repeated_abbreviations(self) -> None:
+        """网址断行和内嵌公式保持原样，SST 每次出现对应不同的可验证标记。"""
+        source = ("SST measured SST at http://www.cru.uea. ac.uk/data and "
+                  "https://example.org/gcos{v1}wgsp/ Timeseries/Nino34/.")
+        sent = {}
+        def respond(request, timeout):
+            body = json.loads(request.data)
+            wire = body["messages"][0]["content"]
+            sent["wire"] = wire
+            self.assertNotIn("http", wire)
+            self.assertNotIn("{v1}", wire)
+            self.assertNotIn("SST", wire)
+            markers = re.findall(r"\[PLPROTECTED\d+\]", wire)
+            self.assertEqual(len(markers), 4)
+            self.assertEqual(len(set(markers)), 4)
+            return _Response({"choices": [{"message": {"content": "译文 " + wire}}]})
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+            target = provider.translate([Segment("id-url", source)], self.context)[0].target
+        self.assertEqual(target.count("SST"), 2)
+        self.assertIn("http://www.cru.uea. ac.uk/data", target)
+        self.assertIn("https://example.org/gcos{v1}wgsp/ Timeseries/Nino34/.", target)
+
+    def test_qwen_mt_rejects_duplicate_or_unknown_markers(self) -> None:
+        """重复/未知标记必须硬失败，不能通过替换把科学标记凭空复制到译文。"""
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        for extra, error in [("[PLPROTECTED0001]", "重复"), ("[PLPROTECTED9999]", "未知")]:
+            def respond(request, timeout):
+                wire = json.loads(request.data)["messages"][0]["content"]
+                return _Response({"choices": [{"message": {"content": wire + extra}}]})
+            with self.subTest(extra=extra), patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+                with self.assertRaisesRegex(ValueError, error):
+                    provider.translate([Segment("id-repeat", "SST and SST.")], self.context)
+
+    def test_qwen_mt_does_not_confuse_literal_source_markers(self) -> None:
+        """原文本来包含同名标记时使用另一命名空间，字面内容不会被本地吞掉。"""
+        source = "Literal [PLPROTECTED0001] and {v1}."
+        def respond(request, timeout):
+            wire = json.loads(request.data)["messages"][0]["content"]
+            self.assertIn("[PLPROTECTEDX0001]", wire)
+            return _Response({"choices": [{"message": {"content": "译文 " + wire}}]})
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+            target = provider.translate([Segment("id-literal", source)], self.context)[0].target
+        self.assertIn("Literal [PLPROTECTED0001]", " ".join(target.split()))
+        self.assertIn("{v1}", target)
+
     def test_qwen_mt_retries_temporary_disconnect(self) -> None:
         """临时断连可短重试，但同一片段最终只返回一条译文。"""
 
         provider = QwenMTProvider(
             base_url="https://example.test/compatible-mode/v1",
             api_key="secret-key",
-            model="qwen-mt-plus",
+            model="qwen-mt-plus", min_request_interval_seconds=0,
         )
         response = _Response(
-            {"choices": [{"message": {"content": "土壤湿度为10 mm。"}}]}
+            {"choices": [{"message": {"content": "土壤湿度为[PLPROTECTED0001] mm。"}}]}
         )
         with (
             patch(
@@ -254,15 +302,42 @@ class ProviderTest(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once_with(2)
 
+    def test_qwen_rate_limit_retry_is_bounded_and_auth_is_not_retried(self) -> None:
+        import io
+        import urllib.error
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret", model="qwen-mt-plus", min_request_interval_seconds=0)
+        def error(status, code):
+            return urllib.error.HTTPError("https://example.test/v1", status, "rejected", {"Retry-After": "1"},
+                io.BytesIO(json.dumps({"error": {"code": code}}).encode()))
+        response = _Response({"choices": [{"message": {"content": "译文"}}]})
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=[error(429, "limit_requests"), response]) as call, patch("paperlocale.providers.qwen_mt.time.sleep") as sleep:
+            self.assertEqual(provider._request_translation({}), "译文")
+            self.assertEqual(call.call_count, 2)
+            sleep.assert_called_once_with(1.0)
+        for status, code, expected in [(429, "limit_requests", 2), (401, "invalid_api_key", 1)]:
+            with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=[error(status, code), error(status, code)]) as call, patch("paperlocale.providers.qwen_mt.time.sleep"):
+                with self.assertRaises(RuntimeError):
+                    provider._request_translation({})
+                self.assertEqual(call.call_count, expected)
+
+    def test_qwen_requests_share_minimum_interval(self) -> None:
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret", model="qwen-mt-plus")
+        response = _Response({"choices": [{"message": {"content": "译文"}}]})
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", return_value=response), patch("paperlocale.providers.qwen_mt.time.monotonic", return_value=10), patch("paperlocale.providers.qwen_mt.time.sleep") as sleep:
+            provider._request_translation({})
+            provider._request_translation({})
+            sleep.assert_called_once()
+            self.assertAlmostEqual(sleep.call_args.args[0], 1.1)
+
     def test_qwen_mt_restores_ascii_hyphen_in_abbreviation(self) -> None:
-        """模型排版用不换行连字符时，科学缩写仍恢复为原始 ASCII 标记。"""
+        """科学缩写由本地原样恢复，模型不再负责生成其中的 ASCII 连字符。"""
 
         provider = QwenMTProvider(
             base_url="https://example.test/compatible-mode/v1",
             api_key="secret-key",
-            model="qwen-mt-plus",
+            model="qwen-mt-plus", min_request_interval_seconds=0,
         )
-        response = _Response({"choices": [{"message": {"content": "采用HDI‑P指数。"}}]})
+        response = _Response({"choices": [{"message": {"content": "采用[PLPROTECTED0001]指数。"}}]})
         with patch(
             "paperlocale.providers.qwen_mt.urllib.request.urlopen",
             return_value=response,
@@ -273,28 +348,44 @@ class ProviderTest(unittest.TestCase):
             )
         self.assertEqual(result[0].target, "采用HDI-P指数。")
 
-    def test_qwen_mt_rejects_a_deleted_protection_marker(self) -> None:
-        """模型删除哨兵时必须失败，不能根据缩写位置猜测补回。"""
+    def test_qwen_mt_recovers_missing_marker_by_translating_source_gaps(self) -> None:
+        """丢标记后不修改坏译文，只翻译原文中的间隙并按原位置插回本地标识。"""
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        calls = []
+        def respond(request, timeout):
+            content = json.loads(request.data)["messages"][0]["content"]
+            calls.append(content)
+            if len(calls) == 1:
+                target = "BAD OMITTED TRANSLATION"
+            else:
+                self.assertEqual(content, "Standardized Precipitation Index (")
+                target = "标准化降水指数（"
+            return _Response({"choices": [{"message": {"content": target}}]})
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+            target = provider.translate([Segment("id-style", "Standardized Precipitation Index (SPI{v1}).")], self.context)[0].target
+        self.assertEqual(len(calls), 2)
+        self.assertIn("SPI{v1}", target)
+        self.assertNotIn("BAD", target)
 
-        provider = QwenMTProvider(
-            base_url="https://example.test/compatible-mode/v1",
-            api_key="secret-key",
-            model="qwen-mt-plus",
-        )
-        response = _Response(
-            {"choices": [{"message": {"content": "标准化降水指数（SPI）。"}}]}
-        )
-        with (
-            patch(
-                "paperlocale.providers.qwen_mt.urllib.request.urlopen",
-                return_value=response,
-            ),
-            self.assertRaisesRegex(ValueError, "删除了保护标记"),
-        ):
-            provider.translate(
-                [Segment("id-style", "Standardized Precipitation Index (SPI{v1}).")],
-                self.context,
-            )
+    def test_qwen_mt_repairs_year_glued_to_extra_digits(self) -> None:
+        """标记数正确但还原后变成202015时，按原文间隙重译而非放宽数字门禁。"""
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        responses = [_Response({"choices": [{"message": {"content": "事件20[PLPROTECTED0001]年。"}}]}),
+                     _Response({"choices": [{"message": {"content": "事件发生在"}}]})]
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=responses) as call:
+            target = provider.translate([Segment("id-year", "The event occurred in 2015.")], self.context)[0].target
+        self.assertIn("2015", target)
+        self.assertNotIn("202015", target)
+        self.assertEqual(call.call_count, 2)
+
+    def test_qwen_mt_fragment_recovery_still_rejects_missing_units(self) -> None:
+        """有界分段失败不得绕过内容门禁，也不再递归重试。"""
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen",
+                   return_value=_Response({"choices": [{"message": {"content": "缺少内容"}}]})) as call:
+            with self.assertRaisesRegex(ValueError, "分段译文未通过门禁"):
+                provider.translate([Segment("id-number", "SST at 10 mm and SST.")], self.context)
+        self.assertEqual(call.call_count, 3)
 
     def test_openai_compatible_allows_loopback_http(self) -> None:
         """本机 Ollama 等兼容服务可以继续使用明确的 loopback HTTP。"""

@@ -136,7 +136,7 @@ def _reference_geometry(
     """
 
     document = fitz.open(source_pdf)
-    headings: list[tuple[int, float, float, float]] = []
+    headings: list[tuple[int, float, float, float, float]] = []
     page_text_lines: list[list[tuple[float, float, float, float, str]]] = []
     page_line_entries: list[list[tuple[float, float, str]]] = []
     two_column_pages: set[int] = set()
@@ -194,16 +194,16 @@ def _reference_geometry(
             for line in text_lines:
                 if _heading_block_matches(line[4], line_numbers):
                     headings.append(
-                        (page_index, line[0], line[3], float(page.rect.width))
+                        (page_index, line[0], line[1], line[3], float(page.rect.width))
                     )
     finally:
         document.close()
 
-    heading_pages = [page_index + 1 for page_index, _x0, _bottom, _width in headings]
+    heading_pages = [page_index + 1 for page_index, _x0, _top, _bottom, _width in headings]
     if len(headings) != 1:
         return heading_pages, None, (), []
 
-    heading_page, heading_x0, heading_bottom, heading_page_width = headings[0]
+    heading_page, heading_x0, heading_top, heading_bottom, heading_page_width = headings[0]
     margin_counts = Counter(
         line[4] for index, lines in enumerate(page_text_lines) for line in lines
         if line[3] < page_sizes[index][1] * 0.08 or line[1] > page_sizes[index][1] * 0.94
@@ -252,6 +252,13 @@ def _reference_geometry(
                             and re.match(r"^[A-Z]\.(?:\s*[A-Z]\.)*,\s+"
                                          r"[A-ZÀ-ÖØ-Þ][\w'’ -]+,\s+[A-Z]\.", right_body[0][4])
                         )
+                    if not follows_in_right_column:
+                        # 全宽附录下方开始双栏书目时，右栏首行可能是上一条书目
+                        # 的期刊卷页，且与左栏标题垂直重叠。要求卷(期),起止页格式
+                        # 与标题高度同时成立，只补这一行，不回溯上方出版商正文。
+                        follows_in_right_column = line[3] >= heading_top and bool(re.search(
+                            r"\b\d+(?:\s*\([^)]*\))?\s*,\s*\d+[–-]\d+", line[4]
+                        ))
                 if not follows_in_right_column:
                     continue
             if (
@@ -317,6 +324,22 @@ def _reference_region(source_pdf: Path) -> tuple[list[int], str | None, tuple[st
 
     pages, text, numbers, _regions = _reference_geometry(source_pdf)
     return pages, text, numbers
+
+
+def _same_positioned_words(before: list, after: list) -> bool:
+    """允许PDF重写产生的小于0.0001点舍入误差，仍严格保留词文本、次数与位置。
+
+    对坐标先round再比较会在144.394989/144.395004这种边界产生伪差异；
+    直接绝对容差比原有两位小数规则更严格，且远小于可见像素。
+    """
+
+    left = sorted(before, key=lambda word: (word[4], *word[:4]))
+    right = sorted(after, key=lambda word: (word[4], *word[:4]))
+    return len(left) == len(right) and all(
+        a[4] == b[4] and all(math.isclose(x, y, rel_tol=0, abs_tol=0.0001)
+                            for x, y in zip(a[:4], b[:4]))
+        for a, b in zip(left, right)
+    )
 
 
 def preserve_reference_layout(
@@ -398,7 +421,7 @@ def preserve_reference_layout(
             def word_identity(words: list) -> Counter:
                 return Counter(tuple(round(float(v), 2) for v in word[:4]) + (word[4],)
                                for word in words)
-            if word_identity(before) != word_identity(after):
+            if not _same_positioned_words(before, after):
                 raise ValueError(f"参考文献恢复改变了第{index + 1}页区域外文字："
                                  f"{list((word_identity(before) - word_identity(after)).elements())[:3]}")
             expected = source[index].get_text(clip=rectangle)

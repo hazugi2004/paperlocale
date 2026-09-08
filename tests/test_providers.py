@@ -215,7 +215,7 @@ class ProviderTest(unittest.TestCase):
             return _Response(
                 {
                     "choices": [
-                        {"message": {"content": "[PLPROTECTED0002] [PLPROTECTED0001]低于[PLPROTECTED0003]。"}}
+                        {"message": {"content": "[PLPROTECTED0001] [PLPROTECTED0002]低于[PLPROTECTED0003]。"}}
                     ]
                 }
             )
@@ -259,7 +259,7 @@ class ProviderTest(unittest.TestCase):
         """未知/重复标记不做模糊匹配，只从原文位置恢复两次SST，丢弃坏译文。"""
         provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
         for extra in ["[PLPROTECTED0001]", "[PLPROTECTED9999]",
-                      "[PLPROTECTEDX9999]", "[PLPROTECTED 9999]"]:
+                      "[PLPROTECTEDX9999]", "[PLPROTECTED 9999]", "[PLPROTECTED0001oops]"]:
             calls = []
             def respond(request, timeout):
                 wire = json.loads(request.data)["messages"][0]["content"]
@@ -280,7 +280,7 @@ class ProviderTest(unittest.TestCase):
     def test_qwen_mt_rejects_markers_from_recovery_without_recursing(self) -> None:
         """恢复请求再次幻化标记时必须停止；不能吞掉异常标记或无限分段。"""
         provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
-        response = _Response({"choices": [{"message": {"content": "[PLPROTECTEDX9999]"}}]})
+        response = _Response({"choices": [{"message": {"content": "[PLPROTECTEDX9999oops]"}}]})
         with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", return_value=response) as call:
             with self.assertRaisesRegex(ValueError, "分段译文包含意外保护标记"):
                 provider.translate([Segment("id-repeat", "SST and SST.")], self.context)
@@ -298,6 +298,24 @@ class ProviderTest(unittest.TestCase):
             target = provider.translate([Segment("id-literal", source)], self.context)[0].target
         self.assertIn("Literal [PLPROTECTED0001]", " ".join(target.split()))
         self.assertIn("{v1}", target)
+
+    def test_qwen_mt_overlapping_version_number_and_url_spans_stay_whole(self) -> None:
+        """GLDAS-2.0和分辨率公式不可拆开，URL斜线前的版面空格不得暴露UUID。"""
+        source = "GLDAS-2.0 at 0.{v1}.{v2} and 0.03{v3} resolution: https://example.org/data /9775f2b4-7370/."
+        def respond(request, timeout):
+            wire = json.loads(request.data)["messages"][0]["content"]
+            self.assertNotIn("GLDAS", wire)
+            self.assertNotIn("9775", wire)
+            self.assertNotIn("{v1}", wire)
+            self.assertEqual(len(re.findall(r"\[PLPROTECTED\d+\]", wire)), 4)
+            return _Response({"choices": [{"message": {"content": "资料 " + wire}}]})
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret", model="qwen-mt-plus", min_request_interval_seconds=0)
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+            target = provider.translate([Segment("id-version", source)], self.context)[0].target
+        self.assertIn("GLDAS-2.0", target)
+        self.assertIn("0.{v1}.{v2}", target)
+        self.assertIn("0.03{v3}", target)
+        self.assertIn("https://example.org/data /9775f2b4-7370/.", target)
 
     def test_qwen_mt_retries_temporary_disconnect(self) -> None:
         """临时断连可短重试，但同一片段最终只返回一条译文。"""

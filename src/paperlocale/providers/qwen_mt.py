@@ -125,29 +125,34 @@ class QwenMTProvider(TranslationProvider):
             # 先保护完整地址，再处理其余公式，避免嵌套哨兵或只保护域名前缀。
             url_pattern = re.compile(
                 r"https?://(?:\{v\d+\}|[^\s)\]}>;,，。；：！？）】》\u3400-\u9fff{]+"
-                r"|(?<=[./])\s+(?=[A-Za-z0-9_~%-]+[./]))+", re.IGNORECASE
+                r"|(?<=[./])\s+(?=[A-Za-z0-9_~%-]+[./])|\s+(?=/[A-Za-z0-9_~%.-]))+", re.IGNORECASE
             )
-            source_for_translation = re.sub(
-                r"\[PLPROTECTED[A-Z]*\d+\]", lambda match: shield(match.group()), segment.source
-            )
-            source_for_translation = url_pattern.sub(lambda match: shield(match.group()), source_for_translation)
+            # 在原文坐标中一次性收集保护区，合并重叠或直接相邻范围，而不是分多轮替换。
+            # GLDAS-2 与数字2.0共享字符，必须合成GLDAS-2.0这一完整保护区；
+            # URL内的编号/公式也同理，不能把后续轮次用于扫描已生成的哨兵。
+            spans = [match.span() for pattern in (url_pattern,
+                     re.compile(r"\[PLPROTECTED[A-Z]*\d+\]"),
+                     re.compile(r"\d+(?:\.\{v\d+\})+"))
+                     for match in pattern.finditer(segment.source)]
             for value in dict.fromkeys(protected_markup):
-                if value in source_for_translation:
-                    source_for_translation = re.sub(
-                        re.escape(value), lambda match: shield(match.group()), source_for_translation
-                    )
-
-            # 所有科学缩写与数字均按出现位置保护，包括只出现一次的引文年份。
-            # 只扫描尚未保护的正文间隙，绝不再次扫描哨兵编号或URL内部。
-            marker_pattern = r"\[" + prefix + r"\d{4,}\]"
+                spans.extend(match.span() for match in re.finditer(re.escape(value), segment.source))
             for pattern, values in ((ABBREVIATION_RE, counts["abbreviation"]),
                                     (NUMBER_RE, counts["number"])):
-                parts = re.split("(" + marker_pattern + ")", source_for_translation)
-                source_for_translation = "".join(
-                    part if part in sentinels else pattern.sub(
-                        lambda match: shield(match.group()) if match.group() in values else match.group(), part
-                    ) for part in parts
-                )
+                spans.extend(match.span() for match in pattern.finditer(segment.source)
+                             if match.group() in values)
+            merged: list[tuple[int, int]] = []
+            for start, end in sorted(spans):
+                if merged and start <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                else:
+                    merged.append((start, end))
+            pieces = []
+            cursor = 0
+            for start, end in merged:
+                pieces.extend((segment.source[cursor:start], shield(segment.source[start:end])))
+                cursor = end
+            pieces.append(segment.source[cursor:])
+            source_for_translation = "".join(pieces)
 
             # 官方术语干预同时承担两项职责：固定领域译法，并强制模型原样保留
             # 公式占位符、缩写、单位、URL 与 DOI。重复源词只保留第一条映射。
@@ -181,7 +186,7 @@ class QwenMTProvider(TranslationProvider):
             target = self._request_translation(body)
             marker_pattern = r"\[" + prefix + r"\d{4,}\]"
             # 连同改写命名空间/空格的标记一起识别为异常，不模糊映射到合法ID。
-            returned_marker_pattern = r"\[\s*PLPROTECTED[A-Z]*\s*\d+\s*\]"
+            returned_marker_pattern = r"\[\s*PLPROTECTED[^\]\r\n]*\]"
             returned_markers = re.findall(returned_marker_pattern, target)
             # 未知或重复标记意味着整段候选不可用，不能猜测其对应原文。
             # 与缺标记共用下方唯一的原文间隙恢复路径，整份坏候选被丢弃；

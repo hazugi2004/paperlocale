@@ -5,6 +5,7 @@
 ## 0.6.1 - 2026-09-08
 
 - Route Qwen-MT unknown, duplicate, and malformed full-response markers into the existing bounded source-gap recovery. Discard the entire invalid candidate; never guess marker mappings.
+- Merge overlapping/adjacent source protection spans so version identifiers and resolution formulas stay intact; protect URL breaks before a slash.
 - Reject protocol markers emitted during recovery without recursive retries; keep fragment and full-content gates intact.
 - Preserve the Codex/GPT and OpenAI-compatible providers, common pipeline/contracts, rendering, and QA logic byte-for-byte from 0.6.0. Runtime changes are limited to the Qwen provider.
 

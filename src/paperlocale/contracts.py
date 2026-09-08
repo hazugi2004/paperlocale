@@ -216,6 +216,25 @@ def scientific_quantities(text: str):
     return find_quantities(text, excluded)
 
 
+def scientific_literal_spans(text: str) -> list[tuple[int, int]]:
+    """保护版面占位符拆开的数值，以及语法明确的整行数学表达式。
+
+    只处理有公式占位符的表达式；正文中的小写词不推断为变量。完整函数式
+    必须由标识符、标记和数学分隔符构成，不能含相邻自然语言单词。
+    """
+    if not FORMULA_RE.search(text):
+        return []
+    token = r"(?:\d+|\{v\d+\})"
+    decimals = list(re.finditer(token + r"(?:\." + token + r")+", text))
+    math_only = (re.match(r"^[A-Za-z_]\w*\(", text.strip())
+                 and re.fullmatch(r"(?:\{v\d+\}|[A-Za-z0-9_]|[\s,().+*/=<>≤≥−-])+", text)
+                 and not re.search(r"[A-Za-z_]\w*\s+[A-Za-z_]\w*", FORMULA_RE.sub("@", text)))
+    numeric_only = re.fullmatch(r"(?:\{v\d+\}|[0-9\s.,+~<>≤≥−-])+", text)
+    if math_only or numeric_only:
+        return [(0, len(text))]
+    return [match.span() for match in decimals]
+
+
 def validate_translation(
     source: str,
     target: str,
@@ -237,6 +256,14 @@ def validate_translation(
                 f"{category} 标记不一致：期望 {dict(source_counts[category])!r}，"
                 f"实际 {dict(target_counts[category])!r}"
             )
+
+    # 科学表达式内部的小数点和小写变量不能翻译成句号或人名。
+    literal_spans = scientific_literal_spans(source)
+    target_compact = re.sub(r"\s+", "", target)
+    for start, end in literal_spans:
+        literal = re.sub(r"\s+", "", source[start:end])
+        if target_compact.count(literal) < re.sub(r"\s+", "", source).count(literal):
+            errors.append(f"scientific_literal 科学表达式改变：{source[start:end]!r}")
 
     # 数值与单位必须成对一致，不能靠交换两处单位骗过独立计数。
     # 仅做别名/乘除幂表示归一；不换算hPa到Pa或摄氏度到K。
@@ -269,6 +296,8 @@ def validate_translation(
     if STYLE_RE.findall(source) != STYLE_RE.findall(target):
         errors.append("style 标签顺序改变")
 
+    if literal_spans == [(0, len(source))]:
+        require_cjk = False
     if require_cjk and len(ENGLISH_RE.findall(source)) >= 40 and not CJK_RE.search(target):
         errors.append("长正文片段缺少中文译文")
 

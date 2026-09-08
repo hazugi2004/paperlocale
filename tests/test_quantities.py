@@ -49,3 +49,24 @@ class QuantityTests(unittest.TestCase):
         self.assertIn('500 hPa',prompt)
         self.assertEqual(schema['properties']['translations']['required'],['s1'])
         self.assertNotIn('original-hash',prompt)
+
+    def test_layout_split_decimals_and_math_variables_remain_literal(self):
+        from paperlocale.contracts import scientific_literal_spans
+        for source in ['{v1}.12', '0.{v1}.0', '{v1}.{v2}-0.8',
+                       'P(SPEI {v1}spei, STI {v2}sti) {v3}P(SPEI {v4}spei)']:
+            self.assertEqual(scientific_literal_spans(source), [(0,len(source))])
+            self.assertEqual(validate_translation(source,source), [])
+            bad=source.replace('.', '。').replace('spei','斯佩伊')
+            self.assertTrue(any('scientific_literal' in e for e in validate_translation(source,bad)))
+        self.assertEqual(scientific_literal_spans('We use spei and {v1}.'), [])
+
+    def test_qwen_math_only_is_preserved_without_remote_translation(self):
+        from unittest.mock import patch
+        from paperlocale.providers.qwen_mt import QwenMTProvider
+        context=TranslationContext('en','zh-CN',load_domain_pack('atmospheric-science'))
+        provider=QwenMTProvider(base_url='https://example.test/v1',api_key='test-key',model='qwen-mt-plus')
+        with patch('urllib.request.urlopen') as request:
+            for source in ['{v1}.12','0.{v1}.0','P(SPEI {v1}spei)']:
+                result=provider.translate([Segment('s1',source)],context)
+                self.assertEqual(result[0].target,source)
+            request.assert_not_called()

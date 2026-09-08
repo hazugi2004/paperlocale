@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from ..contracts import ABBREVIATION_RE, NUMBER_RE, FORMULA_RE, STYLE_RE, protected_counts, source_term_is_present, validate_translation, scientific_quantities
+from ..contracts import ABBREVIATION_RE, NUMBER_RE, FORMULA_RE, STYLE_RE, protected_counts, source_term_is_present, validate_translation, scientific_quantities, scientific_literal_spans
 from ..quantities import standalone_units
 from .base import Segment, Translation, TranslationContext, TranslationProvider
 
@@ -82,6 +82,11 @@ class QwenMTProvider(TranslationProvider):
             raise ValueError("Qwen-MT Provider 每次必须且只能翻译一个片段")
         translations: list[Translation] = []
         for segment in segments:
+            literal_spans = scientific_literal_spans(segment.source)
+            if literal_spans == [(0, len(segment.source))]:
+                # 完整数学片段不包含待翻译正文，原样返回，仍由流水线验证全部门禁。
+                translations.append(Translation(segment.id, segment.source))
+                continue
             # 专用翻译模型有时会把纯占位符视为无语义噪声并删除。先替换成可读的
             # ASCII 哨兵，响应返回后再逐一恢复；原始片段与最终译文仍由合同核对。
             # BabelDOC 有时把变量写成 ``{v2}HDI-P{v3}``。若只保护两侧
@@ -135,6 +140,7 @@ class QwenMTProvider(TranslationProvider):
                      re.compile(r"\[PLPROTECTED[A-Z]*\d+\]"),
                      re.compile(r"\d+(?:\.\{v\d+\})+"))
                      for match in pattern.finditer(segment.source)]
+            spans.extend(literal_spans)
             for value in dict.fromkeys(protected_markup):
                 spans.extend(match.span() for match in re.finditer(re.escape(value), segment.source))
             for pattern, values in ((ABBREVIATION_RE, counts["abbreviation"]),

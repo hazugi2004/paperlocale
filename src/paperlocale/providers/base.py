@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from ..contracts import protected_counts, scientific_quantities
+from ..contracts import protected_counts, scientific_quantities, scientific_literal_spans
 from ..domains import DomainPack
 
 
@@ -124,6 +124,7 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
                 if values
             },
         }
+        item["scientific_literals"] = [segment.source[a:b] for a,b in scientific_literal_spans(segment.source)]
         quantities = scientific_quantities(segment.source)
         if quantities:
             item["scientific_quantities"] = [
@@ -156,6 +157,7 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
 3. 保留所有数字、正负号、单位、变量缩写、数据集名、URL、DOI 和引文标记。
    scientific_quantities 中数值与单位必须成对保留；允许km/千米、m/s/m s−1等
    等价表示，此规则优先于单位的表面形式要求；不得丢单位或进行单位倍率/温度换算。
+   scientific_literals 中的小数点、变量及运算符必须原样保留，只允许排版空白变化。
 4. 只返回符合约定结构的 JSON，不添加解释、Markdown 或原文之外的信息。
 {reference_instruction}
 {repair_instruction}

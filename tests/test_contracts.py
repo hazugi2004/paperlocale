@@ -37,8 +37,7 @@ class TranslationContractTest(unittest.TestCase):
 
     def test_number_and_unit_loss_is_rejected(self) -> None:
         errors = validate_translation("Resolution is 0.25° and rainfall is 10 mm.", "分辨率和降水量如文中所示。")
-        self.assertTrue(any("number" in error for error in errors))
-        self.assertTrue(any("unit" in error for error in errors))
+        self.assertTrue(any("quantity" in error and "0.25 °" in error and "10 mm" in error for error in errors))
 
     def test_required_domain_term_is_enforced(self) -> None:
         source = "Gross primary productivity (GPP) was measured."

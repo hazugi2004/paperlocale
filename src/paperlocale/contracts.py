@@ -14,6 +14,7 @@ from collections import Counter
 from pathlib import Path
 
 from .domains import DomainPack
+from .quantities import find_quantities, hide_spans, standalone_units
 
 FORMULA_RE = re.compile(r"\{v\d+\}")
 STYLE_RE = re.compile(r"<style\s+id=['\"]\d+['\"]>|</style>", re.IGNORECASE)
@@ -208,6 +209,32 @@ def source_term_is_present(text: str, term: str) -> bool:
     return re.search(left_boundary + re.escape(term), text, re.IGNORECASE) is not None
 
 
+def scientific_quantities(text: str):
+    """共用既有标识符边界，物理量解析不消费URL、DOI或内部公式标记。"""
+    excluded = [match.span() for pattern in (URL_RE, DOI_RE, FORMULA_RE, STYLE_RE)
+                for match in pattern.finditer(text)]
+    return find_quantities(text, excluded)
+
+
+def scientific_literal_spans(text: str) -> list[tuple[int, int]]:
+    """保护版面占位符拆开的数值，以及语法明确的整行数学表达式。
+
+    只处理有公式占位符的表达式；正文中的小写词不推断为变量。完整函数式
+    必须由标识符、标记和数学分隔符构成，不能含相邻自然语言单词。
+    """
+    if not FORMULA_RE.search(text):
+        return []
+    token = r"(?:\d+|\{v\d+\})"
+    decimals = list(re.finditer(token + r"(?:\." + token + r")+", text))
+    math_only = (re.match(r"^[A-Za-z_]\w*\(", text.strip())
+                 and re.fullmatch(r"(?:\{v\d+\}|[A-Za-z0-9_]|[\s,().+*/=<>≤≥−-])+", text)
+                 and not re.search(r"[A-Za-z_]\w*\s+[A-Za-z_]\w*", FORMULA_RE.sub("@", text)))
+    numeric_only = re.fullmatch(r"(?:\{v\d+\}|[0-9\s.,+~<>≤≥−-])+", text)
+    if math_only or numeric_only:
+        return [(0, len(text))]
+    return [match.span() for match in decimals]
+
+
 def validate_translation(
     source: str,
     target: str,
@@ -230,15 +257,47 @@ def validate_translation(
                 f"实际 {dict(target_counts[category])!r}"
             )
 
-    # 数字、缩写和单位允许译文新增，但不允许丢失原文已有项目。
+    # 科学表达式内部的小数点和小写变量不能翻译成句号或人名。
+    literal_spans = scientific_literal_spans(source)
+    target_compact = re.sub(r"\s+", "", target)
+    for start, end in literal_spans:
+        literal = re.sub(r"\s+", "", source[start:end])
+        if target_compact.count(literal) < re.sub(r"\s+", "", source).count(literal):
+            errors.append(f"scientific_literal 科学表达式改变：{source[start:end]!r}")
+
+    # 数值与单位必须成对一致，不能靠交换两处单位骗过独立计数。
+    # 仅做别名/乘除幂表示归一；不换算hPa到Pa或摄氏度到K。
+    source_quantities = scientific_quantities(source)
+    target_quantities = scientific_quantities(target)
+    required = Counter(q.signature for q in source_quantities)
+    available = Counter(q.signature for q in target_quantities)
+    missing_quantities = required - available
+    if missing_quantities:
+        errors.append(f"quantity 数值/单位配对缺失或改变：{dict(missing_quantities)!r}")
+    source_free = hide_spans(source, [(q.start, q.end) for q in source_quantities])
+    # 未匹配的目标物理量不能吞掉普通原文数字，例如15°N译成北纬15度。
+    matched = required.copy()
+    target_spans = []
+    for quantity in target_quantities:
+        if matched[quantity.signature] > 0:
+            target_spans.append((quantity.start, quantity.end))
+            matched[quantity.signature] -= 1
+    target_free = hide_spans(target, target_spans)
+    source_remaining = protected_counts(source_free)
+    target_remaining = protected_counts(target_free)
+    source_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(source_free))
+    target_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(target_free))
+    # 非物理量区域仍使用既有科学标记门禁，不放宽数字、变量及公式要求。
     for category in ("number", "abbreviation", "unit"):
-        missing = source_counts[category] - target_counts[category]
+        missing = source_remaining[category] - target_remaining[category]
         if missing:
             errors.append(f"{category} 标记缺失：{dict(missing)!r}")
 
     if STYLE_RE.findall(source) != STYLE_RE.findall(target):
         errors.append("style 标签顺序改变")
 
+    if literal_spans == [(0, len(source))]:
+        require_cjk = False
     if require_cjk and len(ENGLISH_RE.findall(source)) >= 40 and not CJK_RE.search(target):
         errors.append("长正文片段缺少中文译文")
 

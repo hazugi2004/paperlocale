@@ -57,8 +57,8 @@ def translate_segment_file(
 ) -> tuple[int, int]:
     """翻译尚未通过门禁的片段，并在每批成功后原子写入断点。
 
-    返回 ``(复用数量, 新译数量)``。既有译文若已失效会明确失败，避免静默
-    覆盖人工修订或把错误缓存继续带入 PDF。
+    返回 ``(复用数量, 新译数量)``。新物理量/科学表达式规则发现的失效缓存先归档，
+    再只重译失效项；其它既有门禁错误仍明确失败，避免静默覆盖人工修订。
     """
 
     if reference_policy not in {"preserve", "translate-titles"}:
@@ -89,10 +89,13 @@ def translate_segment_file(
     existing_rows = read_jsonl(translations_path) if translations_path.exists() else []
     rejected_path = translations_path.with_name("rejected_translations.jsonl")
     existing: dict[str, dict[str, object]] = {}
+    cached_ids: set[str] = set()
+    quantity_rejections = []
     for row in existing_rows:
         sid = str(row.get("id", ""))
-        if sid in existing:
+        if sid in cached_ids:
             raise ValueError(f"既有译文包含重复 ID：{sid}")
+        cached_ids.add(sid)
         source = str(row.get("source", ""))
         target = str(row.get("target", ""))
         if sid not in seen or source != next(item.source for item in segments if item.id == sid):
@@ -106,8 +109,23 @@ def translate_segment_file(
         else:
             errors = validate_translation(source, target, domain)
         if errors:
+            if all(error.startswith(("quantity ", "scientific_literal ")) for error in errors):
+                quantity_rejections.append({**row, "errors": errors, "origin": "cached_quantity_validation"})
+                continue
             raise ValueError(f"既有译文未通过门禁：{sid}: {errors}")
         existing[sid] = row
+
+    if quantity_rejections:
+        # 新科学内容门禁可能揭示旧版独立计数放过的缓存。先持久保留原候选及诊断，
+        # 再排出失效项；中断后合格缓存仍能复用，绝不修改原候选来凑计数。
+        archive_path = translations_path.with_name("quantity_cache_rejections.jsonl")
+        archive = read_jsonl(archive_path) if archive_path.exists() else []
+        for rejection in quantity_rejections:
+            if rejection not in archive:
+                archive.append(rejection)
+        write_jsonl_atomic(archive_path, archive)
+        write_jsonl_atomic(translations_path, list(existing.values()))
+        print(f"PaperLocale：已归档{len(quantity_rejections)}条旧科学内容缓存，仅重译失效片段", flush=True)
 
     reused_count = len(existing)
     ordered = list(existing.values())

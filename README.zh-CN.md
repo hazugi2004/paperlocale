@@ -65,12 +65,12 @@ PaperLocale 0.4.2 增加下文所述的 `--unattended` 与可审计修复命令�
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
-v0.6.1 发布后，可按以下方式安装精确公开版本：
+v0.6.2 发布后，可按以下方式安装精确公开版本：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.6.1"
+python -m pip install "paperlocale[layout]==0.6.2"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -193,6 +193,10 @@ paperlocale run paper.pdf \
   --model qwen-mt-plus \
   --domain atmospheric-science
 ```
+
+0.6.2 为 GPT 和 Qwen 同时增加数值与单位配对校验，允许已登记的单位别名
+及等价复合写法，拒绝遗漏、倍率改变及配对交换。Qwen 的有界恢复保护完整
+原文量值；新门禁发现的失效缓存先归档再单独重译。详见[发布说明](docs/releases/v0.6.2.md)。
 
 0.6.0 对 URL（含版面断行）、公式、数字和科学缩写按出现位置保护。若整段
 返回缺少标记或还原后仍不满足内容合同，仅进行一次原文间隙分段翻译，并由

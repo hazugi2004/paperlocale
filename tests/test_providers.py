@@ -255,16 +255,36 @@ class ProviderTest(unittest.TestCase):
         self.assertIn("http://www.cru.uea. ac.uk/data", target)
         self.assertIn("https://example.org/gcos{v1}wgsp/ Timeseries/Nino34/.", target)
 
-    def test_qwen_mt_rejects_duplicate_or_unknown_markers(self) -> None:
-        """重复/未知标记必须硬失败，不能通过替换把科学标记凭空复制到译文。"""
+    def test_qwen_mt_discards_unknown_or_duplicate_full_response(self) -> None:
+        """未知/重复标记不做模糊匹配，只从原文位置恢复两次SST，丢弃坏译文。"""
         provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
-        for extra, error in [("[PLPROTECTED0001]", "重复"), ("[PLPROTECTED9999]", "未知")]:
+        for extra in ["[PLPROTECTED0001]", "[PLPROTECTED9999]",
+                      "[PLPROTECTEDX9999]", "[PLPROTECTED 9999]"]:
+            calls = []
             def respond(request, timeout):
                 wire = json.loads(request.data)["messages"][0]["content"]
-                return _Response({"choices": [{"message": {"content": wire + extra}}]})
+                calls.append(wire)
+                if len(calls) == 1:
+                    target = "BAD CANDIDATE " + wire + extra
+                else:
+                    self.assertEqual(wire, "and")
+                    target = "和"
+                return _Response({"choices": [{"message": {"content": target}}]})
             with self.subTest(extra=extra), patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
-                with self.assertRaisesRegex(ValueError, error):
-                    provider.translate([Segment("id-repeat", "SST and SST.")], self.context)
+                target = provider.translate([Segment("id-repeat", "SST and SST.")], self.context)[0].target
+            self.assertEqual(target.count("SST"), 2)
+            self.assertNotIn("BAD", target)
+            self.assertNotIn("PLPROTECTED", target)
+            self.assertEqual(len(calls), 2)
+
+    def test_qwen_mt_rejects_markers_from_recovery_without_recursing(self) -> None:
+        """恢复请求再次幻化标记时必须停止；不能吞掉异常标记或无限分段。"""
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        response = _Response({"choices": [{"message": {"content": "[PLPROTECTEDX9999]"}}]})
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", return_value=response) as call:
+            with self.assertRaisesRegex(ValueError, "分段译文包含意外保护标记"):
+                provider.translate([Segment("id-repeat", "SST and SST.")], self.context)
+        self.assertEqual(call.call_count, 2)
 
     def test_qwen_mt_does_not_confuse_literal_source_markers(self) -> None:
         """原文本来包含同名标记时使用另一命名空间，字面内容不会被本地吞掉。"""

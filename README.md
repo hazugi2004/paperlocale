@@ -86,6 +86,8 @@ copy/paste workflow and usage-limit boundary.
 
 Qwen-MT 0.6.0 protects identifiers by occurrence and uses one bounded source-gap
 translation pass if normal output loses markers or violates the content contract.
+Unknown, duplicate, or malformed markers invalidate the whole candidate and use
+the same bounded recovery; markers returned during recovery still fail.
 This may increase API calls and affect fluency; visual and semantic review remain
 required. Requests share a 1.1-second minimum interval per provider instance; an
 explicit request-rate limit gets at most one retry after a wait of up to 60 seconds.
@@ -93,12 +95,12 @@ Use `--api-key-csv /path/to/key.csv` to read a complete, unique `sk-` CSV field 
 Qwen-MT without truncating punctuation. This explicit option overrides the key
 environment variable and never writes credentials to run metadata.
 
-For v0.6.0, install the exact public release with:
+For v0.6.1, install the exact public release with:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.6.0"
+python -m pip install "paperlocale[layout]==0.6.1"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```

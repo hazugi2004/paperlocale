@@ -65,12 +65,12 @@ PaperLocale 0.4.2 增加下文所述的 `--unattended` 与可审计修复命令�
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
-v0.6.0 发布后，可按以下方式安装精确公开版本：
+v0.6.1 发布后，可按以下方式安装精确公开版本：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.6.0"
+python -m pip install "paperlocale[layout]==0.6.1"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -197,8 +197,9 @@ paperlocale run paper.pdf \
 0.6.0 对 URL（含版面断行）、公式、数字和科学缩写按出现位置保护。若整段
 返回缺少标记或还原后仍不满足内容合同，仅进行一次原文间隙分段翻译，并由
 本地保留受保护项的位置；分段及整段仍通过原有门禁。分段修复会增加 API
-调用数，也可能影响句子流畅度，候选 PDF 仍须视觉和语义复核。未知或重复
-保护标记会拒绝处理，不自动放宽数字、术语或公式检查。
+调用数，也可能影响句子流畅度，候选 PDF 仍须视觉和语义复核。未知、重复或改写的
+保护标记会使整份候选作废，并触发同一次原文间隙恢复；恢复请求再次返回
+异常标记时立即停止，不自动放宽数字、术语或公式检查。
 
 请求默认至少间隔 1.1 秒（同一 Provider 实例内），对明确的 `limit_requests`
 限流最多等待 60 秒并重试一次；跨进程共享账户配额仍可能触发限流。401 等

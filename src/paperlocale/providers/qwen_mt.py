@@ -180,11 +180,12 @@ class QwenMTProvider(TranslationProvider):
             }
             target = self._request_translation(body)
             marker_pattern = r"\[" + prefix + r"\d{4,}\]"
-            returned_markers = re.findall(marker_pattern, target)
-            if set(returned_markers) - sentinels.keys():
-                raise ValueError("Qwen-MT 返回了未知保护标记")
-            if any(target.count(marker) > 1 for marker in sentinels):
-                raise ValueError("Qwen-MT 重复了保护标记")
+            # 连同改写命名空间/空格的标记一起识别为异常，不模糊映射到合法ID。
+            returned_marker_pattern = r"\[\s*PLPROTECTED[A-Z]*\s*\d+\s*\]"
+            returned_markers = re.findall(returned_marker_pattern, target)
+            # 未知或重复标记意味着整段候选不可用，不能猜测其对应原文。
+            # 与缺标记共用下方唯一的原文间隙恢复路径，整份坏候选被丢弃；
+            # 若分段请求本身又产生标记，仍立即失败，不递归重试。
             valid_markers = (set(returned_markers) == set(sentinels)
                              and all(target.count(marker) == 1 for marker in sentinels))
             restored_target = target
@@ -217,7 +218,7 @@ class QwenMTProvider(TranslationProvider):
                             "translation_options": {**options, "terms": fragment_terms},
                         }
                         translated_part = self._request_translation(fragment_body)
-                        if re.search(marker_pattern, translated_part):
+                        if re.search(returned_marker_pattern, translated_part):
                             raise ValueError("Qwen-MT 分段译文包含意外保护标记")
                         fragment_errors = validate_translation(part, translated_part, None)
                         if fragment_errors:

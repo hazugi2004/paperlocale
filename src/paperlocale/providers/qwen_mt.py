@@ -11,7 +11,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from ..contracts import ABBREVIATION_RE, NUMBER_RE, FORMULA_RE, STYLE_RE, protected_counts, source_term_is_present, validate_translation
+from ..contracts import ABBREVIATION_RE, NUMBER_RE, FORMULA_RE, STYLE_RE, protected_counts, source_term_is_present, validate_translation, scientific_quantities
+from ..quantities import standalone_units
 from .base import Segment, Translation, TranslationContext, TranslationProvider
 
 
@@ -140,19 +141,31 @@ class QwenMTProvider(TranslationProvider):
                                     (NUMBER_RE, counts["number"])):
                 spans.extend(match.span() for match in pattern.finditer(segment.source)
                              if match.group() in values)
-            merged: list[tuple[int, int]] = []
-            for start, end in sorted(spans):
-                if merged and start <= merged[-1][1]:
-                    merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
-                else:
-                    merged.append((start, end))
-            pieces = []
-            cursor = 0
-            for start, end in merged:
-                pieces.extend((segment.source[cursor:start], shield(segment.source[start:end])))
-                cursor = end
-            pieces.append(segment.source[cursor:])
-            source_for_translation = "".join(pieces)
+            def protect_ranges(ranges) -> str:
+                # 正常翻译和有界恢复共用同一原文坐标合并过程；坏候选被丢弃后
+                # 才重建映射，绝不从模型返回的可疑ID推断物理量应插入的位置。
+                sentinels.clear()
+                merged: list[tuple[int, int]] = []
+                for start, end in sorted(ranges):
+                    if merged and start <= merged[-1][1]:
+                        merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                    else:
+                        merged.append((start, end))
+                pieces = []
+                cursor = 0
+                for start, end in merged:
+                    pieces.extend((segment.source[cursor:start], shield(segment.source[start:end])))
+                    cursor = end
+                pieces.append(segment.source[cursor:])
+                return "".join(pieces)
+
+            quantities = scientific_quantities(segment.source)
+            quantity_ranges = [(q.start, q.end) for q in quantities]
+            # 首轮允许完整物理量自然翻译，如10 km -> 10千米，由共享配对门禁
+            # 判断等价；数字不能先被拆走，留下孤立单位让模型猜测。
+            normal_ranges = [(a, b) for a, b in spans
+                             if not any(a < d and b > c for c, d in quantity_ranges)]
+            source_for_translation = protect_ranges(normal_ranges)
 
             # 官方术语干预同时承担两项职责：固定领域译法，并强制模型原样保留
             # 公式占位符、缩写、单位、URL 与 DOI。重复源词只保留第一条映射。
@@ -208,6 +221,10 @@ class QwenMTProvider(TranslationProvider):
                 # 标识符在原位置由本地保留，只让模型翻译相邻文本，不再让它复制
                 # 标记，也不从失败译文猜测插入位置。各片段保持原序；最终整段仍
                 # 经调用方数字/术语/公式门禁。此分支不递归、不切模型。
+                # 恢复阶段把数值、范围、完整单位表达式作为不可拆的原文片段。
+                # 裸单位也在原位保留，防止原先km所在的短间隙再次丢单位。
+                recovery_ranges = spans + quantity_ranges + [(a, b) for a, b, _ in standalone_units(segment.source)]
+                source_for_translation = protect_ranges(recovery_ranges)
                 parts = re.split("(" + marker_pattern + ")", source_for_translation)
                 repaired = []
                 for part in parts:

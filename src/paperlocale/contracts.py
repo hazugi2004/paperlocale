@@ -14,6 +14,7 @@ from collections import Counter
 from pathlib import Path
 
 from .domains import DomainPack
+from .quantities import find_quantities, hide_spans, standalone_units
 
 FORMULA_RE = re.compile(r"\{v\d+\}")
 STYLE_RE = re.compile(r"<style\s+id=['\"]\d+['\"]>|</style>", re.IGNORECASE)
@@ -208,6 +209,13 @@ def source_term_is_present(text: str, term: str) -> bool:
     return re.search(left_boundary + re.escape(term), text, re.IGNORECASE) is not None
 
 
+def scientific_quantities(text: str):
+    """共用既有标识符边界，物理量解析不消费URL、DOI或内部公式标记。"""
+    excluded = [match.span() for pattern in (URL_RE, DOI_RE, FORMULA_RE, STYLE_RE)
+                for match in pattern.finditer(text)]
+    return find_quantities(text, excluded)
+
+
 def validate_translation(
     source: str,
     target: str,
@@ -230,9 +238,31 @@ def validate_translation(
                 f"实际 {dict(target_counts[category])!r}"
             )
 
-    # 数字、缩写和单位允许译文新增，但不允许丢失原文已有项目。
+    # 数值与单位必须成对一致，不能靠交换两处单位骗过独立计数。
+    # 仅做别名/乘除幂表示归一；不换算hPa到Pa或摄氏度到K。
+    source_quantities = scientific_quantities(source)
+    target_quantities = scientific_quantities(target)
+    required = Counter(q.signature for q in source_quantities)
+    available = Counter(q.signature for q in target_quantities)
+    missing_quantities = required - available
+    if missing_quantities:
+        errors.append(f"quantity 数值/单位配对缺失或改变：{dict(missing_quantities)!r}")
+    source_free = hide_spans(source, [(q.start, q.end) for q in source_quantities])
+    # 未匹配的目标物理量不能吞掉普通原文数字，例如15°N译成北纬15度。
+    matched = required.copy()
+    target_spans = []
+    for quantity in target_quantities:
+        if matched[quantity.signature] > 0:
+            target_spans.append((quantity.start, quantity.end))
+            matched[quantity.signature] -= 1
+    target_free = hide_spans(target, target_spans)
+    source_remaining = protected_counts(source_free)
+    target_remaining = protected_counts(target_free)
+    source_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(source_free))
+    target_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(target_free))
+    # 非物理量区域仍使用既有科学标记门禁，不放宽数字、变量及公式要求。
     for category in ("number", "abbreviation", "unit"):
-        missing = source_counts[category] - target_counts[category]
+        missing = source_remaining[category] - target_remaining[category]
         if missing:
             errors.append(f"{category} 标记缺失：{dict(missing)!r}")
 

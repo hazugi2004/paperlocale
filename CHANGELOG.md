@@ -2,6 +2,14 @@
 
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
+## 0.6.2 - 2026-09-08
+
+- Validate numeric values together with their scientific units across GPT/Codex and Qwen, allowing registered Chinese aliases and equivalent product, quotient, and integer-power notation.
+- Reject omitted units, changed prefixes/temperature scales, and swapped number-unit associations; do not infer physical conversions or weaken formula/identifier gates.
+- Let Qwen translate intact quantities naturally first. On an invalid response, protect entire source quantities and standalone units in the existing single bounded source-gap recovery.
+- Archive cached rows that fail only the new quantity contract, then retranslate those rows while retaining valid checkpoints. Other invalid cache errors remain hard failures.
+- Keep GPT execution, short-key response schema, rendering and PDF acceptance requirements unchanged; expose source quantity signatures in the common prompt.
+
 ## 0.6.1 - 2026-09-08
 
 - Route Qwen-MT unknown, duplicate, and malformed full-response markers into the existing bounded source-gap recovery. Discard the entire invalid candidate; never guess marker mappings.

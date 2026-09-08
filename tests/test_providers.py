@@ -143,7 +143,7 @@ class ProviderTest(unittest.TestCase):
             body = json.loads(request.data.decode("utf-8"))
             self.assertEqual(
                 body["messages"],
-                [{"role": "user", "content": "Soil moisture was  [PLPROTECTED0001]  mm."}],
+                [{"role": "user", "content": "Soil moisture was 10 mm."}],
             )
             self.assertEqual(body["translation_options"]["source_lang"], "en")
             self.assertEqual(body["translation_options"]["target_lang"], "zh")
@@ -162,7 +162,7 @@ class ProviderTest(unittest.TestCase):
             self.assertNotIn("secret-key", json.dumps(body))
             self.assertEqual(timeout, 300)
             return _Response(
-                {"choices": [{"message": {"content": "土壤湿度为[PLPROTECTED0001] mm。"}}]}
+                {"choices": [{"message": {"content": "土壤湿度为10 mm。"}}]}
             )
 
         provider = QwenMTProvider(
@@ -326,7 +326,7 @@ class ProviderTest(unittest.TestCase):
             model="qwen-mt-plus", min_request_interval_seconds=0,
         )
         response = _Response(
-            {"choices": [{"message": {"content": "土壤湿度为[PLPROTECTED0001] mm。"}}]}
+            {"choices": [{"message": {"content": "土壤湿度为10 mm。"}}]}
         )
         with (
             patch(
@@ -416,14 +416,36 @@ class ProviderTest(unittest.TestCase):
         self.assertNotIn("202015", target)
         self.assertEqual(call.call_count, 2)
 
-    def test_qwen_mt_fragment_recovery_still_rejects_missing_units(self) -> None:
-        """有界分段失败不得绕过内容门禁，也不再递归重试。"""
-        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
-        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen",
-                   return_value=_Response({"choices": [{"message": {"content": "缺少内容"}}]})) as call:
+    def test_qwen_quantity_allows_natural_unit_translation(self) -> None:
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret", model="qwen-mt-plus", min_request_interval_seconds=0)
+        def respond(request, timeout):
+            self.assertEqual(json.loads(request.data)["messages"][0]["content"], "Within 50 km of the station.")
+            return _Response({"choices": [{"message": {"content": "在距站点50千米范围内。"}}]})
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond) as call:
+            target = provider.translate([Segment("id-unit", "Within 50 km of the station.")], self.context)[0].target
+        self.assertIn("50千米", target)
+        self.assertEqual(call.call_count, 1)
+
+    def test_qwen_recovers_whole_quantity_after_unit_omission(self) -> None:
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret", model="qwen-mt-plus", min_request_interval_seconds=0)
+        calls = []
+        def respond(request, timeout):
+            content = json.loads(request.data)["messages"][0]["content"]
+            calls.append(content)
+            target = "在站点50范围内。" if len(calls) == 1 else {"Within": "在", "of the station.": "距站点范围内。"}[content]
+            return _Response({"choices": [{"message": {"content": target}}]})
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+            target = provider.translate([Segment("id-unit", "Within 50 km of the station.")], self.context)[0].target
+        self.assertIn("50 km", target)
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("km", ' '.join(calls[1:]))
+
+    def test_qwen_quantity_recovery_still_rejects_empty_text(self) -> None:
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret", model="qwen-mt-plus", min_request_interval_seconds=0)
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", return_value=_Response({"choices": [{"message": {"content": ""}}]})) as call:
             with self.assertRaisesRegex(ValueError, "分段译文未通过门禁"):
-                provider.translate([Segment("id-number", "SST at 10 mm and SST.")], self.context)
-        self.assertEqual(call.call_count, 3)
+                provider.translate([Segment("id-unit", "Within 50 km of the station.")], self.context)
+        self.assertEqual(call.call_count, 2)
 
     def test_openai_compatible_allows_loopback_http(self) -> None:
         """本机 Ollama 等兼容服务可以继续使用明确的 loopback HTTP。"""

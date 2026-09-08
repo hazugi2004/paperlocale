@@ -84,6 +84,11 @@ The v0.4.0 manual ChatGPT Web bridge is documented in
 [docs/CHATGPT_WEB_MANUAL.zh-CN.md](docs/CHATGPT_WEB_MANUAL.zh-CN.md) for its
 copy/paste workflow and usage-limit boundary.
 
+Version 0.6.2 checks numbers together with their units for both GPT and Qwen.
+Registered aliases and equivalent compound notation are allowed; omitted units,
+changed scales, and swapped associations fail. Qwen preserves complete source
+quantities during its bounded repair. See [release details](docs/releases/v0.6.2.md).
+
 Qwen-MT 0.6.0 protects identifiers by occurrence and uses one bounded source-gap
 translation pass if normal output loses markers or violates the content contract.
 Unknown, duplicate, or malformed markers invalidate the whole candidate and use
@@ -95,12 +100,12 @@ Use `--api-key-csv /path/to/key.csv` to read a complete, unique `sk-` CSV field 
 Qwen-MT without truncating punctuation. This explicit option overrides the key
 environment variable and never writes credentials to run metadata.
 
-For v0.6.1, install the exact public release with:
+For v0.6.2, install the exact public release with:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.6.1"
+python -m pip install "paperlocale[layout]==0.6.2"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```

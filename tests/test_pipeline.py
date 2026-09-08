@@ -71,6 +71,23 @@ class _RepairingProvider(TranslationProvider):
 
 
 class PipelineTest(unittest.TestCase):
+    def test_old_quantity_cache_is_archived_and_only_invalid_row_retranslated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); source=root/'segments.jsonl'; target=root/'translations.jsonl'
+            good={"id":segment_id("Index {v1}."),"source":"Index {v1}.","target":"指数{v1}。"}
+            bad={"id":segment_id("Within 50 km."),"source":"Within 50 km.","target":"50范围内km。"}
+            write_jsonl_atomic(source,[{"id":x['id'],"source":x['source']} for x in [good,bad]])
+            write_jsonl_atomic(target,[good,bad])
+            provider=_SingleSegmentProvider({bad['source']:"在50千米范围内。"})
+            reused,translated=translate_segment_file(segments_path=source,translations_path=target,
+                provider=provider,domain=load_domain_pack('atmospheric-science'))
+            self.assertEqual((reused,translated),(1,1))
+            self.assertEqual(read_jsonl(target)[0],good)
+            archive=read_jsonl(root/'quantity_cache_rejections.jsonl')
+            self.assertEqual(archive[0]['target'],bad['target'])
+            self.assertEqual(archive[0]['origin'],'cached_quantity_validation')
+            self.assertEqual(provider.calls,1)
+
     def test_batches_respect_character_limit(self) -> None:
         segments = [Segment(str(index), "x" * 10) for index in range(5)]
         batches = make_batches(segments, max_segments=10, max_characters=25)

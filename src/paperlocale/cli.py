@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 from pathlib import Path
 
@@ -113,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     provider_eval.add_argument("--codex-bin")
     provider_eval.add_argument("--base-url")
     provider_eval.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    provider_eval.add_argument("--api-key-csv", type=Path, help="Qwen-MT：读取CSV中唯一完整sk-密钥字段；优先于环境变量")
     provider_eval.add_argument("--output", type=Path, required=True)
 
     validate = subparsers.add_parser("validate-segments", help="验证片段与译文 JSONL")
@@ -134,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     translate.add_argument("--codex-bin")
     translate.add_argument("--base-url")
     translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    translate.add_argument("--api-key-csv", type=Path, help="Qwen-MT：读取CSV中唯一完整sk-密钥字段；优先于环境变量")
     translate.add_argument("--max-segments", type=int, default=200)
     translate.add_argument("--max-characters", type=int, default=30000)
 
@@ -164,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--codex-bin")
     run.add_argument("--base-url")
     run.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    run.add_argument("--api-key-csv", type=Path, help="Qwen-MT：读取CSV中唯一完整sk-密钥字段；优先于环境变量")
     run.add_argument("--max-segments", type=int, default=200)
     run.add_argument("--max-characters", type=int, default=30000)
     run.add_argument("--pdf2zh-bin")
@@ -276,6 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_translate.add_argument("--codex-bin")
     run_translate.add_argument("--base-url")
     run_translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    run_translate.add_argument("--api-key-csv", type=Path, help="Qwen-MT：读取CSV中唯一完整sk-密钥字段；优先于环境变量")
     run_translate.add_argument("--max-segments", type=int, default=200)
     run_translate.add_argument("--max-characters", type=int, default=30000)
 
@@ -374,6 +379,9 @@ def build_parser() -> argparse.ArgumentParser:
 def _provider_from_args(args: argparse.Namespace):
     """根据明确命令行选择构造唯一 Provider，不做自动回退。"""
 
+    key_csv = getattr(args, "api_key_csv", None)
+    if key_csv is not None and args.provider != "qwen-mt":
+        raise ValueError("--api-key-csv 只适用于 qwen-mt")
     if args.provider == "codex-local":
         if not args.model:
             raise ValueError("codex-local 必须显式提供 --model，才能审计实际模型")
@@ -386,7 +394,17 @@ def _provider_from_args(args: argparse.Namespace):
         raise ValueError("--reasoning-effort 当前只适用于 codex-local")
     if not args.base_url or not args.model:
         raise ValueError(f"{args.provider} 必须提供 --base-url 和 --model")
-    api_key = os.environ.get(args.api_key_env, "")
+    if key_csv is not None:
+        # 凭据是不透明完整字段；绝不用字符白名单正则截取，避免含标点的真实
+        # 百炼密钥被截成短前缀。多个候选拒绝猜测，错误与运行元数据均不含密钥。
+        with key_csv.expanduser().open(encoding="utf-8-sig", newline="") as handle:
+            keys = {cell.strip() for row in csv.reader(handle) for cell in row
+                    if cell.strip().startswith("sk-")}
+        if len(keys) != 1 or any(any(char.isspace() for char in key) for key in keys):
+            raise ValueError("Qwen 密钥 CSV 必须包含唯一、无内部空白的完整 sk-字段")
+        api_key = keys.pop()
+    else:
+        api_key = os.environ.get(args.api_key_env, "")
     if not api_key:
         raise ValueError(f"环境变量 {args.api_key_env} 为空")
     provider_class = (

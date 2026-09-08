@@ -12,8 +12,31 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 
 class CliTest(unittest.TestCase):
-    def test_package_version_matches_v051_release_line(self) -> None:
-        self.assertEqual(__version__, "0.5.3")
+    def test_package_version_matches_current_release(self) -> None:
+        self.assertEqual(__version__, "0.6.0")
+
+    def test_qwen_csv_key_is_opaque_and_takes_explicit_precedence(self) -> None:
+        """有标点的完整CSV字段传入Provider；环境变量不得替换显式选定的密钥。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            file = Path(tmp) / "key.csv"
+            key = "sk-ab12.payload/with+punctuation="
+            file.write_text('name,value\nkey,"' + key + '"\n')
+            args = build_parser().parse_args(["run", "paper.pdf", "--run-dir", "run", "--provider", "qwen-mt",
+                "--model", "qwen-mt-plus", "--base-url", "https://example.test/v1", "--api-key-csv", str(file)])
+            with patch.dict("os.environ", {"PAPERLOCALE_API_KEY": "wrong-key"}):
+                provider = _provider_from_args(args)
+            self.assertEqual(provider.api_key, key)
+            self.assertNotIn(key, str(provider.provenance()))
+            for content in ['name,value\nkey,none\n', 'key,sk-first\nkey,sk-second\n']:
+                file.write_text(content)
+                with self.assertRaisesRegex(ValueError, "唯一"):
+                    _provider_from_args(args)
+
+    def test_csv_credentials_cannot_be_silently_ignored_by_codex(self) -> None:
+        args = build_parser().parse_args(["run", "paper.pdf", "--run-dir", "run", "--provider", "codex-local",
+            "--model", "example", "--api-key-csv", "key.csv"])
+        with self.assertRaisesRegex(ValueError, "只适用于 qwen-mt"):
+            _provider_from_args(args)
 
     def test_default_recovery_has_explicit_opt_out(self) -> None:
         """普通首跑不能依赖用户知道隐藏的修复开关；排障仍可显式禁用。"""

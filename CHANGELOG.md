@@ -8,6 +8,8 @@
 - Validate restored full responses; on missing markers or contract failures, perform one bounded source-gap translation pass with fragment and full-content gates. Unknown/duplicate markers remain hard errors.
 - Pace normal and repair requests through one path; retry explicit request-rate throttling at most once, leaving auth and other business errors as checkpointed failures.
 - Add Qwen-only `--api-key-csv` to read complete opaque credential fields, avoiding truncated keys caused by character-whitelist extraction.
+- Compare unchanged text coordinates with a strict 0.0001-point absolute tolerance instead of rounding, rejecting actual movement/text/count changes.
+- Recognize a journal-volume/page continuation aligned with the References heading without including upper publisher prose.
 - Add regressions for URLs with embedded formulas, repeated identifiers, glued years, invalid markers, bounded repairs, missing units, pacing, throttling, and complete CSV credentials.
 
 ## 0.5.3 - 2026-09-08

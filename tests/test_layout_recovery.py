@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pymupdf as fitz
 
-from paperlocale.references import _reference_geometry, preserve_reference_layout
+from paperlocale.references import _reference_geometry, preserve_reference_layout, _same_positioned_words
 from paperlocale.qa import inspect_pdf_pair
 from paperlocale.workflow import (
     _missing_source_vector_drawings, _replay_vector_drawing,
@@ -83,6 +83,46 @@ class LayoutRecoveryTest(unittest.TestCase):
                         self.assertEqual(a[0].get_pixmap(clip=rect).samples, b[0].get_pixmap(clip=rect).samples)
                     self.assertIn("Body discussion", b[0].get_text())
                     self.assertIn(right_top, b[0].get_text())
+
+    def test_outside_word_rounding_does_not_hide_real_changes(self):
+        before = [(144.39498901367188, 638.0874, 153.0791015625, 644.4634, "al.,")]
+        rounding = [(144.39500427246094, 638.0874, 153.07911682128906, 644.4634, "al.,")]
+        self.assertTrue(_same_positioned_words(before, rounding))
+        self.assertFalse(_same_positioned_words(before, []))
+        self.assertFalse(_same_positioned_words(before, before * 2))
+        self.assertFalse(_same_positioned_words(before, [(144.395, 638.0874, 153.0791, 644.4634, "et")]))
+        self.assertFalse(_same_positioned_words(before, [(144.396, 638.0874, 153.0791, 644.4634, "al.,")]))
+
+    def test_journal_continuation_aligned_with_heading_keeps_upper_prose(self):
+        """期刊卷页与References同高可续接，上方完整出版商段落不能被回溯纳入。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, target = reference_pair(root)
+            with fitz.open() as doc:
+                p = doc.new_page(width=600, height=800)
+                for x in [40, 310]:
+                    for j in range(3):
+                        p.insert_text((x, 90+j*15), "Publisher prose must stay outside bibliography regions.", fontsize=8)
+                p.insert_text((40, 350), "References", fontsize=10)
+                p.insert_text((310, 350), "Hydrol. 380 (1-2), 121-134.", fontsize=8)
+                for x in [40, 310]:
+                    for j in range(3):
+                        p.insert_text((x, 380+j*15), "Smith, A. (2020). Scientific drought observations and results.", fontsize=7)
+                doc.save(source)
+            with fitz.open(source) as doc:
+                doc[0].insert_text((310, 372), "OVERLAPPING TRANSLATION", fontsize=12)
+                doc.save(target)
+            _pages, text, _numbers, regions = _reference_geometry(source)
+            self.assertIn("Hydrol. 380", text)
+            self.assertNotIn("Publisher prose", text)
+            candidate = root / "fixed.pdf"
+            preserve_reference_layout(source, target, candidate)
+            with fitz.open(source) as a, fitz.open(candidate) as b:
+                self.assertNotIn("OVERLAPPING", b[0].get_text())
+                for record in regions:
+                    rect = fitz.Rect(record["rect"])
+                    self.assertEqual(a[0].get_pixmap(clip=rect).samples, b[0].get_pixmap(clip=rect).samples)
+                self.assertEqual(a[0].get_text(clip=(0, 0, 600, 150)), b[0].get_text(clip=(0, 0, 600, 150)))
 
     def test_year_led_reference_continuation_does_not_end_region(self):
         """书目换行以年份起头时仍跨页恢复，但真正编号章节之后的正文保持原样。"""

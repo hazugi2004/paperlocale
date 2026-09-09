@@ -37,7 +37,7 @@ The project does not promise bitwise-identical typography. Chinese text naturall
   strict JSON responses without browser login, scraping, or automation;
 - `qwen-mt`: BYOK access to Qwen-MT's dedicated translation endpoint, with
   one-segment checkpoints and domain-pack terminology intervention;
-- an extensible `atmospheric-science` pack with terminology and evaluation cases;
+- built-in `atmospheric-science` and `ecology` packs with terminology and evaluation cases;
 - a resumable `collect -> translate -> validate -> render -> qa -> accept` workflow;
 - page geometry, image-object, vector-drawing, blank-page, placeholder, and all-page visual checks.
 
@@ -45,10 +45,11 @@ PaperLocale never reads or copies Codex authentication files. ChatGPT-managed Co
 
 ## Domain packs
 
-The first built-in pack is `atmospheric-science`. A pack contains a manifest, glossary, prompt rules, and evaluation cases. New disciplines can be added without changing the translation pipeline.
+The built-in packs are `atmospheric-science` and `ecology`. Each pack contains a manifest, glossary, prompt rules, and evaluation cases. New disciplines can be added without changing the translation pipeline.
 
 ```bash
 python -m paperlocale domain-check atmospheric-science
+python -m paperlocale domain-check ecology
 python -m paperlocale validate-segments \
   --segments segments.jsonl \
   --translations translations.jsonl \

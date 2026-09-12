@@ -65,12 +65,12 @@ PaperLocale 0.4.2 增加下文所述的 `--unattended` 与可审计修复命令�
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
-v0.6.2 发布后，可按以下方式安装精确公开版本：
+v0.6.3 发布后，可按以下方式安装精确公开版本：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.6.2"
+python -m pip install "paperlocale[layout]==0.6.3"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -386,3 +386,5 @@ python scripts/layout_smoke.py \
 ## 参与贡献
 
 可以从已有的 [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) 开始，或阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。当前入口包括生态学领域包、Ubuntu 安装复核和大气科学 Provider 评估独立复核。
+
+0.6.3 修复面积倍率与纯网址校验误判；两条 Provider 实现均未改动。 [Release notes](docs/releases/v0.6.3.md).

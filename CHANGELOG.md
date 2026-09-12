@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.3
+
+- Fix scaled English area/volume aliases and URL-only segment validation without changing either provider implementation. See [release notes](docs/releases/v0.6.3.md).
+
 本项目遵循语义化版本。未发布内容先进入 `Unreleased`。
 
 ## 0.6.2 - 2026-09-08

@@ -100,12 +100,12 @@ Use `--api-key-csv /path/to/key.csv` to read a complete, unique `sk-` CSV field 
 Qwen-MT without truncating punctuation. This explicit option overrides the key
 environment variable and never writes credentials to run metadata.
 
-For v0.6.2, install the exact public release with:
+For v0.6.3, install the exact public release with:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.6.2"
+python -m pip install "paperlocale[layout]==0.6.3"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
@@ -404,3 +404,5 @@ Start with the scoped [good first issues](https://github.com/hazugi2004/paperloc
 ## License
 
 GNU Affero General Public License v3.0 only. This choice is aligned with the AGPL-licensed PDF layout engines the project is designed to integrate.
+
+0.6.3 fixes scaled-area and URL-only validation without changing either provider implementation. [Release notes](docs/releases/v0.6.3.md).

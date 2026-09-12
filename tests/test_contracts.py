@@ -23,6 +23,24 @@ class TranslationContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.domain = load_domain_pack("atmospheric-science")
 
+    def test_scaled_area_equivalence_and_information_loss(self) -> None:
+        """复现第30篇：倍率、平方和数值都必须保留，而非补一个km字符。"""
+        source = "Land increases by 2-5.7 million square kilometers{v1}."
+        for target in ("面积增加2-5.7百万平方千米{v1}。", "面积增加2-5.7百万km²{v1}。"):
+            self.assertEqual(validate_translation(source, target), [])
+        for target in ("面积增加2-5.7平方千米{v1}。", "面积增加2-5.7百万km{v1}。",
+                       "面积增加2-5.8百万km²{v1}。", "面积增加2-5.7十亿km²{v1}。"):
+            self.assertTrue(validate_translation(source, target))
+        self.assertEqual(validate_translation("Volume is 3 cubic metres.", "体积为3立方米。"), [])
+
+    def test_url_only_and_mixed_prose(self) -> None:
+        """纯网址允许原样保留；网址损坏及漏译正文仍拒绝。"""
+        source = "www.nature.com/scientificdata www.nature.com/scientificdata/"
+        self.assertEqual(validate_translation(source, source), [])
+        self.assertTrue(validate_translation(source, "www.nature.com/scientificdata"))
+        prose = "The following dataset describes future compound climate extremes. " + source
+        self.assertTrue(any("缺少中文" in e for e in validate_translation(prose, prose)))
+
     def test_segment_id_normalizes_line_endings(self) -> None:
         self.assertEqual(segment_id(" A\r\nB "), segment_id("A\nB"))
 

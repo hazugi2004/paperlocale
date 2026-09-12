@@ -235,6 +235,33 @@ def scientific_literal_spans(text: str) -> list[tuple[int, int]]:
     return [match.span() for match in decimals]
 
 
+# 仅供门禁使用：不改变 Provider 的原文、保护范围、请求或重试策略。
+# 无协议的 www 地址与带协议网址同样必须逐字保留；不把普通英文正文当网址。
+_VALIDATION_URL_RE = re.compile(
+    r"(?:https?://|www\.)[^\s)\]}>,;，。；：！？）】》\u3400-\u9fff]+", re.IGNORECASE
+)
+
+
+def _quantity_validation_text(text: str) -> str:
+    """将面积/体积名称和明确倍率规范到既有量值语法，不做物理换算。
+
+    此副本只用于校验，绝不写回译文；倍率仍绑定原来的数值和单位，避免
+    million 遗漏或平方变长度被当成等价译法。单独的 million 普通用词不处理。
+    """
+    units = {"kilometer": "km", "kilometre": "km", "meter": "m", "metre": "m"}
+    text = re.sub(
+        r"\b(square|cubic)\s+(kilometers?|kilometres?|meters?|metres?)\b",
+        lambda m: units[m[2].removesuffix("s")] + ("²" if m[1] == "square" else "³"),
+        text,
+    )
+    # 仅在数值后、明确面积/体积单位前识别倍率，保留范围两端与精度。
+    scales = {"million": "6", "百万": "6", "billion": "9", "十亿": "9", "thousand": "3", "千": "3"}
+    return re.sub(
+        r"(?<=\d)\s*(million|billion|thousand|百万|十亿|千)\s*(?=(?:km|m)[²³]|平方(?:千米|公里|米)|立方米)",
+        lambda m: "×10^" + scales[m[1]] + " ", text,
+    )
+
+
 def validate_translation(
     source: str,
     target: str,
@@ -267,14 +294,16 @@ def validate_translation(
 
     # 数值与单位必须成对一致，不能靠交换两处单位骗过独立计数。
     # 仅做别名/乘除幂表示归一；不换算hPa到Pa或摄氏度到K。
-    source_quantities = scientific_quantities(source)
-    target_quantities = scientific_quantities(target)
+    quantity_source = _quantity_validation_text(source)
+    quantity_target = _quantity_validation_text(target)
+    source_quantities = scientific_quantities(quantity_source)
+    target_quantities = scientific_quantities(quantity_target)
     required = Counter(q.signature for q in source_quantities)
     available = Counter(q.signature for q in target_quantities)
     missing_quantities = required - available
     if missing_quantities:
         errors.append(f"quantity 数值/单位配对缺失或改变：{dict(missing_quantities)!r}")
-    source_free = hide_spans(source, [(q.start, q.end) for q in source_quantities])
+    source_free = hide_spans(quantity_source, [(q.start, q.end) for q in source_quantities])
     # 未匹配的目标物理量不能吞掉普通原文数字，例如15°N译成北纬15度。
     matched = required.copy()
     target_spans = []
@@ -282,7 +311,7 @@ def validate_translation(
         if matched[quantity.signature] > 0:
             target_spans.append((quantity.start, quantity.end))
             matched[quantity.signature] -= 1
-    target_free = hide_spans(target, target_spans)
+    target_free = hide_spans(quantity_target, target_spans)
     source_remaining = protected_counts(source_free)
     target_remaining = protected_counts(target_free)
     source_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(source_free))
@@ -298,7 +327,14 @@ def validate_translation(
 
     if literal_spans == [(0, len(source))]:
         require_cjk = False
-    if require_cjk and len(ENGLISH_RE.findall(source)) >= 40 and not CJK_RE.search(target):
+    # 先核对所有网址，再从中文要求中排除网址字符。含真实长正文的片段
+    # 仍需中文；网址删改不能借此绕过门禁。既有 URL/DOI 检查仍保留。
+    bare_source = [m.group() for m in _VALIDATION_URL_RE.finditer(source) if m.group().lower().startswith("www.")]
+    bare_target = [m.group() for m in _VALIDATION_URL_RE.finditer(target) if m.group().lower().startswith("www.")]
+    if _clean_identifiers(bare_source) != _clean_identifiers(bare_target):
+        errors.append("url 网址标记不一致")
+    prose = _VALIDATION_URL_RE.sub("", source)
+    if require_cjk and len(ENGLISH_RE.findall(prose)) >= 40 and not CJK_RE.search(target):
         errors.append("长正文片段缺少中文译文")
 
     if domain is not None:

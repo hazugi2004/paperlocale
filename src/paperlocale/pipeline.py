@@ -54,6 +54,7 @@ def translate_segment_file(
     reference_segment_ids: set[str] | frozenset[str] = frozenset(),
     reference_policy: str = "preserve",
     passthrough_segment_ids: set[str] | frozenset[str] = frozenset(),
+    contract_repair: bool = True,
 ) -> tuple[int, int]:
     """翻译尚未通过门禁的片段，并在每批成功后原子写入断点。
 
@@ -198,6 +199,14 @@ def translate_segment_file(
             # 先保存首轮失败证据。即使随后同 Provider 调用遇到网络错误，
             # 已通过译文和原始候选仍可从断点复核，不会重复消耗整批额度。
             write_jsonl_atomic(rejected_path, rejected)
+            # 先落盘成功片段与失败证据，再遵守调用方的“首错即停”要求。
+            # 不改变 Provider、模型或推理强度，也不借重试绕过作者姓名透传确认。
+            if not contract_repair:
+                raise ValueError(
+                    f"首轮内容校验失败，已禁用模型修复重试；详见 {rejected_path}。"
+                    "若失败项是作者姓名等无需翻译内容，请核对源 PDF 后使用 "
+                    "confirm-passthrough，不要放宽正文中文门禁。"
+                )
             rejected_by_id = {str(row["id"]): row for row in rejected}
             repair_batch = [
                 segment for segment in batch if segment.id in rejected_by_id

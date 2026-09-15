@@ -13,7 +13,7 @@ from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_
 
 class CliTest(unittest.TestCase):
     def test_package_version_matches_current_release(self) -> None:
-        self.assertEqual(__version__, "0.6.3")
+        self.assertEqual(__version__, "0.6.4")
 
     def test_qwen_csv_key_is_opaque_and_takes_explicit_precedence(self) -> None:
         """有标点的完整CSV字段传入Provider；环境变量不得替换显式选定的密钥。"""
@@ -43,6 +43,14 @@ class CliTest(unittest.TestCase):
         base = ["run", "paper.pdf", "--run-dir", "run"]
         self.assertTrue(build_parser().parse_args(base).restore_source_vectors)
         self.assertFalse(build_parser().parse_args(base + ["--no-restore-source-vectors"]).restore_source_vectors)
+
+    def test_contract_repair_switch_on_all_translation_commands(self) -> None:
+        commands = [["run", "source.pdf", "--run-dir", "run"],
+                    ["translate", "--run-dir", "run", "--provider", "codex-local"],
+                    ["translate-segments", "--segments", "s.jsonl", "--translations", "t.jsonl", "--provider", "codex-local"]]
+        for command in commands:
+            self.assertTrue(build_parser().parse_args(command).contract_repair)
+            self.assertFalse(build_parser().parse_args(command + ["--no-contract-repair"]).contract_repair)
 
     def test_cli_reports_package_version(self) -> None:
         """发布包必须能直接报告可核对的版本。"""

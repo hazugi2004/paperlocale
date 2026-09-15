@@ -127,6 +127,22 @@ class PipelineTest(unittest.TestCase):
             )
             self.assertEqual(provider.calls, 2)
 
+    def test_fail_fast_saves_progress_without_repair_call(self) -> None:
+        """作者姓名误判也必须先保存证据；调用方禁重试时只调用一次模型。"""
+        good = "Soil moisture was 10 mm."
+        author = "William W. L. Cheung, Thomas L. Frolicher and Isabella Morgante"
+        provider = _MappingProvider({good: "土壤湿度为10 mm。", author: author})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            segments, target = root / "segments.jsonl", root / "translations.jsonl"
+            write_jsonl_atomic(segments, [{"id": segment_id(s), "source": s} for s in (good, author)])
+            with self.assertRaisesRegex(ValueError, "confirm-passthrough"):
+                translate_segment_file(segments_path=segments, translations_path=target,
+                    provider=provider, domain=load_domain_pack("atmospheric-science"), contract_repair=False)
+            self.assertEqual(provider.calls, 1)
+            self.assertEqual([r["source"] for r in read_jsonl(target)], [good])
+            self.assertEqual(read_jsonl(root / "rejected_translations.jsonl")[0]["source"], author)
+
     def test_resume_does_not_call_provider_twice(self) -> None:
         source = "Soil moisture was 10 mm."
         target = "土壤湿度为10 mm。"

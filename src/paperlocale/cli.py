@@ -154,6 +154,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--target-language", default="zh-CN")
     run.add_argument("--pages")
     run.add_argument("--domain", default="atmospheric-science")
+    for command in (translate, run):
+        command.add_argument("--contract-repair", action=argparse.BooleanOptionalAction,
+                             default=True, help="内容校验失败后使用同一模型修复一次；--no-contract-repair 首错即停")
     run.add_argument(
         "--reference-policy",
         choices=REFERENCE_POLICIES,
@@ -277,6 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_translate.add_argument("--model")
     run_translate.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
+    run_translate.add_argument("--contract-repair", action=argparse.BooleanOptionalAction, default=True)
     run_translate.add_argument("--codex-bin")
     run_translate.add_argument("--base-url")
     run_translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -369,6 +373,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="按字体实际宽高在浅矩形中写入一行，不自动换行",
     )
     text_repair.add_argument("--description", required=True)
+    text_repair.add_argument("--min-font-size", type=float,
+                             help="显式允许多行修复按0.1pt缩小到此下限；默认保持字号")
 
     accept = subparsers.add_parser("accept", help="记录人工逐页视觉验收")
     accept.add_argument("--run-dir", type=Path, required=True)
@@ -446,6 +452,7 @@ def main() -> int:
             translations_path=args.translations.expanduser().resolve(),
             provider=provider,
             domain=pack,
+            contract_repair=args.contract_repair,
             max_segments=args.max_segments,
             max_characters=args.max_characters,
         )
@@ -488,6 +495,7 @@ def main() -> int:
             max_characters=args.max_characters,
             unattended=args.unattended,
             restore_vectors=args.restore_source_vectors,
+            contract_repair=args.contract_repair,
         )
         if final_manifest["status"] == "qa_generated":
             comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"
@@ -562,6 +570,7 @@ def main() -> int:
             run_dir=args.run_dir,
             provider=_provider_from_args(args),
             domain=pack,
+            contract_repair=args.contract_repair,
             max_segments=args.max_segments,
             max_characters=args.max_characters,
             reference_policy=args.reference_policy,
@@ -623,6 +632,7 @@ def main() -> int:
             font_size=args.font_size,
             description=args.description,
             single_line=args.single_line,
+            min_font_size=args.min_font_size,
         )
         print(
             f"文字修复已应用并记录历史：{repaired}；"

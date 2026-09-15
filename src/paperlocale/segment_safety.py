@@ -103,6 +103,31 @@ def _split_occurrences(
                     }
                 )
             start = index + 1
+    if occurrence_count == 0 and len(source) >= 12:
+        # 真实收集片段可能把 univariate and 拼为 univariateand。仅当精确定位
+        # 完全失败时忽略空白找回位置；边界仍在原可见文本中检查，不能把正常
+        # 词间空格消掉后误判为单词内部。此路径只增加复核，不自动批准或改译文。
+        compact_source = re.sub(r"\s+", "", source)
+        for page_number, page_text in enumerate(page_texts, 1):
+            positions = [i for i, char in enumerate(page_text) if not char.isspace()]
+            compact_page = "".join(page_text[i] for i in positions)
+            start = 0
+            while compact_source:
+                index = compact_page.find(compact_source, start)
+                if index < 0:
+                    break
+                left = positions[index]
+                right = positions[index + len(compact_source) - 1] + 1
+                occurrence_count += 1
+                prefix = _literal_left_prefix(page_text, left)
+                suffix = _literal_right_suffix(page_text, right)
+                if prefix or suffix:
+                    split_rows.append({
+                        "page": page_number, "literal_prefix": prefix,
+                        "literal_suffix": suffix, "match": "whitespace-normalized",
+                        "visible_context": page_text[max(0, left - 24):right + 24],
+                    })
+                start = index + 1
     return occurrence_count, split_rows
 
 
@@ -176,7 +201,7 @@ def prepare_segment_safety_review(
     write_jsonl_atomic(review_path, review_rows)
     summary: dict[str, object] = {
         "schema_version": 1,
-        "algorithm": "exact-visible-text-boundary-v2-nfkc",
+        "algorithm": "visible-text-boundary-v3-whitespace",
         "source_sha256": source_sha256,
         "segments_sha256": _sha256(segments),
         "required_passthrough_segment_ids": required_ids,

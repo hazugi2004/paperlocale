@@ -19,6 +19,15 @@ from paperlocale.segment_safety import (
 
 
 class SegmentSafetyReviewTest(unittest.TestCase):
+    def test_split_heading_survives_missing_internal_space(self) -> None:
+        """Results尾部ts与下方标题拼接，内部and前空格丢失也能定位。"""
+        page = "Results Significant global effects of univariate and compounded extremes on catches"
+        count, splits = _split_occurrences([page], "ts Significant global effects of univariateand compounded extremes on catches")
+        self.assertEqual(count, 1)
+        self.assertEqual(splits[0]["literal_prefix"], "Resul")
+        self.assertEqual(splits[0]["match"], "whitespace-normalized")
+        self.assertEqual(_split_occurrences([page], "Significant global effects of univariateand compounded extremes on catches"), (1, []))
+
     def test_ligature_normalization_keeps_real_word_boundaries(self) -> None:
         """完整 fi 连字标题可以定位，但单词内片段仍不得独立翻译。"""
 

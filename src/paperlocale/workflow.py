@@ -815,6 +815,7 @@ def translate_run(
     max_characters: int = 30000,
     reference_policy: str = "preserve",
     unattended: bool = False,
+    contract_repair: bool = True,
 ) -> tuple[int, int]:
     """翻译已收集片段，成功后把运行推进到 ``translated``。"""
 
@@ -866,6 +867,7 @@ def translate_run(
     manifest["domain_pack"] = _domain_provenance(domain)
     if not isinstance(recorded_provider, dict):
         manifest["translation_provider"] = provider_provenance
+    manifest["contract_repair"] = contract_repair
     manifest["reference_policy"] = reference_policy
     manifest["reference_map"] = str(reference_map_path.resolve())
     manifest["reference_map_sha256"] = _sha256(reference_map_path)
@@ -892,6 +894,7 @@ def translate_run(
             reference_segment_ids=reference_ids,
             reference_policy=reference_policy,
             passthrough_segment_ids=passthrough_ids,
+            contract_repair=contract_repair,
         )
     except Exception:
         # translate_segment_file 可能已经保存同批中通过门禁的译文；清单同步记录
@@ -1610,6 +1613,47 @@ def _subset_repair_font(
     }
 
 
+def _wrap_repair_text(text: str, font: fitz.Font, size: float, width: float) -> str:
+    """中文按实际字宽断行，英文词和数字保持完整；只增加换行，不改内容。
+
+    PyMuPDF textbox 对带空格的中英混排可能只在空格处换行，导致严重短行和
+    虚假的高度溢出。仅对含中文的段落显式换行；超宽英文词仍交给预检报错。
+    """
+    if not re.search(r"[\u3400-\u9fff]", text):
+        return text
+    lines = []
+    for paragraph in text.split("\n"):
+        line = ""
+        for token in re.findall(r"[A-Za-z0-9]+(?:[.−–-][A-Za-z0-9]+)*|[^A-Za-z0-9]", paragraph):
+            if line and font.text_length(line + token, fontsize=size) > width:
+                lines.append(line)
+                line = ""
+            line += token
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _fit_repair_text(text: str, font_bytes: bytes, size: float,
+                     minimum: float | None, rectangle: fitz.Rect) -> tuple[str, float]:
+    """在内存页预检同一字体的排版；只在用户给出的下限内以0.1pt缩小字号。
+
+    不扩大矩形、不删除文字。默认不缩小。所有候选均不可写入真实 PDF，
+    因此放不下时原候选、备份与验收状态不受影响。
+    """
+    font = fitz.Font(fontbuffer=font_bytes)
+    floor = size if minimum is None else minimum
+    sizes = [max(floor, size - step / 10) for step in range(math.ceil((size - floor) * 10) + 1)]
+    for actual_size in sizes:
+        wrapped = _wrap_repair_text(text, font, actual_size, rectangle.width - 0.1)
+        with fitz.open() as probe:
+            page = probe.new_page(width=rectangle.width, height=rectangle.height)
+            page.insert_font(fontname="repair_probe", fontbuffer=font_bytes)
+            remaining = page.insert_textbox(page.rect, wrapped, fontname="repair_probe", fontsize=actual_size)
+        if remaining >= 0:
+            return wrapped, actual_size
+    raise ValueError("replacement 无法放入 rect；请扩大矩形或减小 --font-size，或显式设置 --min-font-size")
+
+
 def _create_text_repair_candidate(
     *,
     rendered: Path,
@@ -1620,6 +1664,7 @@ def _create_text_repair_candidate(
     font_file: Path | None,
     font_size: float | None,
     single_line: bool,
+    min_font_size: float | None = None,
 ) -> dict[str, object]:
     """只在候选中删除指定文字，并在需要时嵌入子集替换字体。"""
 
@@ -1660,6 +1705,11 @@ def _create_text_repair_candidate(
                 raise ValueError("single-line replacement 不能包含换行")
             subset_bytes, font_evidence = _subset_repair_font(font_file, replacement)
             font_resource_name = str(font_evidence["font_resource_name"])
+            requested_font_size = font_size
+            if not single_line:
+                replacement, font_size = _fit_repair_text(
+                    replacement, subset_bytes, font_size, min_font_size, rectangle,
+                )
         else:
             # 只删除模式不嵌入任何字体程序。保留显式空字段，
             # 使 repair_history 能区分“没有记录”与“经审计的文字删除”。
@@ -1733,6 +1783,9 @@ def _create_text_repair_candidate(
                 placement_evidence = {
                     "placement_mode": "textbox",
                     "remaining_height": round(float(remaining_height), 3),
+                    "requested_font_size": requested_font_size,
+                    "actual_font_size": font_size,
+                    "min_font_size": min_font_size,
                 }
 
             embedded_font = document.extract_font(font_xref)[-1]
@@ -1827,10 +1880,17 @@ def apply_text_repair(
     font_size: float | None,
     description: str,
     single_line: bool = False,
+    min_font_size: float | None = None,
 ) -> Path:
     """在一个明确矩形内受控替换文字，并强制重新执行机器与人工 QA。"""
 
     removal_only = replacement == ""
+    if min_font_size is not None and (
+        removal_only or single_line or font_size is None
+        or not math.isfinite(min_font_size) or min_font_size <= 0
+        or min_font_size > font_size
+    ):
+        raise ValueError("min-font-size 只适用于多行文字，且必须有限、为正、不大于 font-size")
     if removal_only and single_line:
         raise ValueError("single-line 只适用于非空 replacement")
     if not removal_only and not replacement.strip():
@@ -1870,6 +1930,7 @@ def apply_text_repair(
             font_file=resolved_font,
             font_size=font_size,
             single_line=single_line,
+            min_font_size=min_font_size,
         )
         structure = _verify_text_repair(
             before=rendered,
@@ -1941,6 +2002,7 @@ def run_to_qa(
     max_segments: int = 200,
     max_characters: int = 30000,
     unattended: bool = False,
+    contract_repair: bool = True,
     restore_vectors: bool = True,
 ) -> dict[str, object]:
     """从当前断点沿唯一生产路径推进到机器 QA，保留人工验收边界。
@@ -1966,6 +2028,7 @@ def run_to_qa(
             max_characters=max_characters,
             reference_policy=reference_policy,
             unattended=unattended,
+            contract_repair=contract_repair,
         )
         manifest = load_manifest(root)
     if manifest["status"] == "translated":

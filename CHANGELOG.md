@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4 — 2026-09-15
+
+- Add `--no-contract-repair` to `run`, `translate`, and `translate-segments`: preserve successful rows and rejected evidence, then stop before the optional model repair call.
+- Preflight local text repairs with the exact embedded subset font, wrap mixed Chinese text by glyph width, and support an explicit `--min-font-size` floor in 0.1 pt steps. Overflow leaves the current PDF unchanged.
+- Detect split ASCII headings even when collection drops internal spaces; still require review instead of guessing missing text or accepting untranslated fragments.
+- Document source-verified author passthrough, hash-bound vector restoration, and page-level text repair. Machine QA remains distinct from visual acceptance.
+
 ## 0.6.3
 
 - Fix scaled English area/volume aliases and URL-only segment validation without changing either provider implementation. See [release notes](docs/releases/v0.6.3.md).

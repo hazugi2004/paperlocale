@@ -407,3 +407,9 @@ Start with the scoped [good first issues](https://github.com/hazugi2004/paperloc
 GNU Affero General Public License v3.0 only. This choice is aligned with the AGPL-licensed PDF layout engines the project is designed to integrate.
 
 0.6.3 fixes scaled-area and URL-only validation without changing either provider implementation. [Release notes](docs/releases/v0.6.3.md).
+
+### Controlled repair and fail-fast runs (0.6.4)
+
+Use `--no-contract-repair --no-restore-source-vectors` with `run` to stop before optional model or vector repair. Successful segments and rejection evidence remain resumable; this does not override retries inside an external provider/CLI. Author names are not prose: inspect the source PDF before using `confirm-passthrough` with the full segment ID.
+
+`apply-text-repair` now preflights Chinese wrapping using the embedded font. `--font-size 8.2 --min-font-size 7.5` explicitly permits shrinking in 0.1 pt steps to the requested floor; without the floor, size stays fixed. The rectangle never grows automatically. Overflow changes no PDF. Re-run `qa`, inspect every page, then `accept` after any repair. Split headings and residual English can still need source-backed local repair even when structural QA passes.

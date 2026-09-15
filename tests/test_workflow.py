@@ -144,7 +144,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
-        self.assertEqual(manifest["paperlocale_version"], "0.6.3")
+        self.assertEqual(manifest["paperlocale_version"], "0.6.4")
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)
@@ -1587,6 +1587,37 @@ class WorkflowTest(unittest.TestCase):
             )
             with fitz.open(rendered) as document:
                 self.assertEqual(document[0].get_textbox(fitz.Rect(rect)), replacement)
+
+    def test_text_repair_fits_only_with_explicit_size_floor(self) -> None:
+        """固定矩形内默认溢出不改PDF；授权字号下限后可成功并记录实际字号。"""
+        with tempfile.TemporaryDirectory() as directory:
+            run, rendered, rect, font = self._make_text_repair_run(Path(directory))
+            text = "Figure 5 corrected caption " * 8
+            before = rendered.read_bytes()
+            with self.assertRaisesRegex(ValueError, "无法放入"):
+                apply_text_repair(run, page_number=1, rectangle=rect, replacement=text,
+                    font_file=font, font_size=12, description="预检失败")
+            self.assertEqual(rendered.read_bytes(), before)
+            apply_text_repair(run, page_number=1, rectangle=rect, replacement=text,
+                font_file=font, font_size=12, min_font_size=6, description="显式授权下限")
+            record = load_manifest(run)["repair_history"][-1]
+            self.assertGreaterEqual(record["actual_font_size"], 6)
+            self.assertLess(record["actual_font_size"], 12)
+            self.assertEqual(record["requested_font_size"], 12)
+            with fitz.open(rendered) as doc:
+                self.assertEqual(_normalized_pdf_text(doc[0].get_textbox(fitz.Rect(rect))), _normalized_pdf_text(text))
+                self.assertIn("Stable outside text 10 mm", doc[0].get_text())
+                self.assertIn("Second page unchanged", doc[1].get_text())
+
+    def test_cjk_repair_wrap_preserves_words_and_width(self) -> None:
+        from paperlocale.workflow import _wrap_repair_text
+        font = fitz.Font("china-s")
+        text = "结果\n在全球所有 EEZs 中，物候变化与 NPP 极端事件对渔业有影响。" * 3
+        wrapped = _wrap_repair_text(text, font, 8.2, 100)
+        self.assertEqual(_normalized_pdf_text(text), _normalized_pdf_text(wrapped))
+        self.assertIn("EEZs", wrapped)
+        for line in wrapped.split("\n"):
+            self.assertLessEqual(font.text_length(line, fontsize=8.2), 100)
 
     def test_apply_text_repair_single_line_uses_font_metrics(self) -> None:
         """浅矩形单行模式应按子集字体实际宽高写入，不触发换行。"""

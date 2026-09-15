@@ -389,3 +389,9 @@ python scripts/layout_smoke.py \
 可以从已有的 [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) 开始，或阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。当前入口包括生态学领域包、Ubuntu 安装复核和大气科学 Provider 评估独立复核。
 
 0.6.3 修复面积倍率与纯网址校验误判；两条 Provider 实现均未改动。 [Release notes](docs/releases/v0.6.3.md).
+
+### 可控修复与首错即停（0.6.4）
+
+`run` 增加 `--no-contract-repair`，与 `--no-restore-source-vectors` 一起使用时，遇到内容或矢量 QA 错误就停止，不执行可选模型/矢量修复。合格片段与失败证据先保存；不控制外部 Provider/CLI 内部的网络重试。`translate` 和 `translate-segments` 也支持关闭模型修复。作者姓名必须先核对原 PDF，再通过完整片段 ID 执行 `confirm-passthrough`，不放宽正文中文门禁。
+
+`apply-text-repair` 使用实际嵌入字体预检中英混排换行；可显式指定 `--font-size 8.2 --min-font-size 7.5`，允许按 0.1 pt 缩小至下限。默认不缩小、不自动扩大矩形；放不下时保留原 PDF。修复后仍须 `qa -> 逐页视觉复核 -> accept`。标题拆分、残留英文与作者版面问题仍可能需要依据源 PDF 局部修复，结构 QA 通过不代表翻译完成。

@@ -129,7 +129,9 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
                     char['fixed'] = True
         # 标准数学函数名可能用普通正体；仅在紧随已识别数学变量或
         # 数学括号时保护，正文中讨论“log”等单词仍交给翻译器。
-        for function in re.finditer(r'\b(?:exp|log|ln|sin|cos|tan)\b', text):
+        # 用 ASCII 单词边界；数学字体把括号映射为 ð/Þ 时，Unicode
+        # 的 \b 会错误地把 SDð 当成同一个单词，漏掉整个函数。
+        for function in re.finditer(r'(?<![A-Za-z])(?:exp|log|ln|sin|cos|tan|SD)(?![A-Za-z])', text):
             right = function.end()
             while right < len(chars) and (chars[right]['c'].isspace() or chars[right]['c'] in '('):
                 right += 1

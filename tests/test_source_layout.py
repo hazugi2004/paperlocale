@@ -196,6 +196,21 @@ class SourceLayoutTests(unittest.TestCase):
         self.assertEqual(''.join(p['text'] for p in parts if p['fixed']).replace(' ', ''), 'jYe+1')
         self.assertIn('and productivity', ''.join(p['text'] for p in parts if not p['fixed']))
 
+    def test_standard_deviation_function_is_fixed_only_beside_math(self):
+        from paperlocale.source_layout import _parts
+        spans, x = [], 40
+        for text, font in [('SD of samples; ', 'Body'), ('x', 'Publisher.I'),
+                           ('=SD(', 'Body'), ('x', 'Publisher.I'), (') and ', 'Body'),
+                           ('SD', 'Body'), ('ð', 'MathSymbol'), ('x', 'Publisher.I'), ('Þ', 'MathSymbol')]:
+            chars = []
+            for char in text:
+                chars.append({'c': char, 'origin': (x, 100), 'bbox': (x, 92, x + 5, 102)})
+                x += 5
+            spans.append({'chars': chars, 'font': font, 'size': 10, 'flags': 0})
+        parts = _parts({'lines': [{'spans': spans}]}, 1, [])
+        self.assertEqual(''.join(p['text'] for p in parts if p['fixed']), 'x=SD(x)SDðxÞ')
+        self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']), 'SD of samples;  and ')
+
     def test_oversized_cff_metrics_do_not_erase_math_on_previous_line(self):
         """自造合法 CFF：源外框过高，但字形不与下一行相交；最终字体须恢复。"""
         from fontTools.fontBuilder import FontBuilder

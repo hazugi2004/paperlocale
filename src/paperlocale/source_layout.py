@@ -89,7 +89,8 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
         for token in re.finditer(r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9∧]*', text):
             run = chars[token.start():token.end()]
             variable = (bool(re.search('[α-ωΑ-Ω]', token.group())) or
-                        (len(token.group()) <= 3 and run[0]['italic'] and
+                        (len(token.group()) <= 3 and (run[0]['italic'] or
+                         run[0]['fixed'] and any(c['italic'] for c in run)) and
                          not (len(token.group()) > 1 and re.fullmatch(r'-\s*', text[token.end():]))) or
                         (token.group().isupper() and len(token.group()) <= 6 and
                          all(c['size'] < .95 * normal_size for c in run)))
@@ -143,7 +144,12 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
                 left -= 1
             while right < len(chars) and chars[right]['c'].isspace():
                 right += 1
-            if left >= 0 and right < len(chars) and chars[left]['fixed'] and chars[right]['fixed']:
+            # 变量下标中的 + 1 即使后面接正文，也属于公式；要求整个
+            # 非空白运算片段都使用小于正文的字号，不能吞掉正文数值。
+            subscript = all(c['size'] < .95 * normal_size
+                            for c in chars[operator.start():operator.end()] if not c['c'].isspace())
+            if left >= 0 and chars[left]['fixed'] and (
+                    right < len(chars) and chars[right]['fixed'] or subscript):
                 for char in chars[operator.start():operator.end()]:
                     char['fixed'] = True
         for link in links:

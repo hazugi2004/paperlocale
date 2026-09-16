@@ -182,6 +182,20 @@ class SourceLayoutTests(unittest.TestCase):
         self.assertEqual(''.join(p['text'] for p in parts if p['fixed']), 'F1,180544 = 11887')
         self.assertIn('indicates evidence.', ''.join(p['text'] for p in parts if not p['fixed']))
 
+    def test_math_bar_encoded_as_letter_does_not_hide_italic_variable(self):
+        from paperlocale.source_layout import _parts
+        spans, x = [], 40
+        for text, font, size in [('j', 'MathSymbol', 10), ('Y e', 'Publisher.I', 10),
+                                 (' + 1', 'Body', 6), (' and productivity', 'Body', 10)]:
+            chars = []
+            for char in text:
+                chars.append({'c': char, 'origin': (x, 100), 'bbox': (x, 92, x + 5, 102)})
+                x += 5
+            spans.append({'chars': chars, 'font': font, 'size': size, 'flags': 0})
+        parts = _parts({'lines': [{'spans': spans}]}, 1, [])
+        self.assertEqual(''.join(p['text'] for p in parts if p['fixed']).replace(' ', ''), 'jYe+1')
+        self.assertIn('and productivity', ''.join(p['text'] for p in parts if not p['fixed']))
+
     def test_oversized_cff_metrics_do_not_erase_math_on_previous_line(self):
         """自造合法 CFF：源外框过高，但字形不与下一行相交；最终字体须恢复。"""
         from fontTools.fontBuilder import FontBuilder

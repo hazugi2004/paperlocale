@@ -68,6 +68,27 @@ class Provider(TranslationProvider):
 
 
 class SourceLayoutTests(unittest.TestCase):
+    def test_default_colour_space_survives_text_redaction(self):
+        from paperlocale.safe_text import restore_default_color_spaces
+        with fitz.open() as source:
+            page = source.new_page(width=200, height=200)
+            page.draw_rect((20, 20, 60, 60), color=None, fill=(.2, .5, .7))
+            page.insert_text((20, 100), 'Remove this text')
+            resources = int(source.xref_get_key(page.xref, 'Resources')[1].split()[0])
+            source.xref_set_key(resources, 'ColorSpace',
+                '<</DefaultRGB [/CalRGB <</WhitePoint [0.9505 1 1.089] /Gamma [2 2 2]>>]>>')
+            data = source.tobytes()
+        with fitz.open(stream=data, filetype='pdf') as source, fitz.open(stream=data, filetype='pdf') as target:
+            target[0].add_redact_annot((15, 80, 160, 110), fill=False)
+            target[0].apply_redactions(images=0, graphics=0, text=0)
+            self.assertEqual(target.xref_get_key(target[0].xref, 'Resources/ColorSpace/DefaultRGB')[0], 'null')
+            self.assertTrue(restore_default_color_spaces(target[0], source[0]))
+            with fitz.open(stream=target.tobytes(), filetype='pdf') as reopened:
+                clip = fitz.Rect(15, 15, 65, 65)
+                self.assertEqual(source[0].get_pixmap(clip=clip).samples,
+                                 reopened[0].get_pixmap(clip=clip).samples)
+                self.assertNotIn('Remove', reopened[0].get_text())
+
     def test_neighbouring_block_empty_corner_does_not_cover_body(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

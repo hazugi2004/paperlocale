@@ -19,7 +19,8 @@ from .contracts import read_jsonl, write_jsonl_atomic, validate_translation
 from .providers import Segment, TranslationContext
 from .pipeline import translate_segment_file
 from .safe_text import (safe_erase_rectangles, verify_text_erased, restore_changed_isolated_regions,
-                        page_pixels, region_pixels, fixed_text_rectangles, fixed_characters)
+                        page_pixels, region_pixels, fixed_text_rectangles, fixed_characters,
+                        restore_default_color_spaces)
 from .source_layout import (digest, extract_layout, fit_unit, load_plan, save_json,
                             verify_unchanged, anchor_errors)
 from .workflow import (load_manifest, save_manifest, _verify_source_pdf,
@@ -209,7 +210,12 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             restored = False
             vector_restorations = []
             annotation_restorations = []
+            color_space_restorations = []
             for number, page in enumerate(document, 1):
+                if restore_default_color_spaces(page, original[number - 1]):
+                    page = document.reload_page(page)
+                    color_space_restorations.append(number)
+                    restored = True
                 restored |= restore_changed_isolated_regions(page, original[number - 1],
                               [p for p in editable if p['page'] == number],
                               [p for p in protected if p['page'] == number])
@@ -278,6 +284,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                         anchor_dpi=288,
                         vector_restorations=vector_restorations,
                         annotation_restorations=annotation_restorations,
+                        color_space_restorations=color_space_restorations,
                         all_translations_present=True)
         candidate = root / 'render_output' / 'translated.pdf'
         candidate.parent.mkdir(exist_ok=True)

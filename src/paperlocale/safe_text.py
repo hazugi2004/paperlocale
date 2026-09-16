@@ -9,6 +9,23 @@ def page_pixels(page):
     return Image.frombytes('RGB', (pixmap.width, pixmap.height), pixmap.samples)
 
 
+def restore_default_color_spaces(page, source_page):
+    """删除引擎会清理隐式使用的默认色彩空间；恢复源定义而非重配颜色。
+
+    DeviceCMYK/RGB/Gray 绘制命令并不显式引用 Default* 名称，但仍受它们
+    控制。删除这些资源会让保留的引文、图标变色。源对象编号在当前工作流
+    中保持不变；调用后须重新加载页面，使渲染器读取恢复的资源。
+    """
+    changed = False
+    for name in ('DefaultGray', 'DefaultRGB', 'DefaultCMYK'):
+        key = 'Resources/ColorSpace/' + name
+        expected = source_page.parent.xref_get_key(source_page.xref, key)
+        if expected[0] != 'null' and page.parent.xref_get_key(page.xref, key) != expected:
+            page.parent.xref_set_key(page.xref, key, expected[1])
+            changed = True
+    return changed
+
+
 def region_pixels(image, rect):
     box = (fitz.Rect(rect) * 2).irect
     return image.crop(tuple(box)).tobytes()
@@ -164,7 +181,12 @@ def restore_changed_isolated_regions(page, source_page, editable, protected):
             # 即使变换矩阵严格为单位矩阵也会出现插值色差。与整页核验
             # 使用同一 144 dpi 网格向外对齐，且不得碰到任何译文可写区。
             # 这改变重放裁剪范围，不改变源对象位置或核验容差。
-            aligned = (fitz.Rect((rect * 2).irect) / 2) & page.rect
+            aligned = fitz.Rect((rect * 2).irect) / 2
+            # f 等字形的墨迹可略超出 PDF 的前进宽度；重放时额外保留
+            # 一个像素的出血，避免裁掉末笔。只扩大复制范围，不放宽 QA；
+            # 必须与正文可写区域分离，且最终逐像素比较仍要求完全相同。
+            aligned = fitz.Rect(aligned.x0 - .5, aligned.y0 - .5,
+                                aligned.x1 + .5, aligned.y1 + .5) & page.rect
             if not any(aligned.intersects(r) for r in writing):
                 rect = aligned
             if not any(r.contains(rect) for r in regions):
@@ -188,4 +210,6 @@ def restore_changed_isolated_regions(page, source_page, editable, protected):
                 group = source_page.parent.xref_object(int(group.split()[0]))
             page.parent.xref_set_key(form, 'Group', group)
             page.parent.xref_set_key(form, 'Group/I', 'true')
+    # 本函数也调用了删除引擎，可能再次清理 Default* 资源。
+    restore_default_color_spaces(page, source_page)
     return True

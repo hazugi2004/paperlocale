@@ -30,7 +30,7 @@ CITATION = re.compile(r'\[\s*\d+(?:\s*[,;–−-]\s*\d+)*\s*\]|'
                       r'August\b|September\b|October\b|November\b|December\b)'
                       r"[A-Z][A-Za-z'’−–-]+(?:\s+(?:[A-Z][A-Za-z'’−–-]+|et|al\.?|and|&))*"
                       r',?\s+(?:18|19|20)\d{2}[a-z]?(?:[,;][^()]*)?\)')
-MATH_FONT = re.compile(r'math|symbol|cmsy|cmmi|cmex|msam|msbm', re.I)
+MATH_FONT = re.compile(r'math|mth|symbol|cmsy|cmmi|cmex|msam|msbm', re.I)
 CAPTION = re.compile(r'^(?:(?:Extended Data|Supplementary)\s+)?(?:Fig(?:ure)?\.?|Table)\s*\d', re.I)
 METADATA = re.compile(r'^(?:Received:|Accepted:|Published online:|Check for updates$)', re.I)
 NO_LINE_START = set('，。、；：？！）》」』】％‰,.;:!?%)]}')
@@ -68,7 +68,10 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
         chars = []
         for span in line['spans']:
             for char in span['chars']:
-                chars.append({**char, 'fixed': bool(span['flags'] & 1 or MATH_FONT.search(span['font'])),
+                # 出版社数学字体可能将括号映射到控制码，普通中文字体
+                # 无法重建其字形；保留源字形，不能把控制码当正文传给模型。
+                chars.append({**char, 'fixed': bool(span['flags'] & 1 or MATH_FONT.search(span['font'])
+                                                  or not char['c'].isprintable()),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
                                   re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
                               'bold': bool(span['flags'] & 16),

@@ -86,6 +86,19 @@ class SourceLayoutTests(unittest.TestCase):
         self.assertIn('where', ordinary)
         self.assertIn('changes.', ordinary)
 
+    def test_math_font_brackets_and_control_codes_remain_source_glyphs(self):
+        from paperlocale.source_layout import _parts
+        spans = []
+        for index, (text, font) in enumerate([('ðÞ', 'PublisherMthSyN'), ('\x02\x03', 'CustomSymbols'),
+                                               ('ð', 'OrdinaryBody')]):
+            spans.append({'font': font, 'size': 10, 'flags': 0,
+                          'chars': [{'c': c, 'origin': (40 + index * 20 + i * 5, 100),
+                                     'bbox': (40 + index * 20 + i * 5, 92, 45 + index * 20 + i * 5, 102)}
+                                    for i, c in enumerate(text)]})
+        parts = _parts({'lines': [{'spans': spans}]}, 1, [])
+        self.assertEqual(''.join(p['text'] for p in parts if p['fixed']), 'ðÞ\x02\x03')
+        self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']), 'ð')
+
     def test_oversized_cff_metrics_do_not_erase_math_on_previous_line(self):
         """自造合法 CFF：源外框过高，但字形不与下一行相交；最终字体须恢复。"""
         from fontTools.fontBuilder import FontBuilder

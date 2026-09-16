@@ -175,6 +175,39 @@ MAIN_HEADING = re.compile(
     r"[.:]?$", re.I)
 
 
+def _preserve_front_matter(blocks: list[dict]) -> None:
+    """保护显著大号主标题下、摘要/长正文之前的作者与机构。
+
+    短作者名单不一定带多个逗号，不能仅依赖人数。这里联合字号、页面位置
+    以及姓名/机构文字证据；不把所有短行都当成作者，也不翻译姓名推测汉字。
+    没有可辨识标题层次时不据此扩大保护范围，交由其他分类证据处理。
+    """
+    first = [b for b in blocks if b['page'] == 1 and b['kind'] == 'body' and b['parts']]
+    if len(first) < 2:
+        return
+    size = lambda b: median(p['size'] for p in b['parts'])
+    title = max(first, key=size)
+    if size(title) < median(size(b) for b in first) + 1:
+        return
+    lower = max(b['rect'][3] for b in first if abs(size(b) - size(title)) < .5)
+    for block in sorted(first, key=lambda b: b['rect'][1]):
+        if block['rect'][1] < lower:
+            continue
+        value = block['text']
+        if MAIN_HEADING.fullmatch(value) or len(value.split()) >= 25:
+            break
+        # 数字、星号、匕首是常见机构/通讯上标。必须仍有两个姓名词，
+        # 并限定于标题和首个正文段之间，避免吞掉正文的小标题或实体名。
+        names = re.sub(r"[\d*†‡]+", "", value).strip()
+        names = re.split(r"\s*(?:,|;|&|\band\b)\s*", names)
+        name_pattern = r"(?:[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*\s+){1,5}[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*"
+        is_name = all(re.fullmatch(name_pattern, name) for name in names)
+        affiliation = re.search(r"\b(?:university|institute|department|laboratory|school of|"
+                                r"faculty of|hospital|college|e-mail|email)\b|\S+@\S+", value, re.I)
+        if is_name or affiliation:
+            block['kind'] = 'preserve'
+
+
 def _preserve_auxiliary_sections(blocks: list[dict]) -> None:
     """原位设置辅助文本分类；小标题与跨页后续内容都不发给翻译器。
 
@@ -327,6 +360,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
     # 页内先判断是否确有双栏，再按栏阅读。通栏标题必须与下方双栏分开；
     # 这仍是自动排序启发式，不代表任意版式的语义完整性已得到证明。
     blocks.sort(key=lambda b: (b['page'], int(b['rect'][0] >= b['page_width'] / 2), b['rect'][1]))
+    _preserve_front_matter(blocks)
     _preserve_auxiliary_sections(blocks)
     bodies = [b for b in blocks if b['kind'] == 'body']
     groups = []

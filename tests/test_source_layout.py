@@ -361,6 +361,21 @@ class SourceLayoutTests(unittest.TestCase):
             author = next(b for b in plan['blocks'] if b['text'] == 'Example Person.')
             self.assertEqual(author['kind'], 'preserve')
 
+    def test_short_author_list_and_affiliation_between_title_and_abstract_stay_original(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'front-matter.pdf'
+            with fitz.open() as document:
+                page = document.new_page(width=600, height=800)
+                page.insert_text((40, 90), 'Soil moisture controls ecosystem response', fontsize=18)
+                page.insert_text((40, 125), 'Jane Doe1 and John Smith2*', fontsize=10)
+                page.insert_text((40, 150), '1 Department of Ecology, Example University', fontsize=9)
+                page.insert_text((40, 190), 'Abstract', fontsize=12)
+                page.insert_text((40, 220), 'We measured daily soil moisture and ecosystem response.', fontsize=10)
+                document.save(source)
+            blocks = extract_layout(source)['blocks']
+            self.assertEqual([b['kind'] for b in blocks],
+                             ['body', 'preserve', 'preserve', 'body', 'body'])
+
     def test_auxiliary_sections_stay_original_and_later_methods_resume(self):
         # References 之后的 Methods 仍属于正文；辅助标题和跨页内容均保护。
         with tempfile.TemporaryDirectory() as directory:

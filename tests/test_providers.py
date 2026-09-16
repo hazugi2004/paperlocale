@@ -6,6 +6,7 @@ import http.client
 import json
 import re
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 from paperlocale.domains import load_domain_pack
@@ -231,6 +232,19 @@ class ProviderTest(unittest.TestCase):
         ):
             result = provider.translate([segment], self.context)
         self.assertEqual(result[0].target, "HDI {v1}低于-0.8。")
+
+    def test_qwen_mt_anchor_context_uses_request_markers(self) -> None:
+        def respond(request, timeout):
+            body = json.loads(request.data)
+            wire = body['messages'][0]['content']
+            marker = re.findall(r'\[PLPROTECTED\d+\]', wire)[0]
+            self.assertIn(json.dumps({marker: '3c)'}, ensure_ascii=False), body['translation_options']['domains'])
+            return _Response({'choices': [{'message': {'content': '观测（图 ' + marker + '。'}}]})
+        provider = QwenMTProvider(base_url='https://example.test/v1', api_key='secret-key', model='qwen-mt-plus', min_request_interval_seconds=0)
+        context = replace(self.context, anchor_text={'anchor-id': {'{v0}': '3c)'}})
+        with patch('paperlocale.providers.qwen_mt.urllib.request.urlopen', side_effect=respond):
+            target = provider.translate([Segment('anchor-id', 'Observed (Fig. {v0}.')], context)[0].target
+        self.assertEqual(target, '观测（图 {v0}。')
 
     def test_qwen_mt_shields_wrapped_urls_and_repeated_abbreviations(self) -> None:
         """网址断行和内嵌公式保持原样，SST 每次出现对应不同的可验证标记。"""

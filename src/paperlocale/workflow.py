@@ -2077,6 +2077,12 @@ def accept_run(run_dir: Path, *, reviewed_by: str) -> None:
         raise ValueError("QA 报告的源 PDF 哈希不一致")
     if report.get("translated_sha256") != manifest["rendered_sha256"]:
         raise ValueError("QA 报告的译文 PDF 哈希不一致")
+    if manifest.get("layout_mode") == "preserved":
+        preservation = json.loads((root / "preservation_report.json").read_text(encoding="utf-8"))
+        if (preservation.get("source_sha256") != manifest["source_sha256"] or
+                preservation.get("translated_sha256") != manifest["rendered_sha256"] or
+                preservation.get("layout_plan_sha256") != manifest.get("layout_plan_sha256")):
+            raise ValueError("源版面保护报告与当前 PDF/计划不一致，不能验收")
     report["visual_accepted"] = True
     report["visual_reviewed_by"] = reviewed_by.strip()
     report["visual_reviewed_at"] = _utc_now()

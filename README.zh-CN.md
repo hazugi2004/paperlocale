@@ -71,14 +71,30 @@ v0.6.3 发布后，可按以下方式安装精确公开版本：
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.6.3"
+python -m pip install "paperlocale[layout]==0.7.0"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-## 开始翻译
+## 开始翻译（0.7.0）
+
+新运行默认采用全自动源版面模式，只翻译标题、摘要和正文（含方法）。作者与机构、致谢、作者贡献、利益冲突、资助声明、数据与代码可用性、参考文献及其他辅助信息连同小标题全部保留原文。跨页、跨栏及被图片分开的正文按逻辑段落联合翻译；图表、图注、公式和固定引用保留原文与位置。透明图片按实际可见内容判断占用，标题保留字号与粗体。正文在原栏位内重新换行、分配行距，中文字体及文字行不会与英文完全相同。
+
+```bash
+paperlocale run paper.pdf --run-dir runs/paper \
+  --provider codex-local --model gpt-5.6-sol --reasoning-effort high
+```
+
+无需核对或修改版面计划。全部正文通过内容、排版、保护区和回读检查后才生成完整候选；错误会保存断点并保持等待，不生成有缺口的 PDF。外部问题修正后，执行 `paperlocale resume-waiting --run-dir runs/paper` 继续。瞬时网络故障最多自动重试一次，已有翻译与精炼答复继续复用，不切换模型。
+
+状态 `qa_generated` 表示候选通过机器检查，仍需逐页视觉验收；它不等于对任意 PDF 的无损保证。扫描件、旋转正文和无法通过安全检查的版面会保持等待。详细范围、恢复方式与验收证据见[源版面翻译](docs/PRESERVED_LAYOUT.zh-CN.md)。
+
+## 旧引擎工作流
+
+以下教程适用于 `--layout-mode legacy`；既有断点自动沿用原引擎。
+
 
 如果希望输入一条命令后直接得到整篇候选 PDF，使用 `--unattended`。
 `codex-local` 会在后台调用结构化的 `codex exec --ephemeral`，不打开、
@@ -86,7 +102,7 @@ paperlocale domain-check atmospheric-science
 
 ```bash
 codex login
-paperlocale run paper.pdf \
+paperlocale run paper.pdf --layout-mode legacy \
   --run-dir runs/paper \
   --provider codex-local \
   --model gpt-5.6-sol \
@@ -103,8 +119,8 @@ paperlocale run paper.pdf \
 片段都已闭合，不表示参考文献、公式或碎片会被强行改成中文。
 
 `--unattended` 不把机器 QA 伪装成人工逐页验收，运行状态仍是
-`qa_generated`。如果 Provider、内容合同或机器 QA 失败，命令会明确退出并
-保留已通过的断点；重新执行同一条命令即可续跑，不会静默切换 Provider。
+`qa_generated`。如果 Provider、内容合同或机器 QA 失败，默认保存断点并保持等待；
+使用 `--no-wait-on-error` 才会报错退出。不会静默切换 Provider。
 
 以下是需要人工复核参考文献边界的受监督模式。
 
@@ -130,7 +146,7 @@ paperlocale run paper.pdf \
 
 ```bash
 codex login
-paperlocale run paper.pdf \
+paperlocale run paper.pdf --layout-mode legacy \
   --run-dir runs/paper \
   --provider codex-local \
   --model gpt-5.6-sol \
@@ -171,7 +187,7 @@ PaperLocale 不用本地 PDF 区域覆盖伪装成真正的 preserve。
 
 ```bash
 export PAPERLOCALE_API_KEY="你的密钥"
-paperlocale run paper.pdf \
+paperlocale run paper.pdf --layout-mode legacy \
   --run-dir runs/paper \
   --provider openai-compatible \
   --base-url https://api.example.com/v1 \
@@ -187,7 +203,7 @@ paperlocale run paper.pdf \
 
 ```bash
 export PAPERLOCALE_API_KEY="你的-DashScope-Key"
-paperlocale run paper.pdf \
+paperlocale run paper.pdf --layout-mode legacy \
   --run-dir runs/paper \
   --provider qwen-mt \
   --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
@@ -357,7 +373,7 @@ paperlocale domain-check /path/to/your-domain
 
 ## 当前证据边界
 
-- 119 项单元测试不联网运行，覆盖内容合同、三种 Provider、ChatGPT 网页人工桥接、单片段批处理边界、Provider 评估、无人值守与受监督断点续跑、Codex CLI 版本漂移审计、受控源矢量重放与链尾回滚、双栏参考文献空间边界、自动误匹配显式排除、参考文献与透传映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控单行/多行文字修复、页面 QA、隔离环境入口和演示产物；
+- 216 项单元测试不联网运行，覆盖内容合同、三种 Provider、ChatGPT 网页人工桥接、单片段批处理边界、Provider 评估、无人值守与受监督断点续跑、Codex CLI 版本漂移审计、受控源矢量重放与链尾回滚、双栏参考文献空间边界、自动误匹配显式排除、参考文献与透传映射、碎词安全审查、领域包身份、PDF 哈希绑定、图片/矢量对象门禁、受控单行/多行文字修复、页面 QA、隔离环境入口和演示产物；
 - 本地已用 `pdf2zh-next 2.9.0` 跑通合成 A4 双栏 PDF 的收集、查表重建和逐页 QA；
 - 版面兼容性夹具包含公式占位、矢量表格与嵌入图片；源文/译文均为 1 个图片对象和 8 次矢量绘制；
 - v0.3.3 两页中文文字修复夹具将 23,278,008 字节原始字体独立子集化为 22,912 字节，最终 PDF 为 19,594 字节；机器 QA 为 0 errors / 0 warnings，并已逐页视觉验收。两类夹具均为项目自有，不提交任何受版权限制的论文；

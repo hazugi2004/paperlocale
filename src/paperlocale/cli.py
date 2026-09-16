@@ -154,6 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--target-language", default="zh-CN")
     run.add_argument("--pages")
     run.add_argument("--domain", default="atmospheric-science")
+    run.add_argument("--layout-mode", choices=("preserved", "legacy"),
+                     help="新运行默认源版面模式；既有运行保持原模式")
+    run.add_argument("--font-file", type=Path, help="源版面模式使用的中文字体")
+    run.add_argument("--min-font-size", type=float, help="显式允许缩小正文的字号下限")
+    run.add_argument("--wait-on-error", action=argparse.BooleanOptionalAction, default=None,
+                     help="默认出错保存断点并等待；--no-contract-repair 默认保留首错退出行为")
     for command in (translate, run):
         command.add_argument("--contract-repair", action=argparse.BooleanOptionalAction,
                              default=True, help="内容校验失败后使用同一模型修复一次；--no-contract-repair 首错即停")
@@ -379,6 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     accept = subparsers.add_parser("accept", help="记录人工逐页视觉验收")
     accept.add_argument("--run-dir", type=Path, required=True)
     accept.add_argument("--reviewed-by", required=True)
+    resume = subparsers.add_parser("resume-waiting", help="修正问题后通知等待进程继续")
+    resume.add_argument("--run-dir", type=Path, required=True)
     return parser
 
 
@@ -425,6 +433,20 @@ def _provider_from_args(args: argparse.Namespace):
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.command == "run":
+        from .recovery import run_waiting
+        wait = args.contract_repair if args.wait_on_error is None else args.wait_on_error
+        if wait:
+            return run_waiting(lambda: _execute(args), args.run_dir)
+    return _execute(args)
+
+
+def _execute(args: argparse.Namespace) -> int:
+    if args.command == "resume-waiting":
+        from .recovery import resume_waiting
+        resume_waiting(args.run_dir)
+        print("已发送恢复信号；完成状态仍以等待进程和 QA 结果为准")
+        return 0
     if args.command == "domain-check":
         _domain_check(args.domain)
         return 0
@@ -480,6 +502,26 @@ def main() -> int:
             target_language=args.target_language,
             pages=args.pages,
         )
+        from .workflow import save_manifest
+        recorded_mode = manifest.get("layout_mode", "preserved" if is_new else "legacy")
+        mode = args.layout_mode or recorded_mode
+        if mode != recorded_mode and manifest["status"] != "initialized":
+            raise ValueError("不能在已开始的运行中切换版面模式")
+        manifest["layout_mode"] = mode
+        save_manifest(root, manifest)
+        if mode == "preserved":
+            from .preserved_workflow import run_preserved
+            if args.reference_policy != "preserve":
+                raise ValueError("源版面模式固定保留参考文献，不能翻译标题")
+            result = run_preserved(
+                root, provider=_provider_from_args(args) if args.provider and manifest["status"] not in {"rendered", "qa_generated", "accepted"} else None,
+                domain=load_domain_pack(args.domain), plan_path=None,
+                font_file=args.font_file,
+                min_font_size=args.min_font_size, contract_repair=args.contract_repair,
+                dpi=args.dpi, pdftoppm_bin=args.pdftoppm_bin,
+                max_segments=args.max_segments, max_characters=args.max_characters)
+            print(f"候选 PDF：{result['rendered_pdf']}；仍需逐页视觉验收")
+            return 0
         needs_provider = manifest["status"] in {"initialized", "collected"}
         if needs_provider and args.provider is None:
             raise ValueError("运行尚未翻译；请提供 --provider 后重试")

@@ -63,13 +63,15 @@ class CodexResponseKeysTest(unittest.TestCase):
     def test_reference_and_repair_feedback_follow_local_aliases(self):
         sid = self.segments[1].id
         context = replace(self.context, reference_segment_ids=frozenset([sid]),
-                          repair_feedback={sid: ("previous candidate", ("missing marker",))})
+                          repair_feedback={sid: ("previous candidate", ("missing marker",))},
+                          anchor_text={sid: {'{v0}': '3c)'}})
         prompt, _schema = _keyed_request(self.segments, context)
         rows = json.JSONDecoder().raw_decode(prompt.split("待翻译 JSON：\n", 1)[1])[0]
         self.assertEqual(rows[1]["id"], "s2")
         self.assertEqual(rows[1]["kind"], "reference")
         self.assertEqual(rows[1]["previous_target"], "previous candidate")
         self.assertEqual(rows[1]["validation_errors"], ["missing marker"])
+        self.assertEqual(rows[1]['fixed_anchor_text'], {'{v0}': '3c)'})
         self.assertEqual(context.reference_segment_ids, frozenset([sid]))
 
     def test_empty_or_duplicate_input_is_rejected_before_model_call(self):

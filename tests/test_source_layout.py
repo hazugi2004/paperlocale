@@ -294,6 +294,29 @@ class SourceLayoutTests(unittest.TestCase):
             with fitz.open(stream=result, filetype='pdf') as written:
                 self.assertIn('P', written[0].get_text())
                 self.assertNotIn('a', written[0].get_text())
+                from paperlocale.font_geometry import source_anchor_ink_rectangles
+                with fitz.open(source) as original:
+                    clips = source_anchor_ink_rectangles(original[0],
+                            [{'text': 'P', 'origin': [100, 100]}], {})
+                    self.assertIsNotNone(clips)
+                    for value, expected in zip(clips[0], [100.4, 100, 103.6, 108]):
+                        self.assertAlmostEqual(value, expected, places=4)
+                    def pixels(page):
+                        return page.get_pixmap(clip=clips[0], matrix=fitz.Matrix(4, 4)).samples
+                    self.assertEqual(pixels(original[0]), pixels(written[0]))
+                    from paperlocale.safe_text import verify_fixed_ink
+                    protected = [{'page': 1, 'fixed': True, 'rect': list(clips[0]),
+                                  'chars': [{'text': 'P', 'origin': [100, 100]}]}]
+                    candidate = root / 'candidate.pdf'
+                    candidate.write_bytes(written.tobytes())
+                    supported, evidence = verify_fixed_ink(source, candidate, result, protected, [])
+                    self.assertEqual(supported, {0})
+                    self.assertGreater(evidence[0]['fixed_ink_pixels'], 0)
+                    written[0].draw_rect(clips[0], color=None, fill=(1, 1, 1))
+                    self.assertNotEqual(pixels(original[0]), pixels(written[0]))
+                    candidate.write_bytes(written.tobytes())
+                    with self.assertRaisesRegex(ValueError, '固定字形墨迹像素改变'):
+                        verify_fixed_ink(source, candidate, result, protected, [])
 
     def test_nonprinting_margin_text_is_preserved_and_body_still_translates(self):
         """真实绘制状态回归，不以颜色、旋转或字符串名单替代可见性证据。"""

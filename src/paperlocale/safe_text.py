@@ -1,6 +1,6 @@
 """将正文删除范围和排字范围分离，保留原始引用/公式字符。"""
 import pymupdf as fitz
-from PIL import Image
+from PIL import Image, ImageChops
 
 
 def page_pixels(page):
@@ -24,6 +24,35 @@ def restore_default_color_spaces(page, source_page):
             page.parent.xref_set_key(page.xref, key, expected[1])
             changed = True
     return changed
+
+
+def verify_fixed_ink(source, written, reference_bytes, protected, editable):
+    """逐像素核验原字体字形；正文与上标混合像素使用删除正文后的基准。
+
+    基准在逐字符确认安全删除、恢复原字体和默认色彩空间后、插入任何
+    译文前保存。只有原正文墨迹与固定字形墨迹实际重叠的像素才使用该
+    基准；其他固定像素直接与原 PDF 比较。不忽略差异、不放宽颜色容差。
+    """
+    from .font_geometry import source_anchor_masks
+    fixed_masks, supported = source_anchor_masks(source, protected)
+    body_masks, _ = source_anchor_masks(source, editable)
+    evidence = []
+    with fitz.open(source) as original, fitz.open(written) as output, \
+            fitz.open(stream=reference_bytes, filetype='pdf') as reference:
+        for number, mask in fixed_masks.items():
+            def pixels(document):
+                pix = document[number - 1].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=False)
+                return Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
+            fixed = mask.point(lambda value: 255 if value else 0)
+            body = body_masks.get(number, Image.new('L', mask.size)).point(lambda value: 255 if value else 0)
+            overlap = ImageChops.multiply(fixed, body)
+            expected = Image.composite(pixels(reference), pixels(original), overlap)
+            difference = ImageChops.multiply(ImageChops.difference(expected, pixels(output)), fixed.convert('RGB'))
+            if difference.getbbox():
+                raise ValueError(f'第{number}页固定字形墨迹像素改变，拒绝发布候选')
+            evidence.append({'page': number, 'fixed_ink_pixels': fixed.histogram()[255],
+                             'body_overlap_pixels': overlap.histogram()[255]})
+    return supported, evidence
 
 
 def region_pixels(image, rect):

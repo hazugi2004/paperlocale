@@ -20,7 +20,7 @@ from .providers import Segment, TranslationContext
 from .pipeline import translate_segment_file
 from .safe_text import (safe_erase_rectangles, verify_text_erased, restore_changed_isolated_regions,
                         page_pixels, region_pixels, fixed_text_rectangles, fixed_characters,
-                        restore_default_color_spaces)
+                        restore_default_color_spaces, verify_fixed_ink)
 from .source_layout import (digest, extract_layout, fit_unit, load_plan, save_json,
                             verify_unchanged, anchor_errors)
 from .workflow import (load_manifest, save_manifest, _verify_source_pdf,
@@ -182,7 +182,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     temporary = root / '.preserved.tmp.pdf'
     try:
         document, original_fonts = open_source_for_editing(source)
-        with document:
+        with document, fitz.open(source) as original:
             for number, page in enumerate(document, 1):
                 edits = [p for p in editable if p['page'] == number]
                 if not edits:
@@ -193,6 +193,14 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                                       graphics=fitz.PDF_REDACT_LINE_ART_NONE,
                                       text=fitz.PDF_REDACT_TEXT_REMOVE)
                 verify_text_erased(page, edits, [p for p in protected if p['page'] == number])
+                restore_default_color_spaces(page, original[number - 1])
+            restore_source_fonts(document, original_fonts)
+            # 固定字形与待译正文可能在抗锯齿像素上叠合。保留仅删除正文
+            # 的原字形层作为这些混合像素的参考；此时尚未插入任何中文。
+            reference_bytes = document.tobytes(garbage=0, deflate=True)
+            for number, page in enumerate(document, 1):
+                if not any(p['page'] == number for p in editable):
+                    continue
                 page.insert_font(fontname='PLPreserved', fontbuffer=font_bytes)
                 if bold_bytes is not None:
                     page.insert_font(fontname='PLPreservedBold', fontbuffer=bold_bytes)
@@ -202,7 +210,6 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     rect, size = fitz.Rect(item['rect']), item['font_size']
                     page.insert_text((item.get('origin_x', rect.x0), item.get('baseline', rect.y0 + font.ascender * size)), item['target'],
                                      fontname='PLPreservedBold' if item.get('bold') else 'PLPreserved', fontsize=size)
-            restore_source_fonts(document, original_fonts)
             document.save(temporary, garbage=0, deflate=True)
         # 以序列化后重新打开的 PDF 为核验对象。MuPDF 编辑中间态与落盘后
         # 的图片插值可能不同，不能对中间态的差异过早重放整张图。
@@ -240,10 +247,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         if repaired is not None:
             temporary.write_bytes(repaired)
         evidence = verify_unchanged(source, temporary, editable)
+        checked_ink, ink_evidence = verify_fixed_ink(source, temporary, reference_bytes, protected, editable)
         with fitz.open(source) as original, fitz.open(temporary) as written:
             # 保护区域不享有正文掩膜边缘的抗锯齿容差，包括上标、公式与表格文字。
             pixels = {}
-            for region in protected:
+            for region_number, region in enumerate(protected):
+                if region_number in checked_ink:
+                    continue
                 index = region['page'] - 1
                 if index not in pixels:
                     pixels[index] = page_pixels(original[index]), page_pixels(written[index])
@@ -285,6 +295,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                         vector_restorations=vector_restorations,
                         annotation_restorations=annotation_restorations,
                         color_space_restorations=color_space_restorations,
+                        fixed_ink_checks=ink_evidence,
                         all_translations_present=True)
         candidate = root / 'render_output' / 'translated.pdf'
         candidate.parent.mkdir(exist_ok=True)

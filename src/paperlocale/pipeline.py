@@ -55,6 +55,7 @@ def translate_segment_file(
     reference_policy: str = "preserve",
     passthrough_segment_ids: set[str] | frozenset[str] = frozenset(),
     contract_repair: bool = True,
+    anchor_text: dict[str, dict[str, str]] | None = None,
 ) -> tuple[int, int]:
     """翻译尚未通过门禁的片段，并在每批成功后原子写入断点。
 
@@ -152,6 +153,7 @@ def translate_segment_file(
         domain=domain,
         reference_policy=reference_policy,
         reference_segment_ids=frozenset(reference_segment_ids),
+        anchor_text=anchor_text or {},
     )
     provider_limit = provider.max_batch_segments
     effective_max_segments = (

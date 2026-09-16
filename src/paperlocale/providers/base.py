@@ -41,6 +41,9 @@ class TranslationContext:
     repair_feedback: Mapping[str, tuple[str, tuple[str, ...]]] = field(
         default_factory=dict
     )
+    # 源版面中的占位符仍写回原对象。提供原文含义及标点，避免模型把
+    # 已藏在锚点内的右括号再补一次；普通流水线默认没有此映射。
+    anchor_text: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
 
 class TranslationProvider(ABC):
@@ -131,6 +134,8 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
                 {"source": segment.source[q.start:q.end], "signature": q.signature} for q in quantities
             ]
         feedback = context.repair_feedback.get(segment.id)
+        if segment.id in context.anchor_text:
+            item['fixed_anchor_text'] = dict(context.anchor_text[segment.id])
         if feedback is not None:
             previous_target, errors = feedback
             item["previous_target"] = previous_target
@@ -149,6 +154,9 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
    must_preserve 中每个表面形式必须至少保留指定次数，不要省略重复图号、
    变量、单位或引文。仍需返回完整 target，不能只返回差异或解释。
 """
+    anchor_instruction = ("fixed_anchor_text 说明占位符在 PDF 中原样显示的内容（含括号）。"
+                          "target 仍保留占位符，不能重复其文本或标点；代回原文后语句及括号须完整。\n"
+                          if context.anchor_text else "")
     return f"""{context.domain.prompt}
 
 硬性输出合同：
@@ -159,7 +167,7 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
    等价表示，此规则优先于单位的表面形式要求；不得丢单位或进行单位倍率/温度换算。
    scientific_literals 中的小数点、变量及运算符必须原样保留，只允许排版空白变化。
 4. 只返回符合约定结构的 JSON，不添加解释、Markdown 或原文之外的信息。
-{reference_instruction}
+{anchor_instruction}{reference_instruction}
 {repair_instruction}
 
 固定术语（仅适用于 kind=body）：

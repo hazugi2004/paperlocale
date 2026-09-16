@@ -40,7 +40,8 @@ NUMBERED_SECTION_HEADING_RE = re.compile(
 # 不把参考文献题名中出现的同名词语当成章节边界。
 POST_REFERENCE_HEADING_RE = re.compile(
     r"^(?:Acknowledg(?:e)?ments|Author contributions|Competing interests|"
-    r"Additional information|Data availability|Code availability)$",
+    r"Additional information|Data availability|Code availability|Methods|"
+    r"Materials and methods|Experimental methods|Results|Discussion|Conclusions?)$",
     re.IGNORECASE,
 )
 MINIMUM_EXACT_MATCH_CHARACTERS = 80

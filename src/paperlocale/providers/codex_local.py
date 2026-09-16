@@ -43,6 +43,8 @@ def _keyed_request(
                                         if sid in context.reference_segment_ids),
         repair_feedback={aliases[sid]: context.repair_feedback[sid] for sid in ids
                          if sid in context.repair_feedback},
+        anchor_text={aliases[sid]: context.anchor_text[sid] for sid in ids
+                     if sid in context.anchor_text},
     )
     schema = {
         "type": "object",

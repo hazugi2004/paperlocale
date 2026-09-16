@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 — 2026-09-16
+
+- Add an automatic source-layout pipeline for cross-page and image-separated body paragraphs, visible image occupancy, fixed citation/formula anchors, and source-character erasure.
+- Preflight the complete translation before writing a candidate; compare protected regions, page geometry, links, source vectors, and translated text after writing.
+- Save progress and keep `run` alive on errors, with one transient retry and an explicit recovery signal. Persist bounded layout-refinement answers across resumes.
+- Translate only the title, abstract, and main text. Keep author details, acknowledgements, declarations, data/code availability, references, and auxiliary headings original; correctly resume body translation at post-reference Methods.
+- Preserve existing runs with the legacy layout engine. An 18-page real-paper run passed complete-text and protected-region checks; 215 tests passed locally. See [release notes and limits](docs/releases/v0.7.0.md).
+
 ## 0.6.4 — 2026-09-15
 
 - Add `--no-contract-repair` to `run`, `translate`, and `translate-segments`: preserve successful rows and rejected evidence, then stop before the optional model repair call.

@@ -106,12 +106,44 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.6.3"
+python -m pip install "paperlocale[layout]==0.7.0"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start
+## Quick start (0.7.0)
+
+New runs use the automatic source-layout pipeline. Body paragraphs spanning pages,
+columns, or image gaps are translated together. Only the title, abstract, and main
+text (including methods) are translated. Author details, affiliations, acknowledgements,
+contributions, declarations, data/code availability, and references—including their
+headings—remain original. Figures, tables, captions, formulas, and fixed citations
+also retain their source text and positions.
+Transparent images reserve only their visible content. Headings retain size and
+weight; translated body text is wrapped and spaced within its original columns.
+Chinese fonts and line breaks naturally differ from the English source.
+
+```bash
+paperlocale run paper.pdf --run-dir runs/paper \
+  --provider codex-local --model gpt-5.6-sol --reasoning-effort high
+```
+
+No manual layout-plan review is required. A complete candidate is created only
+after all body translations, layout, protected content, and text readback pass.
+Errors save progress and keep the process waiting. After correcting an external
+problem, run `paperlocale resume-waiting --run-dir runs/paper`. Transient failures
+receive at most one automatic retry; saved translations and refinement responses
+are reused without changing the provider.
+
+`qa_generated` remains a machine-checked candidate requiring visual acceptance.
+This is not a guarantee for arbitrary PDFs: scanned pages, rotated body text, or
+layouts that cannot pass safety checks remain waiting. See the detailed
+[scope and recovery guide](docs/PRESERVED_LAYOUT.zh-CN.md).
+
+## Legacy workflow
+
+The examples below select `--layout-mode legacy`; existing runs retain their engine.
+
 
 For a single non-interactive command that produces a complete candidate PDF,
 use `--unattended`. The `codex-local` provider invokes structured
@@ -119,7 +151,7 @@ use `--unattended`. The `codex-local` provider invokes structured
 conversation window:
 
 ```bash
-paperlocale run paper.pdf --run-dir runs/paper \
+paperlocale run paper.pdf --layout-mode legacy --run-dir runs/paper \
   --provider codex-local \
   --model gpt-5.6-sol \
   --reasoning-effort high \
@@ -137,9 +169,9 @@ all pages and collected segments are closed, not that formulas, references, or
 unsafe fragments are forcibly converted to Chinese.
 
 Unattended mode does not fabricate human visual acceptance: the final state is
-still `qa_generated`. Provider, content-contract, or machine-QA failures exit
-with an explicit error and retain valid checkpoints; rerun the same command to
-resume. PaperLocale never silently switches providers.
+still `qa_generated`. Provider, content-contract, or machine-QA failures save
+progress and keep the process waiting by default. Use `--no-wait-on-error` for
+explicit failure exits. PaperLocale never silently switches providers.
 
 The supervised workflow remains available when reference boundaries should be
 reviewed manually:
@@ -171,7 +203,7 @@ translate, validate, rebuild, and generate all-page QA:
 
 ```bash
 # Uses the authenticated Codex CLI session on this trusted local machine.
-paperlocale run paper.pdf --run-dir runs/paper \
+paperlocale run paper.pdf --layout-mode legacy --run-dir runs/paper \
   --provider codex-local \
   --model gpt-5.6-sol \
   --reasoning-effort high \
@@ -183,7 +215,7 @@ paperlocale confirm-references --run-dir runs/paper \
   --confirmed-by "Your name"
 
 # Rerun the original paperlocale run command after confirmation.
-paperlocale run paper.pdf --run-dir runs/paper \
+paperlocale run paper.pdf --layout-mode legacy --run-dir runs/paper \
   --provider codex-local \
   --model gpt-5.6-sol \
   --reasoning-effort high \
@@ -334,7 +366,7 @@ For a BYOK OpenAI-compatible endpoint:
 
 ```bash
 export PAPERLOCALE_API_KEY="your-key"
-paperlocale run paper.pdf --run-dir runs/paper \
+paperlocale run paper.pdf --layout-mode legacy --run-dir runs/paper \
   --provider openai-compatible \
   --base-url https://api.example.com/v1 \
   --model your-model \
@@ -350,7 +382,7 @@ version prefix and must not include `/chat/completions`:
 
 ```bash
 export PAPERLOCALE_API_KEY="your-DashScope-key"
-paperlocale run paper.pdf --run-dir runs/paper \
+paperlocale run paper.pdf --layout-mode legacy --run-dir runs/paper \
   --provider qwen-mt \
   --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
   --model qwen-mt-plus \

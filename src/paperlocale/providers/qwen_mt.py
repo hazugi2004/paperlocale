@@ -202,6 +202,17 @@ class QwenMTProvider(TranslationProvider):
                     ],
                 },
             }
+            if segment.id in context.anchor_text:
+                # Qwen 看见的是本次请求的保护标记，说明必须使用同一映射，
+                # 不能把磁盘 {vN} 直接当成模型输入中已有的标记。
+                anchors = context.anchor_text[segment.id]
+                meanings = {marker: anchors[value] for marker, value in sentinels.items() if value in anchors}
+                body['translation_options']['domains'] += (
+                    '\n以下保护标记在 PDF 中原样显示对应文字及括号。译文保留标记，'
+                    '不要重复它们已含的文字/标点，代回原文后语句与括号须完整：' +
+                    json.dumps(meanings, ensure_ascii=False))
+                if segment.id in context.repair_feedback:
+                    body['translation_options']['domains'] += '\n修正要求：' + str(context.repair_feedback[segment.id])
             target = self._request_translation(body)
             marker_pattern = r"\[" + prefix + r"\d{4,}\]"
             # 连同改写命名空间/空格的标记一起识别为异常，不模糊映射到合法ID。

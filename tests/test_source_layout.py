@@ -68,6 +68,45 @@ class Provider(TranslationProvider):
 
 
 class SourceLayoutTests(unittest.TestCase):
+    def test_neighbouring_block_empty_corner_does_not_cover_body(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'staggered.pdf'
+            with fitz.open() as document:
+                page = document.new_page()
+                page.insert_text((40, 100), 'An independent phrase.', fontsize=10)
+                page.insert_text((210, 100), 'The following paragraph', fontsize=10, fontname='hebo')
+                page.insert_text((40, 116), 'returns to the left edge and continues here.',
+                                 fontsize=10, fontname='hebo')
+                document.save(source)
+            plan = extract_layout(source)
+            save_json(root / 'plan.json', plan)
+            _, units = load_plan(source, root / 'plan.json')
+            first = next(p for u in units for slot in u['slots'] for p in slot
+                         if p['text'] == 'An independent phrase.')
+            self.assertFalse(first['protected_rects'])
+            self.assertGreater(len(plan['blocks']), 1)
+
+    def test_justified_words_share_one_continuous_writing_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'justified.pdf'
+            with fitz.open() as document:
+                page = document.new_page()
+                page.insert_text((40, 100), 'Individual', fontsize=10)
+                page.insert_text((96, 100), 'extremes', fontsize=10)
+                page.insert_text((147, 100), 'remain.', fontsize=10)
+                document.save(source)
+            plan = extract_layout(source)
+            save_json(root / 'plan.json', plan)
+            _, units = load_plan(source, root / 'plan.json')
+            self.assertEqual(len(units), 1)
+            self.assertEqual(len(units[0]['slots'][0]), 1)
+            part = units[0]['slots'][0][0]
+            self.assertIn('Individual extremes remain.', units[0]['source'])
+            self.assertLessEqual(part['rect'][0], 40)
+            self.assertGreater(part['rect'][2], 147)
+
     def test_line_leading_can_be_used_without_crossing_neighbouring_text(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -128,6 +167,20 @@ class SourceLayoutTests(unittest.TestCase):
                            'bbox': (40 + i * 5, 92, 45 + i * 5, 102)} for i, c in enumerate(text)]}
         parts = _parts({'lines': [{'spans': [span]}]}, 1, [])
         self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']), 'Sce-')
+
+    def test_statistical_relation_keeps_small_subscript_digits_with_variable(self):
+        from paperlocale.source_layout import _parts
+        spans, x = [], 40
+        for text, font, size in [('F', 'Publisher.I', 10), ('1,180544', 'Body', 6),
+                                 (' = 11887', 'Body', 10), (' indicates evidence.', 'Body', 10)]:
+            chars = []
+            for char in text:
+                chars.append({'c': char, 'origin': (x, 100), 'bbox': (x, 92, x + 5, 102)})
+                x += 5
+            spans.append({'chars': chars, 'font': font, 'size': size, 'flags': 0})
+        parts = _parts({'lines': [{'spans': spans}]}, 1, [])
+        self.assertEqual(''.join(p['text'] for p in parts if p['fixed']), 'F1,180544 = 11887')
+        self.assertIn('indicates evidence.', ''.join(p['text'] for p in parts if not p['fixed']))
 
     def test_oversized_cff_metrics_do_not_erase_math_on_previous_line(self):
         """自造合法 CFF：源外框过高，但字形不与下一行相交；最终字体须恢复。"""

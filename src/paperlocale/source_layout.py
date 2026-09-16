@@ -118,6 +118,14 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
         for start, end in ranges:
             for char in chars[start:end]:
                 char['fixed'] = True
+        # F1,180544 = 11887、p < 0.001 等统计量可跨普通字、斜体和
+        # 小字号下标。已有变量证据时保护整条数值关系；否则把下标数字
+        # 作为正文字号重排既改变公式排印，又会制造并不存在的空间不足。
+        relation = r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9]*(?:,\d+)*\s*[=<>≤≥]\s*[+−-]?\d+(?:[.,]\d+)*(?:[eE][+−-]?\d+)?'
+        for expression in re.finditer(relation, text):
+            if chars[expression.start()]['fixed']:
+                for char in chars[expression.start():expression.end()]:
+                    char['fixed'] = True
         # 标准数学函数名可能用普通正体；仅在紧随已识别数学变量或
         # 数学括号时保护，正文中讨论“log”等单词仍交给翻译器。
         for function in re.finditer(r'\b(?:exp|log|ln|sin|cos|tan)\b', text):
@@ -522,6 +530,7 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
                     if list(rect) != part['rect'] or 'writing_rect' in part:
                         part['writing_rect'] = list(rect)
                 if not part['fixed']:
+                    part['source_block'] = sid
                     rect = fitz.Rect(part.get('writing_rect', part['rect']))
                     # 原英文字框只描述该行字体高度，不包括行间留白。中文
                     # 墨迹可能略高于英文而仍完全容得下；按相邻正文行之间
@@ -539,7 +548,11 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
                         rect.y1 += min(min(below) - rect.y1, part['size']) / 2
                     if list(rect) != part['rect'] or 'writing_rect' in part:
                         part['writing_rect'] = list(rect)
-                    nearby = protected + [b for b in blocks if b['id'] != sid]
+                    # 邻段的总外框可能覆盖本段末行（例如下一段首行从右侧
+                    # 公式后开始、第二行回到栏左边）。避让实际文字片段，
+                    # 不把总外框中的空白误当成文字；图表等仍用完整保护区。
+                    nearby = protected + [p for b in blocks if b['id'] != sid and b['kind'] == 'body'
+                                          for p in b['parts']]
                     part['protected_rects'] = [p['rect'] for p in nearby if p['page'] == part['page']
                                                and rect.intersects(fitz.Rect(p['rect']))]
                 parts.append(part)
@@ -561,7 +574,29 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
         text = re.sub(r'(?<=[A-Za-z])- (?=[a-z])', '', text)
         if not text or not any(slots):
             raise ValueError('自动分组没有可翻译文字，正文分类尚未闭合')
-        units.append({'id': segment_id(text), 'source': text, 'slots': slots,
+        # 两端对齐的英文词有时被 PDF 提取器拆成多个同基线“行”。这些
+        # 词之间没有固定锚点，应共用连续排字区域，不能把原空格变成不可
+        # 使用的孔洞。限定同一原生块/字重/字号和相邻范围，避免跨栏合并。
+        joined_slots = []
+        for slot in slots:
+            joined = []
+            for part in slot:
+                last = joined[-1] if joined else None
+                if (last and last.get('source_block') == part.get('source_block')
+                        and last['page'] == part['page'] and last['bold'] == part['bold']
+                        and abs(last['baseline'] - part['baseline']) < .1
+                        and abs(last['size'] - part['size']) < .1
+                        and 0 <= part['rect'][0] - last['rect'][2] <= 2 * part['size']):
+                    last['writing_rect'] = list(fitz.Rect(last.get('writing_rect', last['rect'])) |
+                                                fitz.Rect(part.get('writing_rect', part['rect'])))
+                    last['rect'] = list(fitz.Rect(last['rect']) | fitz.Rect(part['rect']))
+                    last['chars'] = last['chars'] + part['chars']
+                    last['text'] += ' ' + part['text']
+                    last['protected_rects'] = last.get('protected_rects', []) + part.get('protected_rects', [])
+                else:
+                    joined.append(dict(part))
+            joined_slots.append(joined)
+        units.append({'id': segment_id(text), 'source': text, 'slots': joined_slots,
                       'anchors': anchors, 'blocks': ids})
     return plan, units
 

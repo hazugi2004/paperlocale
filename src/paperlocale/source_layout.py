@@ -20,7 +20,7 @@ from PIL import Image, ImageChops, ImageDraw
 from .contracts import FORMULA_RE, URL_RE, segment_id, scientific_literal_spans
 from .references import _reference_geometry
 from .image_geometry import visible_image_regions
-from .safe_text import writing_rectangles
+from .safe_text import writing_rectangles, fixed_text_rectangles
 from .font_geometry import line_ink, open_source_for_editing
 from .quantities import find_quantities, standalone_units
 
@@ -648,8 +648,9 @@ def _fit_slot(slot, tokens, unit, current, regular_font, bold_font, *, spread=Fa
         obstacles = []
         for anchor in unit['anchors']:
             if anchor['page'] == part['page'] and anchor.get('rect'):
-                box = fitz.Rect((fitz.Rect(anchor['rect']) * 2).irect) / 2
-                obstacles.append(fitz.Rect(box.x0 - .25, box.y0 - .25, box.x1 + .25, box.y1 + .25))
+                for rect in fixed_text_rectangles(anchor):
+                    box = fitz.Rect((rect * 2).irect) / 2
+                    obstacles.append(fitz.Rect(box.x0 - .25, box.y0 - .25, box.x1 + .25, box.y1 + .25))
         obstacles.extend(fitz.Rect(r) for r in part.get('protected_rects', []))
         free = writing_rectangles(part.get('writing_rect', part['rect']), obstacles)
         if not free:

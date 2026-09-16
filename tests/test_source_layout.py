@@ -675,6 +675,15 @@ class SourceLayoutTests(unittest.TestCase):
                 target[0].draw_rect((40, 65, 46, 70), color=None, fill=(1, 1, 1))
                 self.assertTrue(any(pixels(page, r) != pixels(target[0], r) for r in regions))
 
+    def test_anchor_space_metrics_do_not_cover_body_below(self):
+        # 数学空格的字体框过高，但没有字形；A 和上标 1 的框不可缩小。
+        part = {'rect': [40, 45, 65, 85], 'chars': [
+            {'text': 'A', 'rect': [40, 50, 50, 60], 'origin': [40, 58]},
+            {'text': ' ', 'rect': [50, 45, 53, 85], 'origin': [50, 58]},
+            {'text': '1', 'rect': [60, 45, 65, 50], 'origin': [60, 49]}]}
+        self.assertEqual([list(r) for r in fixed_text_rectangles(part)],
+                         [[40, 50, 50, 60], [60, 45, 65, 50]])
+
     def test_open_bracket_can_immediately_precede_fixed_variable(self):
         unit = {'anchors': [{'page': 1, 'rect': [55, 10, 65, 28]}],
                 'slots': [[{'page': 1, 'rect': [10, 10, 54, 28], 'size': 10}], []]}

@@ -23,6 +23,10 @@ def fixed_text_rectangles(part):
     """
     lines = {}
     for char in part.get('chars', []):
+        # 空白字符没有可见墨迹，其字体外框可能伸入下一行；不能让空格
+        # 的空框将待翻译正文误算成公式。非空字形仍保留完整原字框。
+        if 'text' in char and not char['text'].strip():
+            continue
         baseline = round(char['origin'][1], 3)
         lines[baseline] = lines.get(baseline, fitz.Rect()) | fitz.Rect(char['rect'])
     return list(lines.values()) or [fitz.Rect(part['rect'])]
@@ -94,7 +98,8 @@ def safe_erase_rectangles(editable, protected, source=None):
                             parts.append((chr(item[0]), leader[3][2], item[2][1], leader[3]))
                 ligatures[number] = parts
     for part in editable:
-        obstacles = [p['rect'] for p in protected if p['page'] == part['page']]
+        obstacles = [rect for p in protected if p['page'] == part['page']
+                     for rect in fixed_text_rectangles(p)]
         pieces = subtract_rectangles(part['rect'], obstacles)
         # 内缩只为避开 PDF 浮点边界；完整触字证明使用实际内缩结果。
         patches = [fitz.Rect(r.x0 + .01, r.y0 + .01, r.x1 - .01, r.y1 - .01)

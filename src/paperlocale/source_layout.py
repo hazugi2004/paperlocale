@@ -505,7 +505,7 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
         raise ValueError('逻辑分组必须覆盖每个正文块一次，不得重复或遗漏')
     by_id = {b['id']: b for b in blocks}
     protected = list(plan['protected_regions'])
-    protected.extend({'page': b['page'], 'rect': b['rect']} for b in blocks if b['kind'] != 'body')
+    protected.extend(b for b in blocks if b['kind'] != 'body')
     with fitz.open(source) as document:
         for region in protected:
             number, values = region['page'], region['rect']
@@ -561,8 +561,8 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
                     # 不把总外框中的空白误当成文字；图表等仍用完整保护区。
                     nearby = protected + [p for b in blocks if b['id'] != sid and b['kind'] == 'body'
                                           for p in b['parts']]
-                    part['protected_rects'] = [p['rect'] for p in nearby if p['page'] == part['page']
-                                               and rect.intersects(fitz.Rect(p['rect']))]
+                    part['protected_rects'] = [list(box) for p in nearby if p['page'] == part['page']
+                                               for box in fixed_text_rectangles(p) if rect.intersects(box)]
                 parts.append(part)
         source_parts, slots, anchors = [], [[]], []
         for part in parts:

@@ -683,6 +683,8 @@ class SourceLayoutTests(unittest.TestCase):
             {'text': '1', 'rect': [60, 45, 65, 50], 'origin': [60, 49]}]}
         self.assertEqual([list(r) for r in fixed_text_rectangles(part)],
                          [[40, 50, 50, 60], [60, 45, 65, 50]])
+        formula = {'kind': 'formula', 'rect': part['rect'], 'parts': [part]}
+        self.assertEqual(fixed_text_rectangles(formula), fixed_text_rectangles(part))
 
     def test_open_bracket_can_immediately_precede_fixed_variable(self):
         unit = {'anchors': [{'page': 1, 'rect': [55, 10, 65, 28]}],

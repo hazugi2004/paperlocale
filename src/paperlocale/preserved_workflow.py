@@ -19,7 +19,7 @@ from .contracts import read_jsonl, write_jsonl_atomic, validate_translation
 from .providers import Segment, TranslationContext
 from .pipeline import translate_segment_file
 from .safe_text import (safe_erase_rectangles, verify_text_erased, restore_changed_isolated_regions,
-                        page_pixels, region_pixels, fixed_text_rectangles)
+                        page_pixels, region_pixels, fixed_text_rectangles, fixed_characters)
 from .source_layout import (digest, extract_layout, fit_unit, load_plan, save_json,
                             verify_unchanged, anchor_errors)
 from .workflow import (load_manifest, save_manifest, _verify_source_pdf,
@@ -68,7 +68,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     plan, units = load_plan(source, plan_path, detections)
     editable = [part for unit in units for slot in unit['slots'] for part in slot]
     protected = list(plan['protected_regions'])
-    protected.extend({'page': b['page'], 'rect': b['rect']} for b in plan['blocks'] if b['kind'] != 'body')
+    protected.extend(b for b in plan['blocks'] if b['kind'] != 'body')
     protected.extend(part for unit in units for part in unit['anchors'])
     # 删除范围与排字范围分开：先证明可逐字删除，再请求翻译，避免已知
     # 源几何缺陷导致重复模型调用。固定字框虽可重叠，实际删除框不能触及它。
@@ -243,7 +243,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     pixels[index] = page_pixels(original[index]), page_pixels(written[index])
                 a, b = pixels[index]
                 equal = region_pixels(a, region['rect']) == region_pixels(b, region['rect'])
-                if region.get('fixed'):
+                if region.get('fixed') or region.get('kind') == 'formula' and fixed_characters(region):
                     # 字符锚点使用精确浮点裁剪后再光栅化：向外取整的截图可能
                     # 混入框外正文的抗锯齿像素（实测末尾 g 的三个边缘像素），
                     # 它们不是引用本身。图像区域仍使用整页取样以固定插值相位。

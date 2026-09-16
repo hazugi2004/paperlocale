@@ -14,6 +14,15 @@ def region_pixels(image, rect):
     return image.crop(tuple(box)).tobytes()
 
 
+def fixed_characters(part):
+    """公式块与行内锚点使用同一批原字符；图表等整区保护不拆分。"""
+    if 'chars' in part:
+        return part['chars']
+    if part.get('kind') == 'formula':
+        return [char for child in part.get('parts', []) for char in child.get('chars', [])]
+    return []
+
+
 def fixed_text_rectangles(part):
     """按原字符基线划分固定文本核验区，避免把上标下方正文算成引用。
 
@@ -22,7 +31,7 @@ def fixed_text_rectangles(part):
     使用全部原字符外框仍完整覆盖固定文字，同时不保护并不存在的文字。
     """
     lines = {}
-    for char in part.get('chars', []):
+    for char in fixed_characters(part):
         # 空白字符没有可见墨迹，其字体外框可能伸入下一行；不能让空格
         # 的空框将待翻译正文误算成公式。非空字形仍保留完整原字框。
         if 'text' in char and not char['text'].strip():
@@ -131,7 +140,7 @@ def verify_text_erased(page, editable, protected):
                    max(abs(a - b) for a, b in zip(c['origin'], char['origin'])) < .001 for c in chars)
     if any(present(c) for part in editable for c in part['chars'] if c['text'].strip()):
         raise ValueError(f'第{page.number + 1}页仍有未删除的待译原文')
-    if any(not present(c) for part in protected for c in part.get('chars', []) if c['text'].strip()):
+    if any(not present(c) for part in protected for c in fixed_characters(part) if c['text'].strip()):
         raise ValueError(f'第{page.number + 1}页固定字符缺失或位置改变')
 
 

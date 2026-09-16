@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.1 — 2026-09-16
+
+- Preserve proven nonprinting PDF text before checking rotated prose: invisible rendering, zero opacity, and white text on a verified white background. Keep visible rotated prose and white text on dark backgrounds subject to normal layout checks.
+- Recognize publisher italic variable names and math operators/functions adjoining fixed anchors; preserve standalone fragments made entirely of fixed mathematical content.
+- Keep statistical relations, small subscripts, and custom-encoded brackets with their source math; distinguish hyphenated italic prose from short variables.
+- Use existing line leading and join justified fragments on the same baseline; avoid actual neighboring text instead of empty space inside its enclosing block. Preserve source font sizes and fixed anchors.
+- Tighten oversized Type1/CFF subset font bounds only in the working document used for source-character erasure, verify identical page pixels, and restore the original font streams before writing the candidate.
+- Preserve implicit default PDF color spaces and source glyph edges when restoring isolated protected regions.
+- Verify supported fixed Type1/CFF glyphs with masks rendered from their original font programs; compare true source-text intersections against the verified pre-insertion source layer instead of treating empty glyph bounding boxes as ink. Unsupported fonts retain strict region checks.
+- Add synthetic PDF regressions for invisible margin clutter, visible counterexamples, oversized mathematical font bounds, publisher variable/operator classification, color spaces, and deliberate glyph corruption. All 230 local tests pass.
+- Complete a 13-page real-paper run (33 logical groups, 612 protected regions) with zero QA errors/warnings and model visual review. Fixed-anchor paragraphs can remain unevenly spaced; human acceptance remains separate. See [release notes and limits](docs/releases/v0.7.1.md).
+
 ## 0.7.0 — 2026-09-16
 
 - Add an automatic source-layout pipeline for cross-page and image-separated body paragraphs, visible image occupancy, fixed citation/formula anchors, and source-character erasure.

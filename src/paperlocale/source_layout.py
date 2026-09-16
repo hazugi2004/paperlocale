@@ -20,8 +20,8 @@ from PIL import Image, ImageChops, ImageDraw
 from .contracts import FORMULA_RE, URL_RE, segment_id, scientific_literal_spans
 from .references import _reference_geometry
 from .image_geometry import visible_image_regions
-from .safe_text import writing_rectangles
-from .font_geometry import line_ink
+from .safe_text import writing_rectangles, fixed_text_rectangles
+from .font_geometry import line_ink, open_source_for_editing
 from .quantities import find_quantities, standalone_units
 
 CITATION = re.compile(r'\[\s*\d+(?:\s*[,;–−-]\s*\d+)*\s*\]|'
@@ -30,7 +30,7 @@ CITATION = re.compile(r'\[\s*\d+(?:\s*[,;–−-]\s*\d+)*\s*\]|'
                       r'August\b|September\b|October\b|November\b|December\b)'
                       r"[A-Z][A-Za-z'’−–-]+(?:\s+(?:[A-Z][A-Za-z'’−–-]+|et|al\.?|and|&))*"
                       r',?\s+(?:18|19|20)\d{2}[a-z]?(?:[,;][^()]*)?\)')
-MATH_FONT = re.compile(r'math|symbol|cmsy|cmmi|cmex|msam|msbm', re.I)
+MATH_FONT = re.compile(r'math|mth|symbol|cmsy|cmmi|cmex|msam|msbm', re.I)
 CAPTION = re.compile(r'^(?:(?:Extended Data|Supplementary)\s+)?(?:Fig(?:ure)?\.?|Table)\s*\d', re.I)
 METADATA = re.compile(r'^(?:Received:|Accepted:|Published online:|Check for updates$)', re.I)
 NO_LINE_START = set('，。、；：？！）》」』】％‰,.;:!?%)]}')
@@ -57,6 +57,11 @@ def _rect_union(chars: list) -> list[float]:
     return list(rect)
 
 
+def _bold(span):
+    """出版社子集字体有时遗漏 PDF 粗体 flag，但保留明确的字重名称。"""
+    return bool(span['flags'] & 16 or re.search(r'(?:[.-]B|Bold(?:Italic|Oblique)?)$', span['font']))
+
+
 def _parts(block: dict, page_number: int, links: list) -> list[dict]:
     """按字符坐标分开普通文字和固定锚点，不用白块覆盖公式/引用。
 
@@ -68,9 +73,13 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
         chars = []
         for span in line['spans']:
             for char in span['chars']:
-                chars.append({**char, 'fixed': bool(span['flags'] & 1 or MATH_FONT.search(span['font'])),
-                              'size': span['size'], 'italic': bool(span['flags'] & 2),
-                              'bold': bool(span['flags'] & 16),
+                # 出版社数学字体可能将括号映射到控制码，普通中文字体
+                # 无法重建其字形；保留源字形，不能把控制码当正文传给模型。
+                chars.append({**char, 'fixed': bool(span['flags'] & 1 or MATH_FONT.search(span['font'])
+                                                  or not char['c'].isprintable()),
+                              'size': span['size'], 'italic': bool(span['flags'] & 2 or
+                                  re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
+                              'bold': _bold(span),
                               'superscript': bool(span['flags'] & 1)})
         text = ''.join(c['c'] for c in chars)
         # 行内变量未必使用数学字体：真实论文的 β 带帽、R_n、T_d 分布在
@@ -80,7 +89,9 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
         for token in re.finditer(r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9∧]*', text):
             run = chars[token.start():token.end()]
             variable = (bool(re.search('[α-ωΑ-Ω]', token.group())) or
-                        (len(token.group()) <= 3 and run[0]['italic']) or
+                        (len(token.group()) <= 3 and (run[0]['italic'] or
+                         run[0]['fixed'] and any(c['italic'] for c in run)) and
+                         not (len(token.group()) > 1 and re.fullmatch(r'-\s*', text[token.end():]))) or
                         (token.group().isupper() and len(token.group()) <= 6 and
                          all(c['size'] < .95 * normal_size for c in run)))
             if variable:
@@ -108,6 +119,41 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
         for start, end in ranges:
             for char in chars[start:end]:
                 char['fixed'] = True
+        # F1,180544 = 11887、p < 0.001 等统计量可跨普通字、斜体和
+        # 小字号下标。已有变量证据时保护整条数值关系；否则把下标数字
+        # 作为正文字号重排既改变公式排印，又会制造并不存在的空间不足。
+        relation = r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9]*(?:,\d+)*\s*[=<>≤≥]\s*[+−-]?\d+(?:[.,]\d+)*(?:[eE][+−-]?\d+)?'
+        for expression in re.finditer(relation, text):
+            if chars[expression.start()]['fixed']:
+                for char in chars[expression.start():expression.end()]:
+                    char['fixed'] = True
+        # 标准数学函数名可能用普通正体；仅在紧随已识别数学变量或
+        # 数学括号时保护，正文中讨论“log”等单词仍交给翻译器。
+        # 用 ASCII 单词边界；数学字体把括号映射为 ð/Þ 时，Unicode
+        # 的 \b 会错误地把 SDð 当成同一个单词，漏掉整个函数。
+        for function in re.finditer(r'(?<![A-Za-z])(?:exp|log|ln|sin|cos|tan|SD)(?![A-Za-z])', text):
+            right = function.end()
+            while right < len(chars) and (chars[right]['c'].isspace() or chars[right]['c'] in '('):
+                right += 1
+            if right < len(chars) and chars[right]['fixed']:
+                for char in chars[function.start():function.end()]:
+                    char['fixed'] = True
+        # 上下标常被提取成独立字形；两侧均已有数学锚点的运算符也是
+        # 表达式的一部分，不能把加号等当成需要翻译的极窄正文片段。
+        for operator in re.finditer(r'[+−=<>≤≥×÷±*/][0-9.\s+−=<>≤≥×÷±*/]*', text):
+            left, right = operator.start() - 1, operator.end()
+            while left >= 0 and chars[left]['c'].isspace():
+                left -= 1
+            while right < len(chars) and chars[right]['c'].isspace():
+                right += 1
+            # 变量下标中的 + 1 即使后面接正文，也属于公式；要求整个
+            # 非空白运算片段都使用小于正文的字号，不能吞掉正文数值。
+            subscript = all(c['size'] < .95 * normal_size
+                            for c in chars[operator.start():operator.end()] if not c['c'].isspace())
+            if left >= 0 and chars[left]['fixed'] and (
+                    right < len(chars) and chars[right]['fixed'] or subscript):
+                for char in chars[operator.start():operator.end()]:
+                    char['fixed'] = True
         for link in links:
             # 引用框轻微碰到正文词尾时用字符中心归属；但“可点击”本身
             # 也不等于引用。出版社的宽链接框曾覆盖版权说明、附加信息等
@@ -230,6 +276,30 @@ def _preserve_auxiliary_sections(blocks: list[dict]) -> None:
             block['kind'] = 'preserve'
 
 
+def _nonprinting_line(page: fitz.Page, line: dict, paint: dict) -> str | None:
+    """识别有绘制证据的非可见文字，返回保留原因而非删除源对象。
+
+    PDF 提取文字不等于页面可见正文。render mode 3 / 零透明度按逐字符
+    绘制记录判断；白字还必须在其完整区域实测为纯白，不能丢掉深色底白字。
+    未匹配绘制记录、低对比度或部分可见时都保守保留普通分类路径。
+    """
+    chars = [c for s in line['spans'] for c in s['chars'] if not c['c'].isspace()]
+    keys = [(ord(c['c']), round(c['origin'][0], 3), round(c['origin'][1], 3)) for c in chars]
+    if keys and all(k in paint and all(paint[k]) for k in keys):
+        return 'nonpainting-text'
+    # PyMuPDF 版本可能返回带符号 ARGB；颜色仅取 RGB，透明度单独按绘制记录核验。
+    if not chars or any(s['color'] & 0xffffff != 0xffffff for s in line['spans'] if s['chars']):
+        return None
+    rect = fitz.Rect(line['bbox']) & page.rect
+    if rect.is_empty:
+        return None
+    pixels = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect,
+                             colorspace=fitz.csRGB, alpha=False)
+    if pixels.samples and min(pixels.samples) == 255:
+        return 'white-text-on-blank-background'
+    return None
+
+
 def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
@@ -238,7 +308,8 @@ def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
     """
     _, _, _, references = _reference_geometry(source)
     blocks, protected, issues = [], [], []
-    with fitz.open(source) as document:
+    document, _ = open_source_for_editing(source)
+    with document:
         for number, page in enumerate(document, 1):
             if page.rotation or list(page.annots(types=(fitz.PDF_ANNOT_REDACT,)) or []):
                 issues.append(f'第{number}页旋转或已有删除标注，尚不受自动源版面模式支持')
@@ -273,6 +344,13 @@ def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
                     issues.append(f'第{number}页图片外框覆盖自动识别的正文，尚不能自动区分透明图片与图内文字')
                     break
             protected.extend(boxes)
+            # 同一坐标可能有不可见OCR层与可见文字重叠：只有全部绘制记录
+            # 都不着色才认定为非打印对象，不能因一份隐藏副本而排除可见正文。
+            paint = {}
+            for span in page.get_texttrace():
+                hidden = span['type'] == 3 or span['opacity'] == 0
+                for code, _, origin, _ in span['chars']:
+                    paint.setdefault((code, round(origin[0], 3), round(origin[1], 3)), []).append(hidden)
             raw = page.get_text('rawdict')['blocks']
             text_blocks = []
             for native in raw:
@@ -286,17 +364,21 @@ def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
                     covers = [box for box in boxes if lr.get_area() > 0 and
                               (lr & fitz.Rect(box['rect'])).get_area() / lr.get_area() > .5]
                     role = covers[0]['kind'] if covers else 'body'
+                    reason = _nonprinting_line(page, line, paint) if role == 'body' else None
+                    if reason:
+                        role = 'preserve'
                     # 同一个 PDF 文本块可能先有两行大号粗体章节标题，再接
                     # 小号正文。按普通字符加权的字号/字重分段，防止联合翻译
                     # 后把正文填入标题行。图注的粗体前缀仍与整条图注一起保护。
-                    style_chars = [(s['size'], bool(s['flags'] & 16)) for s in line['spans']
+                    style_chars = [(s['size'], _bold(s)) for s in line['spans']
                                    for c in s['chars'] if not c['c'].isspace() and not s['flags'] & 1]
                     style = (median(s[0] for s in style_chars),
                              sum(s[1] for s in style_chars) > len(style_chars) / 2) if style_chars else (0, False)
                     changed = (split and role == 'body' and not CAPTION.match(native_text) and
                                (abs(split[-1]['_style'][0] - style[0]) > .6 or split[-1]['_style'][1] != style[1]))
-                    if not split or split[-1]['_role'] != role or changed:
-                        split.append({'lines': [], 'bbox': list(lr), '_role': role, '_style': style})
+                    if not split or split[-1]['_role'] != role or split[-1]['_reason'] != reason or changed:
+                        split.append({'lines': [], 'bbox': list(lr), '_role': role, '_style': style,
+                                      '_reason': reason})
                     split[-1]['lines'].append(line)
                     split[-1]['bbox'] = list(fitz.Rect(split[-1]['bbox']) | lr)
                 text_blocks.extend(split)
@@ -309,9 +391,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
                 if not value:
                     continue
                 kind = block['_role']
-                if any(tuple(l['dir']) != (1, 0) for l in block['lines']) and kind == 'body':
-                    kind = 'review'
-                elif kind == 'body' and CAPTION.match(value):
+                if kind == 'body' and CAPTION.match(value):
                     kind = 'caption'
                 elif kind == 'body' and re.fullmatch(r'(?:https?://|www\.)\S+', value):
                     # 独立网址（含句末标点）无需翻译。不能只留下网址对象、
@@ -321,6 +401,10 @@ def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
                     kind = 'formula'
                 elif kind == 'body' and (rect.y1 < 35 or rect.y0 > page.rect.height - 30):
                     kind = 'header-footer'
+                elif kind == 'body' and any(tuple(l['dir']) != (1, 0) for l in block['lines']):
+                    # 先排除有证据的符号、网址、页眉脚注；真正旋转的自然
+                    # 语言正文仍需等待支持，不能把所有旋转文字都静默透传。
+                    kind = 'review'
                 # 真实 Nature 论文有两段 References 标题与书目合并的块；
                 # 使用明确标题或多条编号+年份证据，不把任意数字段落当书目。
                 if re.match(r'^References(?:\s|$)', value, re.I) or (
@@ -334,9 +418,14 @@ def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
                         and len(words) > 8 and sum(w[0].isupper() for w in words) / len(words) > .8):
                     kind = 'preserve'
                 parts = _parts(block, number, page.get_links())
+                # 只有原位数学/引用锚点的片段没有可翻译正文，直接保护；
+                # 例如被出版社拆成独立文本块的行内下标表达式。
+                if kind == 'body' and parts and all(p['fixed'] for p in parts):
+                    kind = 'formula'
                 identity = segment_id(json.dumps([number, list(rect), value], ensure_ascii=False))
                 blocks.append({'id': identity, 'page': number, 'rect': list(rect),
                                'text': value, 'parts': parts, 'kind': kind,
+                               'preserve_reason': block['_reason'],
                                'page_width': page.rect.width})
     # 期刊图注也会分成左右两栏；视觉模型有时只识别带 Fig. 标题的一栏。
     # 将同页、同字号、横向相邻且垂直带重合的另一栏归入图注，避免把它
@@ -416,7 +505,7 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
         raise ValueError('逻辑分组必须覆盖每个正文块一次，不得重复或遗漏')
     by_id = {b['id']: b for b in blocks}
     protected = list(plan['protected_regions'])
-    protected.extend({'page': b['page'], 'rect': b['rect']} for b in blocks if b['kind'] != 'body')
+    protected.extend(b for b in blocks if b['kind'] != 'body')
     with fitz.open(source) as document:
         for region in protected:
             number, values = region['page'], region['rect']
@@ -446,12 +535,34 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
                 if not part['fixed'] and not later_on_line:
                     rect = fitz.Rect(part['rect'])
                     rect.x1 = max(rect.x1, block['rect'][2])
-                    part['writing_rect'] = list(rect)
+                    if list(rect) != part['rect'] or 'writing_rect' in part:
+                        part['writing_rect'] = list(rect)
                 if not part['fixed']:
+                    part['source_block'] = sid
                     rect = fitz.Rect(part.get('writing_rect', part['rect']))
-                    nearby = protected + [b for b in blocks if b['id'] != sid]
-                    part['protected_rects'] = [p['rect'] for p in nearby if p['page'] == part['page']
-                                               and rect.intersects(fitz.Rect(p['rect']))]
+                    # 原英文字框只描述该行字体高度，不包括行间留白。中文
+                    # 墨迹可能略高于英文而仍完全容得下；按相邻正文行之间
+                    # 空白的中线分配可写高度，保留原字号，不侵入邻行或保护区。
+                    # 数学上下标会把一个物理段落拆成多个原生块，因此邻行
+                    # 来自同页、同一水平范围内的正文，而不局限于原生块编号。
+                    peers = [p for peer in blocks if peer['kind'] == 'body' and peer['page'] == part['page']
+                             for p in peer['parts'] if not p['fixed']
+                             and min(p['rect'][2], part['rect'][2]) > max(p['rect'][0], part['rect'][0])]
+                    above = [p['rect'][3] for p in peers if p['rect'][3] <= rect.y0]
+                    below = [p['rect'][1] for p in peers if p['rect'][1] >= rect.y1]
+                    if above:
+                        rect.y0 -= min(rect.y0 - max(above), part['size']) / 2
+                    if below:
+                        rect.y1 += min(min(below) - rect.y1, part['size']) / 2
+                    if list(rect) != part['rect'] or 'writing_rect' in part:
+                        part['writing_rect'] = list(rect)
+                    # 邻段的总外框可能覆盖本段末行（例如下一段首行从右侧
+                    # 公式后开始、第二行回到栏左边）。避让实际文字片段，
+                    # 不把总外框中的空白误当成文字；图表等仍用完整保护区。
+                    nearby = protected + [p for b in blocks if b['id'] != sid and b['kind'] == 'body'
+                                          for p in b['parts']]
+                    part['protected_rects'] = [list(box) for p in nearby if p['page'] == part['page']
+                                               for box in fixed_text_rectangles(p) if rect.intersects(box)]
                 parts.append(part)
         source_parts, slots, anchors = [], [[]], []
         for part in parts:
@@ -471,7 +582,29 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
         text = re.sub(r'(?<=[A-Za-z])- (?=[a-z])', '', text)
         if not text or not any(slots):
             raise ValueError('自动分组没有可翻译文字，正文分类尚未闭合')
-        units.append({'id': segment_id(text), 'source': text, 'slots': slots,
+        # 两端对齐的英文词有时被 PDF 提取器拆成多个同基线“行”。这些
+        # 词之间没有固定锚点，应共用连续排字区域，不能把原空格变成不可
+        # 使用的孔洞。限定同一原生块/字重/字号和相邻范围，避免跨栏合并。
+        joined_slots = []
+        for slot in slots:
+            joined = []
+            for part in slot:
+                last = joined[-1] if joined else None
+                if (last and last.get('source_block') == part.get('source_block')
+                        and last['page'] == part['page'] and last['bold'] == part['bold']
+                        and abs(last['baseline'] - part['baseline']) < .1
+                        and abs(last['size'] - part['size']) < .1
+                        and 0 <= part['rect'][0] - last['rect'][2] <= 2 * part['size']):
+                    last['writing_rect'] = list(fitz.Rect(last.get('writing_rect', last['rect'])) |
+                                                fitz.Rect(part.get('writing_rect', part['rect'])))
+                    last['rect'] = list(fitz.Rect(last['rect']) | fitz.Rect(part['rect']))
+                    last['chars'] = last['chars'] + part['chars']
+                    last['text'] += ' ' + part['text']
+                    last['protected_rects'] = last.get('protected_rects', []) + part.get('protected_rects', [])
+                else:
+                    joined.append(dict(part))
+            joined_slots.append(joined)
+        units.append({'id': segment_id(text), 'source': text, 'slots': joined_slots,
                       'anchors': anchors, 'blocks': ids})
     return plan, units
 
@@ -515,8 +648,9 @@ def _fit_slot(slot, tokens, unit, current, regular_font, bold_font, *, spread=Fa
         obstacles = []
         for anchor in unit['anchors']:
             if anchor['page'] == part['page'] and anchor.get('rect'):
-                box = fitz.Rect((fitz.Rect(anchor['rect']) * 2).irect) / 2
-                obstacles.append(fitz.Rect(box.x0 - .25, box.y0 - .25, box.x1 + .25, box.y1 + .25))
+                for rect in fixed_text_rectangles(anchor):
+                    box = fitz.Rect((rect * 2).irect) / 2
+                    obstacles.append(fitz.Rect(box.x0 - .25, box.y0 - .25, box.x1 + .25, box.y1 + .25))
         obstacles.extend(fitz.Rect(r) for r in part.get('protected_rects', []))
         free = writing_rectangles(part.get('writing_rect', part['rect']), obstacles)
         if not free:

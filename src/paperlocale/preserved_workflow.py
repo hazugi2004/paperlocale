@@ -13,11 +13,14 @@ from pathlib import Path
 
 import pymupdf as fitz
 
+from .font_geometry import open_source_for_editing, restore_source_fonts
+
 from .contracts import read_jsonl, write_jsonl_atomic, validate_translation
 from .providers import Segment, TranslationContext
 from .pipeline import translate_segment_file
 from .safe_text import (safe_erase_rectangles, verify_text_erased, restore_changed_isolated_regions,
-                        page_pixels, region_pixels, fixed_text_rectangles)
+                        page_pixels, region_pixels, fixed_text_rectangles, fixed_characters,
+                        restore_default_color_spaces, verify_fixed_ink)
 from .source_layout import (digest, extract_layout, fit_unit, load_plan, save_json,
                             verify_unchanged, anchor_errors)
 from .workflow import (load_manifest, save_manifest, _verify_source_pdf,
@@ -66,7 +69,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     plan, units = load_plan(source, plan_path, detections)
     editable = [part for unit in units for slot in unit['slots'] for part in slot]
     protected = list(plan['protected_regions'])
-    protected.extend({'page': b['page'], 'rect': b['rect']} for b in plan['blocks'] if b['kind'] != 'body')
+    protected.extend(b for b in plan['blocks'] if b['kind'] != 'body')
     protected.extend(part for unit in units for part in unit['anchors'])
     # 删除范围与排字范围分开：先证明可逐字删除，再请求翻译，避免已知
     # 源几何缺陷导致重复模型调用。固定字框虽可重叠，实际删除框不能触及它。
@@ -178,7 +181,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     # 写入和完整检查只针对临时文件。任何异常均不触碰已有候选，也不改变验收。
     temporary = root / '.preserved.tmp.pdf'
     try:
-        with fitz.open(source) as document:
+        document, original_fonts = open_source_for_editing(source)
+        with document, fitz.open(source) as original:
             for number, page in enumerate(document, 1):
                 edits = [p for p in editable if p['page'] == number]
                 if not edits:
@@ -189,6 +193,14 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                                       graphics=fitz.PDF_REDACT_LINE_ART_NONE,
                                       text=fitz.PDF_REDACT_TEXT_REMOVE)
                 verify_text_erased(page, edits, [p for p in protected if p['page'] == number])
+                restore_default_color_spaces(page, original[number - 1])
+            restore_source_fonts(document, original_fonts)
+            # 固定字形与待译正文可能在抗锯齿像素上叠合。保留仅删除正文
+            # 的原字形层作为这些混合像素的参考；此时尚未插入任何中文。
+            reference_bytes = document.tobytes(garbage=0, deflate=True)
+            for number, page in enumerate(document, 1):
+                if not any(p['page'] == number for p in editable):
+                    continue
                 page.insert_font(fontname='PLPreserved', fontbuffer=font_bytes)
                 if bold_bytes is not None:
                     page.insert_font(fontname='PLPreservedBold', fontbuffer=bold_bytes)
@@ -205,7 +217,12 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             restored = False
             vector_restorations = []
             annotation_restorations = []
+            color_space_restorations = []
             for number, page in enumerate(document, 1):
+                if restore_default_color_spaces(page, original[number - 1]):
+                    page = document.reload_page(page)
+                    color_space_restorations.append(number)
+                    restored = True
                 restored |= restore_changed_isolated_regions(page, original[number - 1],
                               [p for p in editable if p['page'] == number],
                               [p for p in protected if p['page'] == number])
@@ -230,16 +247,19 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         if repaired is not None:
             temporary.write_bytes(repaired)
         evidence = verify_unchanged(source, temporary, editable)
+        checked_ink, ink_evidence = verify_fixed_ink(source, temporary, reference_bytes, protected, editable)
         with fitz.open(source) as original, fitz.open(temporary) as written:
             # 保护区域不享有正文掩膜边缘的抗锯齿容差，包括上标、公式与表格文字。
             pixels = {}
-            for region in protected:
+            for region_number, region in enumerate(protected):
+                if region_number in checked_ink:
+                    continue
                 index = region['page'] - 1
                 if index not in pixels:
                     pixels[index] = page_pixels(original[index]), page_pixels(written[index])
                 a, b = pixels[index]
                 equal = region_pixels(a, region['rect']) == region_pixels(b, region['rect'])
-                if region.get('fixed'):
+                if region.get('fixed') or region.get('kind') == 'formula' and fixed_characters(region):
                     # 字符锚点使用精确浮点裁剪后再光栅化：向外取整的截图可能
                     # 混入框外正文的抗锯齿像素（实测末尾 g 的三个边缘像素），
                     # 它们不是引用本身。图像区域仍使用整页取样以固定插值相位。
@@ -274,6 +294,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                         anchor_dpi=288,
                         vector_restorations=vector_restorations,
                         annotation_restorations=annotation_restorations,
+                        color_space_restorations=color_space_restorations,
+                        fixed_ink_checks=ink_evidence,
                         all_translations_present=True)
         candidate = root / 'render_output' / 'translated.pdf'
         candidate.parent.mkdir(exist_ok=True)

@@ -1,6 +1,6 @@
 """将正文删除范围和排字范围分离，保留原始引用/公式字符。"""
 import pymupdf as fitz
-from PIL import Image
+from PIL import Image, ImageChops
 
 
 def page_pixels(page):
@@ -9,9 +9,64 @@ def page_pixels(page):
     return Image.frombytes('RGB', (pixmap.width, pixmap.height), pixmap.samples)
 
 
+def restore_default_color_spaces(page, source_page):
+    """删除引擎会清理隐式使用的默认色彩空间；恢复源定义而非重配颜色。
+
+    DeviceCMYK/RGB/Gray 绘制命令并不显式引用 Default* 名称，但仍受它们
+    控制。删除这些资源会让保留的引文、图标变色。源对象编号在当前工作流
+    中保持不变；调用后须重新加载页面，使渲染器读取恢复的资源。
+    """
+    changed = False
+    for name in ('DefaultGray', 'DefaultRGB', 'DefaultCMYK'):
+        key = 'Resources/ColorSpace/' + name
+        expected = source_page.parent.xref_get_key(source_page.xref, key)
+        if expected[0] != 'null' and page.parent.xref_get_key(page.xref, key) != expected:
+            page.parent.xref_set_key(page.xref, key, expected[1])
+            changed = True
+    return changed
+
+
+def verify_fixed_ink(source, written, reference_bytes, protected, editable):
+    """逐像素核验原字体字形；正文与上标混合像素使用删除正文后的基准。
+
+    基准在逐字符确认安全删除、恢复原字体和默认色彩空间后、插入任何
+    译文前保存。只有原正文墨迹与固定字形墨迹实际重叠的像素才使用该
+    基准；其他固定像素直接与原 PDF 比较。不忽略差异、不放宽颜色容差。
+    """
+    from .font_geometry import source_anchor_masks
+    fixed_masks, supported = source_anchor_masks(source, protected)
+    body_masks, _ = source_anchor_masks(source, editable)
+    evidence = []
+    with fitz.open(source) as original, fitz.open(written) as output, \
+            fitz.open(stream=reference_bytes, filetype='pdf') as reference:
+        for number, mask in fixed_masks.items():
+            def pixels(document):
+                pix = document[number - 1].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=False)
+                return Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
+            fixed = mask.point(lambda value: 255 if value else 0)
+            body = body_masks.get(number, Image.new('L', mask.size)).point(lambda value: 255 if value else 0)
+            overlap = ImageChops.multiply(fixed, body)
+            expected = Image.composite(pixels(reference), pixels(original), overlap)
+            difference = ImageChops.multiply(ImageChops.difference(expected, pixels(output)), fixed.convert('RGB'))
+            if difference.getbbox():
+                raise ValueError(f'第{number}页固定字形墨迹像素改变，拒绝发布候选')
+            evidence.append({'page': number, 'fixed_ink_pixels': fixed.histogram()[255],
+                             'body_overlap_pixels': overlap.histogram()[255]})
+    return supported, evidence
+
+
 def region_pixels(image, rect):
     box = (fitz.Rect(rect) * 2).irect
     return image.crop(tuple(box)).tobytes()
+
+
+def fixed_characters(part):
+    """公式块与行内锚点使用同一批原字符；图表等整区保护不拆分。"""
+    if 'chars' in part:
+        return part['chars']
+    if part.get('kind') == 'formula':
+        return [char for child in part.get('parts', []) for char in child.get('chars', [])]
+    return []
 
 
 def fixed_text_rectangles(part):
@@ -22,7 +77,11 @@ def fixed_text_rectangles(part):
     使用全部原字符外框仍完整覆盖固定文字，同时不保护并不存在的文字。
     """
     lines = {}
-    for char in part.get('chars', []):
+    for char in fixed_characters(part):
+        # 空白字符没有可见墨迹，其字体外框可能伸入下一行；不能让空格
+        # 的空框将待翻译正文误算成公式。非空字形仍保留完整原字框。
+        if 'text' in char and not char['text'].strip():
+            continue
         baseline = round(char['origin'][1], 3)
         lines[baseline] = lines.get(baseline, fitz.Rect()) | fitz.Rect(char['rect'])
     return list(lines.values()) or [fitz.Rect(part['rect'])]
@@ -94,7 +153,8 @@ def safe_erase_rectangles(editable, protected, source=None):
                             parts.append((chr(item[0]), leader[3][2], item[2][1], leader[3]))
                 ligatures[number] = parts
     for part in editable:
-        obstacles = [p['rect'] for p in protected if p['page'] == part['page']]
+        obstacles = [rect for p in protected if p['page'] == part['page']
+                     for rect in fixed_text_rectangles(p)]
         pieces = subtract_rectangles(part['rect'], obstacles)
         # 内缩只为避开 PDF 浮点边界；完整触字证明使用实际内缩结果。
         patches = [fitz.Rect(r.x0 + .01, r.y0 + .01, r.x1 - .01, r.y1 - .01)
@@ -126,7 +186,7 @@ def verify_text_erased(page, editable, protected):
                    max(abs(a - b) for a, b in zip(c['origin'], char['origin'])) < .001 for c in chars)
     if any(present(c) for part in editable for c in part['chars'] if c['text'].strip()):
         raise ValueError(f'第{page.number + 1}页仍有未删除的待译原文')
-    if any(not present(c) for part in protected for c in part.get('chars', []) if c['text'].strip()):
+    if any(not present(c) for part in protected for c in fixed_characters(part) if c['text'].strip()):
         raise ValueError(f'第{page.number + 1}页固定字符缺失或位置改变')
 
 
@@ -150,7 +210,12 @@ def restore_changed_isolated_regions(page, source_page, editable, protected):
             # 即使变换矩阵严格为单位矩阵也会出现插值色差。与整页核验
             # 使用同一 144 dpi 网格向外对齐，且不得碰到任何译文可写区。
             # 这改变重放裁剪范围，不改变源对象位置或核验容差。
-            aligned = (fitz.Rect((rect * 2).irect) / 2) & page.rect
+            aligned = fitz.Rect((rect * 2).irect) / 2
+            # f 等字形的墨迹可略超出 PDF 的前进宽度；重放时额外保留
+            # 一个像素的出血，避免裁掉末笔。只扩大复制范围，不放宽 QA；
+            # 必须与正文可写区域分离，且最终逐像素比较仍要求完全相同。
+            aligned = fitz.Rect(aligned.x0 - .5, aligned.y0 - .5,
+                                aligned.x1 + .5, aligned.y1 + .5) & page.rect
             if not any(aligned.intersects(r) for r in writing):
                 rect = aligned
             if not any(r.contains(rect) for r in regions):
@@ -174,4 +239,6 @@ def restore_changed_isolated_regions(page, source_page, editable, protected):
                 group = source_page.parent.xref_object(int(group.split()[0]))
             page.parent.xref_set_key(form, 'Group', group)
             page.parent.xref_set_key(form, 'Group/I', 'true')
+    # 本函数也调用了删除引擎，可能再次清理 Default* 资源。
+    restore_default_color_spaces(page, source_page)
     return True

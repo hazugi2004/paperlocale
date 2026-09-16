@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1 — Unreleased
+
+- Preserve proven nonprinting PDF text before checking rotated prose: invisible rendering, zero opacity, and white text on a verified white background. Keep visible rotated prose and white text on dark backgrounds subject to normal layout checks.
+- Recognize publisher italic variable names and math operators/functions adjoining fixed anchors; preserve standalone fragments made entirely of fixed mathematical content.
+- Tighten oversized Type1/CFF subset font bounds only in the working document used for source-character erasure, verify identical page pixels, and restore the original font streams before writing the candidate.
+- Add synthetic PDF regressions for invisible margin clutter, visible counterexamples, oversized mathematical font bounds, and publisher variable/operator classification.
+
 ## 0.7.0 — 2026-09-16
 
 - Add an automatic source-layout pipeline for cross-page and image-separated body paragraphs, visible image occupancy, fixed citation/formula anchors, and source-character erasure.

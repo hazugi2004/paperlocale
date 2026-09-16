@@ -15,6 +15,7 @@ from paperlocale.domains import load_domain_pack
 from paperlocale.workflow import initialize_run, load_manifest
 from paperlocale.image_geometry import visible_image_regions
 from paperlocale.safe_text import fixed_text_rectangles
+from paperlocale.font_geometry import open_source_for_editing, restore_source_fonts
 
 
 def make_fixture(root):
@@ -67,6 +68,131 @@ class Provider(TranslationProvider):
 
 
 class SourceLayoutTests(unittest.TestCase):
+    def test_publisher_italic_variables_keep_adjacent_operators_and_functions(self):
+        from paperlocale.source_layout import _parts
+        spans, x = [], 40
+        for text, font in [('where ', 'Body'), ('R', 'Publisher.I'),
+                           (' = exp α0', 'Body'), (' changes.', 'Body')]:
+            chars = []
+            for char in text:
+                chars.append({'c': char, 'origin': (x, 100), 'bbox': (x, 92, x + 5, 102)})
+                x += 5
+            spans.append({'chars': chars, 'font': font, 'size': 10, 'flags': 0})
+        parts = _parts({'lines': [{'spans': spans}]}, 1, [])
+        fixed = ''.join(p['text'] for p in parts if p['fixed'])
+        ordinary = ''.join(p['text'] for p in parts if not p['fixed'])
+        for token in ['R', '=', 'exp', 'α0']:
+            self.assertIn(token, fixed)
+        self.assertIn('where', ordinary)
+        self.assertIn('changes.', ordinary)
+
+    def test_oversized_cff_metrics_do_not_erase_math_on_previous_line(self):
+        """自造合法 CFF：源外框过高，但字形不与下一行相交；最终字体须恢复。"""
+        from fontTools.fontBuilder import FontBuilder
+        from fontTools.pens.t2CharStringPen import T2CharStringPen
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            builder = FontBuilder(1000, isTTF=False)
+            builder.setupGlyphOrder(['.notdef', 'P'])
+            builder.setupCharacterMap({80: 'P'})
+            charstrings = {}
+            for name in ['.notdef', 'P']:
+                pen = T2CharStringPen(500, None)
+                if name == 'P':
+                    pen.moveTo((50, -1000)); pen.lineTo((450, -1000))
+                    pen.lineTo((450, 0)); pen.lineTo((50, 0)); pen.closePath()
+                charstrings[name] = pen.getCharString()
+            builder.setupCFF('FixtureMath', {'FullName': 'FixtureMath', 'FamilyName': 'FixtureMath',
+                                           'Weight': 'Regular'}, charstrings, {})
+            builder.setupHorizontalMetrics({name: (500, 0) for name in charstrings})
+            builder.setupHorizontalHeader(ascent=770, descent=-2958)
+            builder.setupNameTable({'familyName': 'FixtureMath', 'styleName': 'Regular'})
+            builder.setupOS2(sTypoAscender=770, sTypoDescender=-2958, usWinAscent=770, usWinDescent=2958)
+            builder.setupPost()
+            builder.font['CFF '].cff[0].FontBBox = [-20, -2958, 1447, 770]
+            builder.font.recalcBBoxes = False
+            source = root / 'source.pdf'
+            # 使用原始 CFF 流嵌入 Type1，与出版社数学字体一致。
+            cff_buffer = BytesIO()
+            builder.font['CFF '].cff.compile(cff_buffer, builder.font)
+            with fitz.open() as document:
+                page = document.new_page()
+                font_xref = page.insert_font(fontname='FixtureMath', fontbuffer=cff_buffer.getvalue())
+                page.insert_text((100, 100), 'P', fontname='FixtureMath', fontsize=8)
+                page.insert_text((100, 118), 'abc', fontsize=8)
+                # PyMuPDF 默认包装成 CID；改成该夹具明确的单字节 Type1
+                # 编码，模拟源论文的 CFF/Type1 配置，无需复制第三方字体。
+                import re
+                descendant = int(re.search(r'\d+', document.xref_get_key(font_xref, 'DescendantFonts')[1]).group())
+                descriptor = int(document.xref_get_key(descendant, 'FontDescriptor')[1].split()[0])
+                stream = int(document.xref_get_key(descriptor, 'FontFile3')[1].split()[0])
+                document.xref_set_key(stream, 'Subtype', '/Type1C')
+                document.xref_set_key(descriptor, 'Ascent', '0')
+                document.xref_set_key(descriptor, 'Descent', '0')
+                document.xref_set_key(descriptor, 'FontBBox', '[50 -1000 450 0]')
+                document.update_object(font_xref, f'<< /Type /Font /Subtype /Type1 /BaseFont /FixtureMath '
+                    f'/FirstChar 80 /LastChar 80 /Widths [500] /Encoding /WinAnsiEncoding '
+                    f'/FontDescriptor {descriptor} 0 R >>')
+                first_stream = page.get_contents()[0]
+                document.update_stream(first_stream, document.xref_stream(first_stream).replace(b'<0001>', b'<50>'))
+                document.save(source)
+            document, originals = open_source_for_editing(source)
+            with document:
+                self.assertTrue(originals)
+                document[0].add_redact_annot((100, 114, 105, 116), fill=False)
+                document[0].apply_redactions(images=0, graphics=0, text=0)
+                restore_source_fonts(document, originals)
+                for xref, stream in originals.items():
+                    self.assertEqual(document.xref_stream(xref), stream)
+                result = document.tobytes()
+            with fitz.open(stream=result, filetype='pdf') as written:
+                self.assertIn('P', written[0].get_text())
+                self.assertNotIn('a', written[0].get_text())
+
+    def test_nonprinting_margin_text_is_preserved_and_body_still_translates(self):
+        """真实绘制状态回归，不以颜色、旋转或字符串名单替代可见性证据。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'margin.pdf'
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_text((60, 100), 'Visible body must still be translated.', fontsize=10)
+                page.insert_text((15, 340), '1234567890():,;', rotate=90, color=(1, 1, 1), fontsize=5)
+                page.insert_text((30, 340), 'Hidden margin words', rotate=90, color=(1, 1, 1), fontsize=5)
+                page.insert_text((45, 340), 'Nonpainting words', rotate=90, render_mode=3, fontsize=5)
+                page.insert_text((60, 340), 'Transparent words', rotate=90, fill_opacity=0, fontsize=5)
+                page.insert_text((75, 340), '9876543210', rotate=90, fontsize=5)
+                doc.save(source)
+            plan = extract_layout(source)
+            save_json(root / 'plan.json', plan)
+            _, units = load_plan(source, root / 'plan.json')
+            self.assertEqual([u['source'] for u in units], ['Visible body must still be translated.'])
+            by_text = {b['text']: b for b in plan['blocks']}
+            self.assertEqual(by_text['1234567890():,;']['preserve_reason'], 'white-text-on-blank-background')
+            self.assertEqual(by_text['Hidden margin words']['kind'], 'preserve')
+            for text in ['Nonpainting words', 'Transparent words']:
+                self.assertEqual(by_text[text]['preserve_reason'], 'nonpainting-text')
+            self.assertEqual(by_text['9876543210']['kind'], 'formula')
+
+    def test_visible_rotated_prose_and_white_text_on_dark_background_are_not_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'visible.pdf'
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_text((60, 100), 'Ordinary body remains available.', fontsize=10)
+                page.draw_rect((70, 140, 330, 190), fill=(0, 0, 0))
+                page.insert_text((80, 165), 'White body on a dark background.', color=(1, 1, 1), fontsize=10)
+                page.insert_text((40, 400), 'Rotated visible body words', rotate=90, fontsize=10)
+                doc.save(source)
+            plan = extract_layout(source)
+            by_text = {b['text']: b for b in plan['blocks']}
+            self.assertEqual(by_text['White body on a dark background.']['kind'], 'body')
+            self.assertEqual(by_text['Rotated visible body words']['kind'], 'review')
+            save_json(root / 'plan.json', plan)
+            with self.assertRaisesRegex(ValueError, '待确认'):
+                load_plan(source, root / 'plan.json')
+
     def setUp(self):
         # 几何/写入单元测试使用自有明确样例；ONNX 实测在真实论文验证中单独执行。
         self.detector = patch('paperlocale.layout_detection.detect_regions', return_value=[])

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pymupdf as fitz
 
+from .font_geometry import open_source_for_editing, restore_source_fonts
+
 from .contracts import read_jsonl, write_jsonl_atomic, validate_translation
 from .providers import Segment, TranslationContext
 from .pipeline import translate_segment_file
@@ -178,7 +180,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     # 写入和完整检查只针对临时文件。任何异常均不触碰已有候选，也不改变验收。
     temporary = root / '.preserved.tmp.pdf'
     try:
-        with fitz.open(source) as document:
+        document, original_fonts = open_source_for_editing(source)
+        with document:
             for number, page in enumerate(document, 1):
                 edits = [p for p in editable if p['page'] == number]
                 if not edits:
@@ -198,6 +201,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     rect, size = fitz.Rect(item['rect']), item['font_size']
                     page.insert_text((item.get('origin_x', rect.x0), item.get('baseline', rect.y0 + font.ascender * size)), item['target'],
                                      fontname='PLPreservedBold' if item.get('bold') else 'PLPreserved', fontsize=size)
+            restore_source_fonts(document, original_fonts)
             document.save(temporary, garbage=0, deflate=True)
         # 以序列化后重新打开的 PDF 为核验对象。MuPDF 编辑中间态与落盘后
         # 的图片插值可能不同，不能对中间态的差异过早重放整张图。

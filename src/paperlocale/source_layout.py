@@ -57,6 +57,11 @@ def _rect_union(chars: list) -> list[float]:
     return list(rect)
 
 
+def _bold(span):
+    """出版社子集字体有时遗漏 PDF 粗体 flag，但保留明确的字重名称。"""
+    return bool(span['flags'] & 16 or re.search(r'(?:[.-]B|Bold(?:Italic|Oblique)?)$', span['font']))
+
+
 def _parts(block: dict, page_number: int, links: list) -> list[dict]:
     """按字符坐标分开普通文字和固定锚点，不用白块覆盖公式/引用。
 
@@ -74,7 +79,7 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
                                                   or not char['c'].isprintable()),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
                                   re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
-                              'bold': bool(span['flags'] & 16),
+                              'bold': _bold(span),
                               'superscript': bool(span['flags'] & 1)})
         text = ''.join(c['c'] for c in chars)
         # 行内变量未必使用数学字体：真实论文的 β 带帽、R_n、T_d 分布在
@@ -84,7 +89,8 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
         for token in re.finditer(r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9∧]*', text):
             run = chars[token.start():token.end()]
             variable = (bool(re.search('[α-ωΑ-Ω]', token.group())) or
-                        (len(token.group()) <= 3 and run[0]['italic']) or
+                        (len(token.group()) <= 3 and run[0]['italic'] and
+                         not (len(token.group()) > 1 and re.fullmatch(r'-\s*', text[token.end():]))) or
                         (token.group().isupper() and len(token.group()) <= 6 and
                          all(c['size'] < .95 * normal_size for c in run)))
             if variable:
@@ -348,7 +354,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None) -> dict:
                     # 同一个 PDF 文本块可能先有两行大号粗体章节标题，再接
                     # 小号正文。按普通字符加权的字号/字重分段，防止联合翻译
                     # 后把正文填入标题行。图注的粗体前缀仍与整条图注一起保护。
-                    style_chars = [(s['size'], bool(s['flags'] & 16)) for s in line['spans']
+                    style_chars = [(s['size'], _bold(s)) for s in line['spans']
                                    for c in s['chars'] if not c['c'].isspace() and not s['flags'] & 1]
                     style = (median(s[0] for s in style_chars),
                              sum(s[1] for s in style_chars) > len(style_chars) / 2) if style_chars else (0, False)
@@ -513,9 +519,26 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None) ->
                 if not part['fixed'] and not later_on_line:
                     rect = fitz.Rect(part['rect'])
                     rect.x1 = max(rect.x1, block['rect'][2])
-                    part['writing_rect'] = list(rect)
+                    if list(rect) != part['rect'] or 'writing_rect' in part:
+                        part['writing_rect'] = list(rect)
                 if not part['fixed']:
                     rect = fitz.Rect(part.get('writing_rect', part['rect']))
+                    # 原英文字框只描述该行字体高度，不包括行间留白。中文
+                    # 墨迹可能略高于英文而仍完全容得下；按相邻正文行之间
+                    # 空白的中线分配可写高度，保留原字号，不侵入邻行或保护区。
+                    # 数学上下标会把一个物理段落拆成多个原生块，因此邻行
+                    # 来自同页、同一水平范围内的正文，而不局限于原生块编号。
+                    peers = [p for peer in blocks if peer['kind'] == 'body' and peer['page'] == part['page']
+                             for p in peer['parts'] if not p['fixed']
+                             and min(p['rect'][2], part['rect'][2]) > max(p['rect'][0], part['rect'][0])]
+                    above = [p['rect'][3] for p in peers if p['rect'][3] <= rect.y0]
+                    below = [p['rect'][1] for p in peers if p['rect'][1] >= rect.y1]
+                    if above:
+                        rect.y0 -= min(rect.y0 - max(above), part['size']) / 2
+                    if below:
+                        rect.y1 += min(min(below) - rect.y1, part['size']) / 2
+                    if list(rect) != part['rect'] or 'writing_rect' in part:
+                        part['writing_rect'] = list(rect)
                     nearby = protected + [b for b in blocks if b['id'] != sid]
                     part['protected_rects'] = [p['rect'] for p in nearby if p['page'] == part['page']
                                                and rect.intersects(fitz.Rect(p['rect']))]

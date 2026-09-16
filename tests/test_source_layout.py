@@ -68,6 +68,27 @@ class Provider(TranslationProvider):
 
 
 class SourceLayoutTests(unittest.TestCase):
+    def test_line_leading_can_be_used_without_crossing_neighbouring_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'leading.pdf'
+            with fitz.open() as document:
+                page = document.new_page()
+                page.insert_text((40, 100), 'The first line continues into\nthe second line of this paragraph.',
+                                 fontsize=10, lineheight=1.4)
+                document.save(source)
+            plan = extract_layout(source)
+            save_json(root / 'plan.json', plan)
+            _, units = load_plan(source, root / 'plan.json')
+            parts = [p for u in units for slot in u['slots'] for p in slot]
+            self.assertEqual(len(parts), 2)
+            first, second = parts
+            self.assertGreater(first['writing_rect'][3], first['rect'][3])
+            self.assertLess(second['writing_rect'][1], second['rect'][1])
+            self.assertLessEqual(first['writing_rect'][3], second['writing_rect'][1])
+            self.assertEqual(first['writing_rect'][1], first['rect'][1])
+            self.assertEqual(second['writing_rect'][3], second['rect'][3])
+
     def test_publisher_italic_variables_keep_adjacent_operators_and_functions(self):
         from paperlocale.source_layout import _parts
         spans, x = [], 40
@@ -98,6 +119,15 @@ class SourceLayoutTests(unittest.TestCase):
         parts = _parts({'lines': [{'spans': spans}]}, 1, [])
         self.assertEqual(''.join(p['text'] for p in parts if p['fixed']), 'ðÞ\x02\x03')
         self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']), 'ð')
+
+    def test_italic_word_broken_at_line_end_is_not_a_variable(self):
+        from paperlocale.source_layout import _parts
+        text = 'Sce-'
+        span = {'font': 'Publisher.I', 'size': 10, 'flags': 0,
+                'chars': [{'c': c, 'origin': (40 + i * 5, 100),
+                           'bbox': (40 + i * 5, 92, 45 + i * 5, 102)} for i, c in enumerate(text)]}
+        parts = _parts({'lines': [{'spans': [span]}]}, 1, [])
+        self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']), 'Sce-')
 
     def test_oversized_cff_metrics_do_not_erase_math_on_previous_line(self):
         """自造合法 CFF：源外框过高，但字形不与下一行相交；最终字体须恢复。"""

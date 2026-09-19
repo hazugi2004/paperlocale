@@ -33,7 +33,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                   font_file: Path | None, min_font_size: float | None = None,
                   contract_repair: bool = True, dpi: int = 144,
                   pdftoppm_bin=None, max_segments: int = 200,
-                  max_characters: int = 30000) -> dict:
+                  max_characters: int = 30000, paragraph: bool = False) -> dict:
     """逻辑段落翻译→全量预排版→源页写入→保护区域验证→机器 QA。
 
     一个逻辑段落允许跨任意多个页面/图片间隙。模型只收到带固定锚点的全文，
@@ -65,12 +65,18 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     from .layout_detection import detect_regions
     detections = detect_regions(source, root / 'layout_detection.json')
     if not plan_path.exists():
-        save_json(plan_path, extract_layout(source, detections))
-    plan, units = load_plan(source, plan_path, detections)
+        save_json(plan_path, extract_layout(source, detections, paragraph=paragraph))
+    plan, units = load_plan(source, plan_path, detections, paragraph=paragraph)
     editable = [part for unit in units for slot in unit['slots'] for part in slot]
     protected = list(plan['protected_regions'])
-    protected.extend(b for b in plan['blocks'] if b['kind'] != 'body')
-    protected.extend(part for unit in units for part in unit['anchors'])
+    translated_kinds = {'body', 'caption'} if paragraph else {'body'}
+    protected.extend(b for b in plan['blocks'] if b['kind'] not in translated_kinds)
+    if paragraph:
+        from .paragraph_layout import bind_inline_glyphs
+        bind_inline_glyphs(source, units)
+        editable.extend(part for unit in units for part in unit['anchors'])
+    else:
+        protected.extend(part for unit in units for part in unit['anchors'])
     # 删除范围与排字范围分开：先证明可逐字删除，再请求翻译，避免已知
     # 源几何缺陷导致重复模型调用。固定字框虽可重叠，实际删除框不能触及它。
     erase_regions = safe_erase_rectangles(editable, protected, source)
@@ -84,7 +90,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         raise ValueError('恢复不能更换 Provider、模型或推理档位')
     if manifest.get('domain_sha256') not in (None, domain.content_sha256):
         raise ValueError('恢复时领域包发生变化')
-    manifest.update(layout_mode='preserved', layout_plan=str(plan_path),
+    manifest.update(layout_mode='paragraph' if paragraph else 'preserved', layout_plan=str(plan_path),
                     layout_plan_sha256=plan_hash, translation_provider=provider.provenance(),
                     domain_sha256=domain.content_sha256, status='collected')
     save_manifest(root, manifest)
@@ -198,6 +204,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             # 固定字形与待译正文可能在抗锯齿像素上叠合。保留仅删除正文
             # 的原字形层作为这些混合像素的参考；此时尚未插入任何中文。
             reference_bytes = document.tobytes(garbage=0, deflate=True)
+            inline_fonts = {}
             for number, page in enumerate(document, 1):
                 if not any(p['page'] == number for p in editable):
                     continue
@@ -206,6 +213,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     page.insert_font(fontname='PLPreservedBold', fontbuffer=bold_bytes)
                 for item in placements:
                     if item['page'] != number:
+                        continue
+                    if 'inline_anchor' in item:
+                        from .paragraph_layout import write_inline
+                        write_inline(page, item, inline_fonts)
                         continue
                     rect, size = fitz.Rect(item['rect']), item['font_size']
                     page.insert_text((item.get('origin_x', rect.x0), item.get('baseline', rect.y0 + font.ascender * size)), item['target'],
@@ -246,7 +257,18 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             repaired = document.tobytes(garbage=0, deflate=True) if restored else None
         if repaired is not None:
             temporary.write_bytes(repaired)
-        evidence = verify_unchanged(source, temporary, editable)
+        expected_links = None
+        if paragraph:
+            from .paragraph_layout import relocate_links
+            with fitz.open(source) as original, fitz.open(temporary) as written:
+                expected_links = relocate_links(written, original, placements)
+                linked = written.tobytes(garbage=0, deflate=True)
+            temporary.write_bytes(linked)
+        writing_regions = editable + ([frame for u in units for frame in u['frames']] if paragraph else [])
+        evidence = verify_unchanged(source, temporary, writing_regions, expected_links=expected_links)
+        if paragraph:
+            from .paragraph_layout import verify_inline
+            evidence['inline_checks'] = verify_inline(temporary, placements)
         checked_ink, ink_evidence = verify_fixed_ink(source, temporary, reference_bytes, protected, editable)
         with fitz.open(source) as original, fitz.open(temporary) as written:
             # 保护区域不享有正文掩膜边缘的抗锯齿容差，包括上标、公式与表格文字。
@@ -272,6 +294,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     raise ValueError(f'第{index + 1}页保护区域像素发生变化：{region["rect"]}, {region.get("text", region.get("kind", ""))!r}')
             page_chars = {}
             for item in placements:
+                if 'inline_anchor' in item:
+                    continue
                 # get_textbox 的边界容差会把紧贴正文的原始右括号也抽入；
                 # 按字形中心读取精确正文框，仍要求每个写入字符完整回读。
                 rectangle = fitz.Rect(item['rect'])
@@ -280,17 +304,31 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     # 图文复杂的整篇论文产生大量无用解码及内存占用。
                     raw = written[item['page'] - 1].get_text('rawdict',
                           flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)
-                    page_chars[item['page']] = [c for block in raw['blocks'] for line in block.get('lines', [])
+                    page_chars[item['page']] = [{**c, 'font': span['font']} for block in raw['blocks'] for line in block.get('lines', [])
                                                for span in line['spans'] for c in span['chars']]
-                extracted = ''.join(c['c'] for c in page_chars[item['page']] if abs(c['origin'][1] - item['baseline']) < .01 and fitz.Point((c['bbox'][0] + c['bbox'][2]) / 2,
-                                                                       (c['bbox'][1] + c['bbox'][3]) / 2) in rectangle)
+                if paragraph:
+                    # 句号等墨迹很小，其字体字框中心可能落在墨迹框外。
+                    # 按写入基线和字形原点范围回读完整行，不能漏掉标点；
+                    # 右端严格开区间，避免吸入紧接的行内锚点。
+                    face = bold_font if item.get('bold') else font
+                    end = item['origin_x'] + face.text_length(item['target'], fontsize=item['font_size'])
+                    # 原始行内字形以墨迹边界定位，其字形原点可能略伸入
+                    # 中文的进宽区间；用实际写入字体区分原字形与译文。
+                    face_name = ''.join(c for c in face.name if c.isalnum()).lower()
+                    extracted = ''.join(c['c'] for c in page_chars[item['page']]
+                        if abs(c['origin'][1] - item['baseline']) < .01
+                        and ''.join(v for v in c['font'] if v.isalnum()).lower() == face_name
+                        and item['origin_x'] - .01 <= c['origin'][0] < end - .01)
+                else:
+                    extracted = ''.join(c['c'] for c in page_chars[item['page']] if abs(c['origin'][1] - item['baseline']) < .01 and fitz.Point((c['bbox'][0] + c['bbox'][2]) / 2,
+                                                                           (c['bbox'][1] + c['bbox'][3]) / 2) in rectangle)
                 if ''.join(extracted.split()) != ''.join(item['target'].split()):
                     raise ValueError(f'回读译文与排版内容不同：page={item["page"]}, expected={item["target"]!r}, actual={extracted!r}')
         evidence.update(source_sha256=digest(source), translated_sha256=digest(temporary),
                         layout_plan_sha256=plan_hash, font=font_evidence,
                         protected_region_count=len(protected), logical_group_count=len(units),
                         body_writing_regions=[{'page': p['page'], 'rect': p.get('writing_rect', p['rect'])}
-                                              for p in editable],
+                                              for p in writing_regions],
                         anchor_dpi=288,
                         vector_restorations=vector_restorations,
                         annotation_restorations=annotation_restorations,

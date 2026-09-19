@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2 — 2026-09-19
+
+- Make paragraph frames the default for new runs, preserving natural paragraph boundaries inside native PDF blocks and continuity across pages, columns and figures.
+- Translate figure and table captions while preserving text inside figures and tables.
+- Flow inline citations and supported mathematical glyphs using original font programs; move clickable citation regions with their unchanged targets.
+- Remove nonsemantic Chinese spaces and forced line spreading; fit complete paragraphs with a bounded font-size floor, never truncate content.
+- Keep existing preserved/legacy runs and their cache identities unchanged.
+- See [validation and limitations](docs/releases/v0.7.2.md).
+
 ## 0.7.1 — 2026-09-16
 
 - Preserve proven nonprinting PDF text before checking rotated prose: invisible rendering, zero opacity, and white text on a verified white background. Keep visible rotated prose and white text on dark backgrounds subject to normal layout checks.

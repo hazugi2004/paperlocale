@@ -65,7 +65,8 @@ def _source_anchor_glyphs(page, characters, cache):
         scale = span['size'] / 1000
         glyphs.append({'rect': fitz.Rect(x + left * scale, y - upper * scale,
                                         x + right * scale, y - bottom * scale),
-                       'xref': xref, 'name': name, 'origin': (x, y), 'size': span['size']})
+                       'xref': xref, 'name': name, 'origin': (x, y), 'size': span['size'],
+                       'text': char['text'], 'color': span['color'], 'glyph_id': item[1]})
     return glyphs or None
 
 

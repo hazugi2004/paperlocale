@@ -2077,7 +2077,7 @@ def accept_run(run_dir: Path, *, reviewed_by: str) -> None:
         raise ValueError("QA 报告的源 PDF 哈希不一致")
     if report.get("translated_sha256") != manifest["rendered_sha256"]:
         raise ValueError("QA 报告的译文 PDF 哈希不一致")
-    if manifest.get("layout_mode") == "preserved":
+    if manifest.get("layout_mode") in {"preserved", "paragraph"}:
         preservation = json.loads((root / "preservation_report.json").read_text(encoding="utf-8"))
         if (preservation.get("source_sha256") != manifest["source_sha256"] or
                 preservation.get("translated_sha256") != manifest["rendered_sha256"] or

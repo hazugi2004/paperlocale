@@ -115,6 +115,8 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
         for token in re.finditer(r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9∧]*', text):
             run = chars[token.start():token.end()]
             variable = (bool(re.search('[α-ωΑ-Ω]', token.group())) or
+                        (paragraph and all(c['italic'] for c in run) and
+                         min(c['size'] for c in run) < .85*max(c['size'] for c in run)) or
                         (len(token.group()) <= 3 and (run[0]['italic'] or
                          run[0]['fixed'] and any(c['italic'] for c in run)) and
                          not (len(token.group()) > 1 and re.fullmatch(r'-\s*', text[token.end():]))) or
@@ -166,7 +168,8 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
                     char['fixed'] = True
         # 上下标常被提取成独立字形；两侧均已有数学锚点的运算符也是
         # 表达式的一部分，不能把加号等当成需要翻译的极窄正文片段。
-        for operator in re.finditer(r'[+−=<>≤≥×÷±*/][0-9.\s+−=<>≤≥×÷±*/]*', text):
+        operators = r'[+−=<>≤≥×÷±*/′’][0-9.\s+−=<>≤≥×÷±*/′’]*' if paragraph else r'[+−=<>≤≥×÷±*/][0-9.\s+−=<>≤≥×÷±*/]*'
+        for operator in re.finditer(operators, text):
             left, right = operator.start() - 1, operator.end()
             while left >= 0 and chars[left]['c'].isspace():
                 left -= 1
@@ -428,6 +431,27 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
             for native in raw:
                 if not native.get('lines'):
                     continue
+                if paragraph:
+                    # 一个视觉行可能因上下标被MuPDF拆为多个“行”，而
+                    # 这些片段仍在同一原生块内。只合并同一水平行带、
+                    # 从左向右接续的片段，保持原字符顺序及原坐标；真正
+                    # 下一正文行或反向开始的分式行不合并。
+                    lines = []
+                    for line in native['lines']:
+                        last = lines[-1] if lines else None
+                        a, b = fitz.Rect(last['bbox']) if last else fitz.Rect(), fitz.Rect(line['bbox'])
+                        size = max(s['size'] for s in line['spans'])
+                        baseline = max(s['origin'][1] for s in line['spans'])
+                        old_baseline = max(s['origin'][1] for s in last['spans']) if last else 0
+                        if (last and tuple(line['dir']) == tuple(last['dir']) == (1,0)
+                                and re.search(r'[A-Za-zα-ωΑ-Ω]', ''.join(c['c'] for s in last['spans'] for c in s['chars']))
+                                and a.x1-size <= b.x0 <= a.x1+size and b.x0 > a.x0 and
+                                min(a.y1,b.y1) > max(a.y0,b.y0) and abs(baseline-old_baseline) < .6*size):
+                            last['spans'].extend(line['spans'])
+                            last['bbox'] = list(a | b)
+                        else:
+                            lines.append({**line,'spans':list(line['spans'])})
+                    native = {**native,'lines':lines}
                 split = []
                 native_text = _plain(' '.join(''.join(c['c'] for s in line['spans'] for c in s['chars'])
                                              for line in native['lines']))

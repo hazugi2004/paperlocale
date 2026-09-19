@@ -15,6 +15,38 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_subscript_product_and_prime_stay_in_original_math_anchor(self):
+        from paperlocale.source_layout import _parts
+        def span(text,x,y,size,font):
+            return {'font':font,'flags':4,'size':size,'origin':[x,y],
+                    'chars':[{'c':c,'origin':[x+i*4,y],'bbox':[x+i*4,y-size,x+(i+1)*4,y+2]}
+                             for i,c in enumerate(text)]}
+        spans=[span('with ',40,100,10,'Times-Roman'),span('g',60,100,10,'Times-Italic'),
+               span('′ = ',64,100,10,'Times-Roman'),span('f',80,100,10,'Times-Italic'),
+               span('w',84,102,7,'Times-Italic'),span('g',88,100,10,'Times-Italic'),
+               span('w',92,102,7,'Times-Italic'),span(' one finds',96,100,10,'Times-Roman')]
+        parts=_parts({'lines':[{'spans':spans}]},1,[],paragraph=True)
+        self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']),'with  one finds')
+        self.assertIn('g′ = fwgw',''.join(p['text'] for p in parts if p['fixed']))
+
+    def test_same_baseline_math_fragments_do_not_start_a_new_paragraph(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'fragment.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                p.insert_text((40,100),'where g = f',fontsize=10,fontname='tiro')
+                p.insert_text((92,102),'d',fontsize=7,fontname='tiit')
+                p.insert_text((92,96),' + ',fontsize=10,fontname='tiro')
+                p.insert_text((108,100),'g and further prose continues here.',fontsize=10,fontname='tiro')
+                p.insert_text((40,112),'The continuation belongs to the same paragraph.',fontsize=10,fontname='tiro')
+                doc.save(source)
+            plan = extract_layout(source,paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),1)
+            text=' '.join(blocks[i]['text'] for i in plan['groups'][0])
+            self.assertTrue(text.startswith('where'))
+            self.assertIn('further prose',text)
+
     def test_two_line_regular_heading_does_not_absorb_following_body(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp)/'heading.pdf'

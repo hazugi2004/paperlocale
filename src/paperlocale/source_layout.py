@@ -443,8 +443,12 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                         size = max(s['size'] for s in line['spans'])
                         baseline = max(s['origin'][1] for s in line['spans'])
                         old_baseline = max(s['origin'][1] for s in last['spans']) if last else 0
+                        previous_text = ''.join(c['c'] for s in last['spans'] for c in s['chars']) if last else ''
                         if (last and tuple(line['dir']) == tuple(last['dir']) == (1,0)
-                                and re.search(r'[A-Za-zα-ωΑ-Ω]', ''.join(c['c'] for s in last['spans'] for c in s['chars']))
+                                and re.search(r'[A-Za-zα-ωΑ-Ω]', previous_text)
+                                # 悬挂编号不是公式片段；保持独立，后续提取
+                                # 才能保留编号与正文的间隔及列表缩进。
+                                and not re.fullmatch(r'(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])', previous_text.strip())
                                 and a.x1-size <= b.x0 <= a.x1+size and b.x0 > a.x0 and
                                 min(a.y1,b.y1) > max(a.y0,b.y0) and abs(baseline-old_baseline) < .6*size):
                             last['spans'].extend(line['spans'])

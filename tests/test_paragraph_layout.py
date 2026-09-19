@@ -15,6 +15,20 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_isolated_letter_list_marker_keeps_separator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'list.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                p.insert_text((40,100),'a)',fontsize=10,fontname='tiro')
+                p.insert_text((58,100),'All-day percentiles describe precipitation extremes.',fontsize=10,fontname='tiro')
+                p.insert_text((58,112),'The continuation remains part of this numbered item.',fontsize=10,fontname='tiro')
+                doc.save(source)
+            plan = extract_layout(source,paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),1)
+            self.assertTrue(blocks[plan['groups'][0][0]]['text'].startswith('a) All-day'))
+
     def test_subscript_product_and_prime_stay_in_original_math_anchor(self):
         from paperlocale.source_layout import _parts
         def span(text,x,y,size,font):

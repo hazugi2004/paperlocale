@@ -106,12 +106,12 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.2"
+python -m pip install "paperlocale[layout]==0.7.3"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start (0.7.2)
+## Quick start (0.7.3)
 
 New runs use paragraph frames (`--layout-mode paragraph`). The title, abstract,
 main text and figure/table captions are translated. Natural paragraph boundaries

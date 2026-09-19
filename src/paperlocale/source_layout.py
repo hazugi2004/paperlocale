@@ -31,7 +31,14 @@ CITATION = re.compile(r'\[\s*\d+(?:\s*[,;–−-]\s*\d+)*\s*\]|'
                       r"[A-Z][A-Za-z'’−–-]+(?:\s+(?:[A-Z][A-Za-z'’−–-]+|et|al\.?|and|&))*"
                       r',?\s+(?:18|19|20)\d{2}[a-z]?(?:[,;][^()]*)?\)')
 MATH_FONT = re.compile(r'math|mth|symbol|cmsy|cmmi|cmex|msam|msbm', re.I)
-CAPTION = re.compile(r'^(?:(?:Extended Data|Supplementary)\s+)?(?:Fig(?:ure)?\.?|Table)\s*\d', re.I)
+# 图注编号后须有标点，或以大写词开启图注正文；正文中的“Figure 5
+# displays”和“Figure 2a”不是图注。罗马数字表号同样构成独立标题，
+# 防止连续的 Table III/IV/V 被合并为一个段落。无标点且小写开头的
+# 非标准图注仍依靠视觉检测器分类，不能只凭正文中的图号引用推断。
+LEGACY_CAPTION = re.compile(r'^(?:(?:Extended Data|Supplementary)\s+)?(?:Fig(?:ure)?\.?|Table)\s*\d', re.I)
+CAPTION = re.compile(
+    r'^(?i:(?:(?:Extended Data|Supplementary)\s+)?(?:Fig(?:ure)?\.?|Table))'
+    r'\s*(?:\d+|[IVXLCDM]+)(?:\s*[.|:]|\s+(?=[A-Z]))')
 METADATA = re.compile(r'^(?:Received:|Accepted:|Published online:|Check for updates$)', re.I)
 NO_LINE_START = set('，。、；：？！）》」』】％‰,.;:!?%)]}')
 NO_LINE_END = set('（《「『【([{')
@@ -63,6 +70,22 @@ def _bold(span, *, paragraph=False):
     return bool(span['flags'] & 16 or re.search(r'(?:[.-]B|Bold(?:Italic|Oblique)?)'+suffix+'$', span['font']))
 
 
+def _superscript(span, line, *, paragraph=False):
+    """段落模式用字号及基线复核上标flag，避免低位下标使整行正文被误标。
+
+    PyMuPDF在同一行先读到公式下标时，可把其后正常基线的正文标为上标。
+    以该行常规字号字符的多数基线作参照；真正小字号或抬高基线仍保护。
+    旧引擎保持原flag解释，避免更改已有保护计划。
+    """
+    if not span['flags'] & 1 or not paragraph:
+        return bool(span['flags'] & 1)
+    chars = [(s['size'], c['origin'][1]) for s in line['spans']
+             for c in s['chars'] if not c['c'].isspace()]
+    size = median(c[0] for c in chars)
+    baseline = median(c[1] for c in chars if c[0] >= .95*size)
+    return span['size'] < .95*size or span['origin'][1] < baseline-.2*size
+
+
 def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> list[dict]:
     """按字符坐标分开普通文字和固定锚点，不用白块覆盖公式/引用。
 
@@ -73,15 +96,17 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
     for line in block.get('lines', []):
         chars = []
         for span in line['spans']:
+            superscript = _superscript(span, line, paragraph=paragraph)
+            math_font = MATH_FONT.search(span['font']) or paragraph and re.match(r'^MT(?:MI|SY|EX)', span['font'])
             for char in span['chars']:
                 # 出版社数学字体可能将括号映射到控制码，普通中文字体
                 # 无法重建其字形；保留源字形，不能把控制码当正文传给模型。
-                chars.append({**char, 'fixed': bool(span['flags'] & 1 or MATH_FONT.search(span['font'])
+                chars.append({**char, 'fixed': bool(superscript or math_font
                                                   or not char['c'].isprintable()),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
                                   re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
                               'bold': _bold(span, paragraph=paragraph),
-                              'superscript': bool(span['flags'] & 1)})
+                              'superscript': superscript})
         text = ''.join(c['c'] for c in chars)
         # 行内变量未必使用数学字体：真实论文的 β 带帽、R_n、T_d 分布在
         # 普通斜体和小字号下标中。按完整变量词元保护基字及上下标，避免
@@ -241,7 +266,7 @@ def _preserve_front_matter(blocks: list[dict], *, paragraph=False) -> None:
         if block['rect'][1] < lower:
             continue
         value = block['text']
-        if MAIN_HEADING.fullmatch(value) or len(value.split()) >= 25:
+        if MAIN_HEADING.fullmatch(value) or (not paragraph and len(value.split()) >= 25):
             break
         # 数字、星号、匕首是常见机构/通讯上标。必须仍有两个姓名词，
         # 并限定于标题和首个正文段之间，避免吞掉正文的小标题或实体名。
@@ -250,6 +275,10 @@ def _preserve_front_matter(blocks: list[dict], *, paragraph=False) -> None:
         name_pattern = r"(?:[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*\s+){1,5}[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*"
         is_name = (all(re.fullmatch(name_pattern, name.strip()) for name in names if name.strip())
                    if paragraph else all(re.fullmatch(name_pattern, name) for name in names))
+        # 多作者名单可能超过25词；先验证每个分隔项都是姓名，再应用
+        # 长正文停止条件。不能因作者多就猜测姓名译法或把名单送入正文。
+        if paragraph and len(value.split()) >= 25 and not (is_name and len(names) > 1):
+            break
         affiliation = re.search(r"\b(?:university|institute|department|laboratory|school of|"
                                 r"faculty of|hospital|college|e-mail|email)\b|\S+@\S+", value, re.I)
         if is_name or affiliation:
@@ -302,12 +331,39 @@ def _nonprinting_line(page: fitz.Page, line: dict, paint: dict) -> str | None:
     return None
 
 
+def _list_marker_box(page, box):
+    """排除被视觉检测器误标成独立公式的正文列表编号。
+
+    必须同时看到完整编号和同一行后续英文正文；仅有“(1)”的公式编号
+    不满足条件。检测框也不得伸入编号后的正文，避免放过真正公式。
+    """
+    rect = fitz.Rect(box['rect'])
+    for block in page.get_text('rawdict', flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)['blocks']:
+        for line in block.get('lines', []):
+            chars = [c for span in line['spans'] for c in span['chars']]
+            value = ''.join(c['c'] for c in chars)
+            match = re.match(r'^(\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+[A-Za-z]{2}', value)
+            if not match:
+                continue
+            marker = fitz.Rect()
+            for char in chars[:match.end(1)]:
+                marker |= fitz.Rect(char['bbox'])
+            if (marker.get_area() and (marker & rect).get_area() > .8 * marker.get_area()
+                    and rect.x1 <= marker.x1 + 1 and rect.x0 >= marker.x0 - 1
+                    and rect.y0 >= marker.y0 - 1 and rect.y1 <= marker.y1 + 1):
+                return True
+    return False
+
+
 def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
     每块均保留明确分类，不能把未识别正文静默算作已翻译。
     """
+    # preserved 旧断点逐字核对旧自动计划；修复只用于新的段落模式，
+    # 避免改变已发布旧引擎的保护区域和缓存身份。
+    caption_pattern = CAPTION if paragraph else LEGACY_CAPTION
     _, _, _, references = _reference_geometry(source)
     blocks, protected, issues = [], [], []
     document, _ = open_source_for_editing(source)
@@ -329,6 +385,8 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
             # 但透明图片的大外框可能同时覆盖正文，不能因裁切合法就认定为图内文字。
             boxes = [{**box, 'rect': list(fitz.Rect(box['rect']) & page.rect)} for box in boxes
                      if not (fitz.Rect(box['rect']) & page.rect).is_empty]
+            if paragraph:
+                boxes = [b for b in boxes if b['kind'] != 'formula' or not _list_marker_box(page, b)]
             figure_regions = [fitz.Rect(r['rect']) for r in (detections or [])
                               if r['page'] == number and r['kind'] in {'figure', 'table'}]
             for region in (detections or []):
@@ -373,13 +431,14 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     # 小号正文。按普通字符加权的字号/字重分段，防止联合翻译
                     # 后把正文填入标题行。图注的粗体前缀仍与整条图注一起保护。
                     style_chars = [(s['size'], _bold(s, paragraph=paragraph)) for s in line['spans']
-                                   for c in s['chars'] if not c['c'].isspace() and not s['flags'] & 1]
+                                   if not _superscript(s, line, paragraph=paragraph)
+                                   for c in s['chars'] if not c['c'].isspace()]
                     style = (median(s[0] for s in style_chars),
                              sum(s[1] for s in style_chars) > len(style_chars) / 2) if style_chars else (0, False)
-                    changed = (split and role == 'body' and not CAPTION.match(native_text) and
+                    changed = (split and role == 'body' and not caption_pattern.match(native_text) and
                                (abs(split[-1]['_style'][0] - style[0]) > .6 or split[-1]['_style'][1] != style[1]))
                     paragraph_break = False
-                    if paragraph and split and role == 'body' and not CAPTION.match(native_text):
+                    if paragraph and split and role == 'body' and not caption_pattern.match(native_text):
                         from .paragraph_layout import starts_paragraph
                         paragraph_break = starts_paragraph(native['lines'], split[-1]['lines'], line)
                     if not split or paragraph_break or split[-1]['_role'] != role or split[-1]['_reason'] != reason or changed:
@@ -397,7 +456,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if not value:
                     continue
                 kind = block['_role']
-                if kind == 'body' and CAPTION.match(value):
+                if kind == 'body' and caption_pattern.match(value):
                     kind = 'caption'
                 elif kind == 'body' and re.fullmatch(r'(?:https?://|www\.)\S+', value):
                     # 独立网址（含句末标点）无需翻译。不能只留下网址对象、

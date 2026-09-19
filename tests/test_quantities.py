@@ -42,6 +42,13 @@ class QuantityTests(unittest.TestCase):
         self.assertEqual(validate_translation('m/s','米/秒'), [])
         self.assertTrue(validate_translation('m s−1','m'))
 
+    def test_wet_day_hour_alternatives_are_not_a_divided_unit(self):
+        self.assertEqual(validate_translation(
+            'All-day/hour percentiles differ from wet-day/hour percentiles.',
+            '全日/全小时百分位数与湿日/湿小时百分位数不同。'), [])
+        self.assertTrue(validate_translation('The rate is 2 day/hour.', '速率为2天。'))
+        self.assertTrue(validate_translation('day/hour', 'day'))
+
     def test_gpt_prompt_has_joint_constraints_without_changing_key_schema(self):
         context=TranslationContext('en','zh-CN',load_domain_pack('atmospheric-science'))
         prompt,schema=_keyed_request([Segment('original-hash','Measure 500 hPa and 50 km.')],context)

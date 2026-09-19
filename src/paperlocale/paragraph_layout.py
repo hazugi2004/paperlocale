@@ -26,6 +26,11 @@ def starts_paragraph(native_lines, preceding, line):
     previous_y = max(s['origin'][1] for s in previous['spans'])
     if baseline - previous_y < .6 * size:
         return False
+    value = ''.join(c['c'] for s in line['spans'] for c in s['chars'])
+    # 悬挂列表的新编号相对正文是向左退回，而不是首行向右缩进。
+    # 即使PDF把上一条末行与下一条首行放在一个文本块，也必须分段。
+    if re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])(?:\s+[A-Za-z]|$)', value):
+        return True
     left = min(l['bbox'][0] for l in native_lines)
     indent = line['bbox'][0] - left
     widths = [l['bbox'][2] - l['bbox'][0] for l in native_lines]
@@ -53,13 +58,28 @@ def paragraph_groups(blocks):
                          is_bold(old) == is_bold(ordinary))
                 new_frame = block['page'] != previous['page'] or b.y0 < a.y0 or b.y0 - a.y1 > 2 * size
                 full_end = old[-1]['rect'][2] > a.x1 - 2 * size
-                incomplete = not re.search(r'[.!?:;][\s\d)\]]*$', previous['text'])
+                incomplete = (not re.search(r'[.!?:;][\s\d)\]]*$', previous['text']) or
+                              bool(re.search(r'\b(?:i\.e|e\.g)\.$', previous['text'])))
                 connect = (style and block['page'] <= previous['page'] + 2 and indent < .7 * size and
                            (len(previous['text']) >= 25 or not new_frame) and
                            (incomplete or new_frame and full_end))
+                # 编号首行可能以句号结束，后续悬挂行仍属于该列表项。
+                # 只在同页紧邻、字号字重一致且左侧确有悬挂缩进时连接。
+                if (kind == 'body' and style and block['page'] == previous['page'] and
+                        re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+[A-Za-z]', previous['text']) and
+                        .7*size < b.x0-a.x0 < 4*size and -.5*size <= b.y0-a.y1 < size):
+                    connect = True
                 if kind == 'caption':
                     connect = (style and block['page'] == previous['page'] and
                                not CAPTION.match(block['text']))
+                elif re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+[A-Za-z]', block['text']):
+                    connect = False
+                # 编号小节标题及独立公式之间的连接词各占原物理位置，
+                # 不能把正文分配到标题/“and”的短框中。
+                heading = lambda text: bool(re.match(r'^\d+(?:\.\d+)+\.?\s+[A-Z]', text)) and len(text.split()) <= 18
+                if kind == 'body' and (heading(previous['text']) or heading(block['text']) or
+                                       new_frame and re.fullmatch(r'and|or', block['text'], re.I)):
+                    connect = False
             if connect:
                 groups[-1].append(block['id'])
             else:
@@ -87,10 +107,24 @@ def attach_frames(units, plan):
                      'indent': max(0, parts[0]['rect'][0] - rect.x0),
                      'weight': len(b['text']), 'source_block': sid}
             last = frames[-1] if frames else None
+            # 悬挂缩进列表常被PDF拆为“带编号首行”和“内缩的后续行”。
+            # 它们属于同一连续段落，不应按字符比例分给两个容量失衡的框。
+            # 仅合并同页、右边界一致、紧邻且有明确列表编号的片段；后续
+            # 行仍保留内缩，不能借合并框侵入编号左侧空白或邻近公式。
+            hanging = (last and last['page'] == frame['page'] and
+                       re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+',
+                                blocks[last['source_block']]['text']) and
+                       .7*size < rect.x0-last['rect'][0] < 4*size)
+            # 同段末行可比前行短；原生数学片段也可能与同一行正文框
+            # 交叠。合并这些连续框，不把最后一句硬塞到短末行里。
+            overlap = (last and (fitz.Rect(last['rect']) & rect).get_area() > 0)
             if (last and last['page'] == frame['page'] and
-                    abs(last['rect'][0] - rect.x0) < 1 and abs(last['rect'][2] - rect.x1) < 2 and
-                    -.5*size <= rect.y0-last['rect'][3] < size and
+                    ((abs(last['rect'][0] - rect.x0) < 1 and rect.x1 <= last['rect'][2]+2) or
+                     hanging and abs(last['rect'][2] - rect.x1) < 2 or overlap) and
+                    (overlap or -.5*size <= rect.y0-last['rect'][3] < size) and
                     frame['indent'] < .7*size):
+                if hanging:
+                    last['hanging_indent'] = rect.x0-last['rect'][0]
                 last['rect'] = list(fitz.Rect(last['rect']) | rect)
                 last['weight'] += frame['weight']
             else:
@@ -204,7 +238,8 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
             row = 0
             previous_bottom = rect.y0 - .5
             while cursor < len(portion) and baseline <= rect.y1+.01:
-                x = rect.x0 + (min(frame['indent'], 2*current) if row == 0 and fi == 0 else 0)
+                x = rect.x0 + (min(frame['indent'], 2*current) if row == 0 and fi == 0
+                               else frame.get('hanging_indent', 0))
                 line_items = []
                 while cursor < len(portion):
                     token = portion[cursor]

@@ -15,6 +15,234 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_isolated_letter_list_marker_keeps_separator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'list.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                p.insert_text((40,100),'a)',fontsize=10,fontname='tiro')
+                p.insert_text((58,100),'All-day percentiles describe precipitation extremes.',fontsize=10,fontname='tiro')
+                p.insert_text((58,112),'The continuation remains part of this numbered item.',fontsize=10,fontname='tiro')
+                doc.save(source)
+            plan = extract_layout(source,paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),1)
+            self.assertTrue(blocks[plan['groups'][0][0]]['text'].startswith('a) All-day'))
+
+    def test_subscript_product_and_prime_stay_in_original_math_anchor(self):
+        from paperlocale.source_layout import _parts
+        def span(text,x,y,size,font):
+            return {'font':font,'flags':4,'size':size,'origin':[x,y],
+                    'chars':[{'c':c,'origin':[x+i*4,y],'bbox':[x+i*4,y-size,x+(i+1)*4,y+2]}
+                             for i,c in enumerate(text)]}
+        spans=[span('with ',40,100,10,'Times-Roman'),span('g',60,100,10,'Times-Italic'),
+               span('′ = ',64,100,10,'Times-Roman'),span('f',80,100,10,'Times-Italic'),
+               span('w',84,102,7,'Times-Italic'),span('g',88,100,10,'Times-Italic'),
+               span('w',92,102,7,'Times-Italic'),span(' one finds',96,100,10,'Times-Roman')]
+        parts=_parts({'lines':[{'spans':spans}]},1,[],paragraph=True)
+        self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']),'with  one finds')
+        self.assertIn('g′ = fwgw',''.join(p['text'] for p in parts if p['fixed']))
+
+    def test_same_baseline_math_fragments_do_not_start_a_new_paragraph(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'fragment.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                p.insert_text((40,100),'where g = f',fontsize=10,fontname='tiro')
+                p.insert_text((92,102),'d',fontsize=7,fontname='tiit')
+                p.insert_text((92,96),' + ',fontsize=10,fontname='tiro')
+                p.insert_text((108,100),'g and further prose continues here.',fontsize=10,fontname='tiro')
+                p.insert_text((40,112),'The continuation belongs to the same paragraph.',fontsize=10,fontname='tiro')
+                doc.save(source)
+            plan = extract_layout(source,paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),1)
+            text=' '.join(blocks[i]['text'] for i in plan['groups'][0])
+            self.assertTrue(text.startswith('where'))
+            self.assertIn('further prose',text)
+
+    def test_two_line_regular_heading_does_not_absorb_following_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'heading.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                for x,y,text in [(40,100,'4.2.'),(65,100,'Spatial distribution of precipitation indices'),
+                                 (40,112,'with 10 year return period'),
+                                 (40,126.5,'Increasing rainfall was observed in this region.'),
+                                 (40,138.5,'The observations support the following results.')]:
+                    p.insert_text((x,y),text,fontsize=10)
+                doc.save(source)
+            plan = extract_layout(source,paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),2)
+            self.assertTrue(blocks[plan['groups'][1][0]]['text'].startswith('Increasing'))
+
+    def test_letter_affiliations_and_long_institution_block_stay_original(self):
+        from paperlocale.source_layout import _preserve_front_matter
+        def block(text,y,size,parts=None):
+            return {'kind':'body','page':1,'text':text,'rect':[40,y,400,y+20],
+                    'parts':parts or [{'size':size,'text':text}]}
+        institutions = 'a Department of Earth Science, Example University, City, Country; '*5
+        blocks = [block('Precipitation extremes',50,18),
+                  block('Jane Doea,b John Smithc',90,12,
+                        [{'text':'Jane Doe','size':12},{'text':'a,b','size':8},
+                         {'text':'John Smith','size':12},{'text':'c','size':8}]),
+                  block(institutions,120,8),block('Abstract University observations support this study.',200,10)]
+        _preserve_front_matter(blocks,paragraph=True)
+        self.assertEqual([b['kind'] for b in blocks],['body','preserve','preserve','body'])
+
+    def test_display_equation_separates_its_surrounding_prose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'equation.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                p.insert_text((40,100),'The distribution changes with',fontsize=10)
+                p.insert_text((100,125),'x = y + z',fontsize=10)
+                # 公式后的短解释框在左边，未必横向碰到居中公式。
+                p.insert_text((40,150),'where x.',fontsize=10)
+                doc.save(source)
+            plan = extract_layout(source,[{'page':1,'rect':[98,112,160,129],'kind':'formula'}],paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),2)
+            self.assertTrue(blocks[plan['groups'][1][0]]['text'].startswith('where'))
+
+    def test_appendix_after_acknowledgements_is_translated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'appendix.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                for i,text in enumerate(['Acknowledgements', 'We thank the contributors.',
+                                         'Appendix: Theoretical analysis',
+                                         'A1. All-day versus wet-day percentiles',
+                                         'The conditional probability follows this equation.',
+                                         'Open Access This article is distributed freely.']):
+                    p.insert_text((40,80+35*i),text,fontsize=10)
+                doc.save(source)
+            blocks = extract_layout(source, paragraph=True)['blocks']
+            self.assertEqual([b['kind'] for b in blocks],
+                             ['preserve','preserve','body','body','body','preserve'])
+
+    def test_symbol_list_markers_stay_native_and_items_separate(self):
+        # 用错误映射的“&”模拟出版社圆点编码。判断依据是独立符号行
+        # 和悬挂几何，程序须保留源字形，不能把符号作为英文正文重排。
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'bullets.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                for y,label in [(100,'All-day percentiles describe intensity.'),
+                                (136,'Frequency indices describe exceedance.')]:
+                    p.insert_text((40,y),'&',fontsize=10)
+                    p.insert_text((58,y),label,fontsize=10)
+                    p.insert_text((58,y+12),'This is the continuation of the definition.',fontsize=10)
+                doc.save(source)
+            plan = extract_layout(source, paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),2)
+            self.assertTrue(all(b['kind']=='preserve' for b in blocks.values() if b['text']=='&'))
+            self.assertTrue(all('&' not in blocks[i]['text'] for g in plan['groups'] for i in g))
+
+    def test_normal_prose_after_subscript_is_not_frozen_as_superscript(self):
+        from paperlocale.source_layout import _parts
+        def span(text, x, y, size, flags, font='Times-Roman'):
+            chars=[{'c':c,'origin':[x+i*5,y],'bbox':[x+i*5,y-size,x+(i+1)*5,y+2]}
+                   for i,c in enumerate(text)]
+            return {'font':font,'flags':flags,'size':size,'origin':[x,y],'chars':chars}
+        spans=[span('k=1',40,106,7,4), span('denotes the observed series',55,100,10,5),
+               span('2',185,96,7,5)]
+        parts=_parts({'lines':[{'spans':spans}]},1,[],paragraph=True)
+        self.assertTrue(any('denotes' in p['text'] and not p['fixed'] for p in parts))
+        self.assertTrue(any(p['text']=='2' and p['fixed'] for p in parts))
+
+    def test_list_item_boundary_and_abbreviation_keep_complete_paragraphs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'source.pdf'
+            with fitz.open() as doc:
+                page = doc.new_page()
+                for x,y,text in [(40,100,'a) First definition includes all days, i.e.'),
+                                 (58,112,'wet and dry days in the same reference set.'),
+                                 (40,124,'b) Second definition uses only wet days.'),
+                                 (58,136,'It excludes dry days from the reference set.')]:
+                    page.insert_text((x,y),text,fontsize=10)
+                doc.save(source)
+            plan = extract_layout(source, paragraph=True)
+            blocks = {b['id']: b for b in plan['blocks']}
+            paragraphs = [' '.join(blocks[i]['text'] for i in g) for g in plan['groups']]
+            self.assertEqual(len(paragraphs), 2)
+            self.assertIn('wet and dry days', paragraphs[0])
+            self.assertTrue(paragraphs[1].startswith('b)'))
+
+    def test_year_at_line_start_is_not_a_list_item(self):
+        from paperlocale.paragraph_layout import paragraph_groups
+        def block(key,text,y):
+            return {'id':key,'kind':'body','page':1,'rect':[40,y,350,y+10],
+                    'text':text,'parts':[{'fixed':False,'size':10,'bold':False,
+                                         'text':text,'rect':[40,y,350,y+10]}]}
+        items=[block('a','The analysis follows Karl and Knight',90),
+               block('b','(1998) and their definition of wet days.',102)]
+        self.assertEqual(paragraph_groups(items),[['a','b']])
+
+    def test_hanging_list_lines_form_one_frame_with_continuation_indent(self):
+        from paperlocale.paragraph_layout import attach_frames
+        def block(key, text, rect):
+            return {'id': key, 'page': 1, 'rect': rect, 'text': text, 'kind': 'body',
+                    'parts': [{'fixed': False, 'size': 10, 'bold': False,
+                               'baseline': rect[3]-2, 'rect': rect, 'text': text}]}
+        blocks = [block('a', 'a) All-day percentiles and supporting evidence', [40, 90, 350, 101]),
+                  block('b', 'continue with the complete explanation.', [58, 103, 350, 139])]
+        units = [{}]
+        attach_frames(units, {'blocks': blocks, 'groups': [['a', 'b']]})
+        self.assertEqual(len(units[0]['frames']), 1)
+        self.assertEqual(units[0]['frames'][0]['hanging_indent'], 18)
+        units[0].update(id='list', anchors=[])
+        placements = fit_unit(units[0], '全日百分位数用于描述降水事件的变化，并结合完整的统计证据解释结果。'*2,
+                              fitz.Font('china-s'), None)
+        first = min(p['baseline'] for p in placements)
+        self.assertTrue(all(p['rect'][0] >= 58 for p in placements if p['baseline'] > first))
+
+    def test_long_author_list_remains_original_before_abstract(self):
+        from paperlocale.source_layout import _preserve_front_matter
+        def block(text, y, size):
+            return {'kind': 'body', 'page': 1, 'text': text, 'rect': [40,y,350,y+20],
+                    'parts': [{'size': size}]}
+        authors = ' & '.join(['Christoph Schär1', 'Nikolina Ban1', 'Erich M. Fischer1',
+                             'Jan Rajczak1', 'Jürg Schmidli2', 'Christoph Frei3',
+                             'Filippo Giorgi4', 'Thomas R. Karl5', 'Xuebin Zhang6'])
+        blocks = [block('Percentile indices', 50, 16), block(authors, 90, 10),
+                  block('Abstract Many climate studies assess trends and projections. '*4, 160, 10)]
+        _preserve_front_matter(blocks, paragraph=True)
+        self.assertEqual([b['kind'] for b in blocks], ['body', 'preserve', 'body'])
+
+    def test_caption_numbers_do_not_turn_figure_references_into_captions(self):
+        from paperlocale.source_layout import CAPTION
+        for text in ['Figure 1. Locations of stations.', 'Fig. 2 Impact of definition.',
+                     'Fig. 1 | Soil water observations.',
+                     'Table III. Test values.', 'Table IV. Test values.']:
+            self.assertIsNotNone(CAPTION.match(text), text)
+        for text in ['Figure 5 displays the spatial patterns.',
+                     'Figure 4(e) shows the largest value.',
+                     'Figure 1a and b underline the key point.']:
+            self.assertIsNone(CAPTION.match(text), text)
+
+    def test_list_number_misdetected_as_formula_does_not_block_body_deletion(self):
+        from paperlocale.safe_text import safe_erase_rectangles
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp)/'source.pdf'
+            with fitz.open() as doc:
+                page=doc.new_page()
+                page.insert_text((40,100),'(1) The correlation coefficient is calculated below.',fontsize=10)
+                page.insert_text((100,160),'x = 2',fontsize=10)
+                page.insert_text((300,160),'(1)',fontsize=10)
+                detections=[{'page':1,'kind':'formula_caption','rect':list(r)}
+                            for r in page.search_for('(1)')]
+                doc.save(source)
+            plan=extract_layout(source,detections,paragraph=True)
+            self.assertEqual(len([p for p in plan['protected_regions'] if p['kind']=='formula']),1)
+            save_json(Path(tmp)/'plan.json',plan)
+            _,units=load_plan(source,Path(tmp)/'plan.json',detections,paragraph=True)
+            editable=[p for u in units for s in u['slots'] for p in s]+[p for u in units for p in u['anchors']]
+            protected=plan['protected_regions']+[b for b in plan['blocks'] if b['kind'] not in ('body','caption')]
+            self.assertTrue(safe_erase_rectangles(editable,protected,source))
+
     def test_native_block_with_two_indented_paragraphs_keeps_two_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp)/'source.pdf'

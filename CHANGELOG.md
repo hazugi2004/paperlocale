@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.3 — 2026-09-19
+
+- Distinguish body list markers from standalone equation labels before safe source-text erasure.
+- Interpret all-day/hour and wet-day/hour as alternative time scales without weakening numeric unit checks.
+- Keep figure references in body paragraphs and recognize Roman-numbered table captions in paragraph mode.
+- Preserve the existing preserved engine classification and strict cache identity checks.
+- Retain author affiliations, translate appendices after acknowledgements, and preserve native bullet marks with separate list items.
+- Separate display-equation explanations and regular-weight section headings; rejoin same-line subscript fragments before paragraph extraction.
+- Count native PDF image invocations instead of temporary shading rasters; account for verified source-glyph overhangs without relaxing neighboring-content checks.
+- See [validation and limitations](docs/releases/v0.7.3.md).
+
 ## 0.7.2 — 2026-09-19
 
 - Make paragraph frames the default for new runs, preserving natural paragraph boundaries inside native PDF blocks and continuity across pages, columns and figures.

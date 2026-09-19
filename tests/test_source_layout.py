@@ -232,6 +232,58 @@ class SourceLayoutTests(unittest.TestCase):
         self.assertEqual(''.join(p['text'] for p in parts if p['fixed']), 'x=SD(x)SDðxÞ')
         self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']), 'SD of samples;  and ')
 
+    def test_body_ink_overhang_is_editable_but_neighboring_ink_is_not(self):
+        """自造负左侧承CFF：字框外正文可删，邻近图形任一像素仍须拒绝。"""
+        import re
+        from fontTools.fontBuilder import FontBuilder
+        from fontTools.pens.t2CharStringPen import T2CharStringPen
+        from paperlocale.source_layout import verify_unchanged
+        builder = FontBuilder(1000, isTTF=False)
+        builder.setupGlyphOrder(['.notdef','j'])
+        builder.setupCharacterMap({106:'j'})
+        strings = {}
+        for name in ['.notdef','j']:
+            pen = T2CharStringPen(500,None)
+            if name == 'j':
+                pen.moveTo((-200,-100)); pen.lineTo((300,-100))
+                pen.lineTo((300,700)); pen.lineTo((-200,700)); pen.closePath()
+            strings[name] = pen.getCharString()
+        builder.setupCFF('Overhang',{'FullName':'Overhang','FamilyName':'Overhang','Weight':'Regular'},strings,{})
+        builder.setupHorizontalMetrics({n:(500,0) for n in strings})
+        builder.setupHorizontalHeader(ascent=800,descent=-200)
+        builder.setupNameTable({'familyName':'Overhang','styleName':'Regular'})
+        builder.setupOS2(sTypoAscender=800,sTypoDescender=-200,usWinAscent=800,usWinDescent=200)
+        builder.setupPost()
+        data = BytesIO(); builder.font['CFF '].cff.compile(data,builder.font)
+        with tempfile.TemporaryDirectory() as tmp:
+            source,target = Path(tmp)/'source.pdf',Path(tmp)/'target.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page(width=200,height=200)
+                font = p.insert_font(fontname='Overhang',fontbuffer=data.getvalue())
+                p.insert_text((100,100),'j',fontname='Overhang',fontsize=10)
+                descendant = int(re.search(r'\d+',doc.xref_get_key(font,'DescendantFonts')[1]).group())
+                descriptor = int(doc.xref_get_key(descendant,'FontDescriptor')[1].split()[0])
+                stream = int(doc.xref_get_key(descriptor,'FontFile3')[1].split()[0])
+                doc.xref_set_key(stream,'Subtype','/Type1C')
+                doc.update_object(font,f'<< /Type /Font /Subtype /Type1 /BaseFont /Overhang /FirstChar 106 /LastChar 106 /Widths [500] /Encoding /WinAnsiEncoding /FontDescriptor {descriptor} 0 R >>')
+                text_stream = p.get_contents()[0]
+                doc.update_stream(text_stream,doc.xref_stream(text_stream).replace(b'<0001>',b'<6a>'))
+                p.draw_rect((90,95,92,100),fill=(0,0,0))
+                doc.save(source)
+            edits = [{'page':1,'rect':[100,90,105,103],
+                      'chars':[{'text':'j','origin':[100,100],'rect':[100,90,105,103]}]}]
+            with fitz.open(source) as doc:
+                doc[0].add_redact_annot((100,90,105,103),fill=False)
+                doc[0].apply_redactions(images=0,graphics=0)
+                doc.save(target)
+            self.assertTrue(verify_unchanged(source,target,edits)['pages'][0]['outside_pixels_equal'])
+            with fitz.open(target) as doc:
+                doc[0].draw_rect((90,95,92,100),color=None,fill=(1,1,1))
+                changed = doc.tobytes()
+            target.write_bytes(changed)
+            with self.assertRaisesRegex(ValueError,'正文区域外像素改变'):
+                verify_unchanged(source,target,edits)
+
     def test_oversized_cff_metrics_do_not_erase_math_on_previous_line(self):
         """自造合法 CFF：源外框过高，但字形不与下一行相交；最终字体须恢复。"""
         from fontTools.fontBuilder import FontBuilder

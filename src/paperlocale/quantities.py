@@ -145,6 +145,12 @@ def standalone_units(text: str) -> list[tuple[int, int, str]]:
         if parsed is None:
             continue
         end, signature, count = parsed
+        # “all-day/hour / wet-day/hour percentiles”中的斜杠列举两种
+        # 时间尺度，不是day除以hour。仅排除这个有明确语境的裸词组；
+        # 有数值的“2 day/hour”等量值仍由find_quantities完整校验。
+        if (re.search(r'(?:all|wet)[-‑]$', text[:match.start()], re.I)
+                and re.fullmatch(r'days?/hours?', text[match.start():end], re.I)):
+            continue
         if count > 1 or any(power != 1 for _, power in signature) or (signature and signature[0][0] in _BARE):
             result.append((match.start(), end, unit_label(signature)))
             end_seen = end

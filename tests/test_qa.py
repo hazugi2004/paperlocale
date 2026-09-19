@@ -82,6 +82,18 @@ def _build_link_icon_pdf(path: Path, *, include_icons: bool) -> None:
 
 
 class PdfQaTest(unittest.TestCase):
+    def test_shading_rasterization_is_not_counted_as_a_pdf_image(self):
+        from reportlab.lib.colors import Color
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'gradient.pdf'
+            document = canvas.Canvas(str(source), pagesize=(100,100))
+            document.linearGradient(10,10,90,90,[Color(0,0,0),Color(1,1,1)])
+            document.save()
+            # 原生sh渐变会出现在MuPDF图像信息中，但内容流没有图片Do/BI。
+            with fitz.open(source) as pdf:
+                self.assertGreater(len(pdf[0].get_image_info()),0)
+            self.assertEqual(_image_counts(source),[0])
+
     def test_cmap_warnings_are_counted_without_console_noise(self) -> None:
         """可恢复字体日志应进入报告计数，且调用后恢复原 logger 配置。"""
 

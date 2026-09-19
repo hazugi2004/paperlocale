@@ -266,21 +266,29 @@ def _preserve_front_matter(blocks: list[dict], *, paragraph=False) -> None:
         if block['rect'][1] < lower:
             continue
         value = block['text']
-        if MAIN_HEADING.fullmatch(value) or (not paragraph and len(value.split()) >= 25):
+        if (MAIN_HEADING.fullmatch(value) or paragraph and re.match(r'^(?:Abstract|Introduction)\b', value, re.I)
+                or not paragraph and len(value.split()) >= 25):
             break
         # 数字、星号、匕首是常见机构/通讯上标。必须仍有两个姓名词，
         # 并限定于标题和首个正文段之间，避免吞掉正文的小标题或实体名。
-        names = re.sub(r"[\d*†‡]+", "", value).strip()
+        name_text = value
+        if paragraph and all('text' in p for p in block['parts']):
+            # 字母机构上标可能紧贴姓氏（例如Singh后接d,e），不能用
+            # 普通字符串删除a–f猜姓名。只在原字号明显较小的上标处
+            # 加分隔符供姓名结构识别；最终整个作者块仍保留原PDF。
+            normal = max(p['size'] for p in block['parts'])
+            name_text = ''.join(p['text'] if p['size'] >= .85*normal else ',' for p in block['parts'])
+        names = re.sub(r"[\d*†‡]+", "", name_text).strip()
         names = re.split(r"\s*(?:,|;|&|\band\b)\s*", names)
         name_pattern = r"(?:[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*\s+){1,5}[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*"
         is_name = (all(re.fullmatch(name_pattern, name.strip()) for name in names if name.strip())
                    if paragraph else all(re.fullmatch(name_pattern, name) for name in names))
         # 多作者名单可能超过25词；先验证每个分隔项都是姓名，再应用
         # 长正文停止条件。不能因作者多就猜测姓名译法或把名单送入正文。
-        if paragraph and len(value.split()) >= 25 and not (is_name and len(names) > 1):
-            break
         affiliation = re.search(r"\b(?:university|institute|department|laboratory|school of|"
                                 r"faculty of|hospital|college|e-mail|email)\b|\S+@\S+", value, re.I)
+        if paragraph and len(value.split()) >= 25 and not (is_name and len(names) > 1 or affiliation):
+            break
         if is_name or affiliation:
             block['kind'] = 'preserve'
 

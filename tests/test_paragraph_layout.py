@@ -15,6 +15,50 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_two_line_regular_heading_does_not_absorb_following_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'heading.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                for x,y,text in [(40,100,'4.2.'),(65,100,'Spatial distribution of precipitation indices'),
+                                 (40,112,'with 10 year return period'),
+                                 (40,126.5,'Increasing rainfall was observed in this region.'),
+                                 (40,138.5,'The observations support the following results.')]:
+                    p.insert_text((x,y),text,fontsize=10)
+                doc.save(source)
+            plan = extract_layout(source,paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),2)
+            self.assertTrue(blocks[plan['groups'][1][0]]['text'].startswith('Increasing'))
+
+    def test_letter_affiliations_and_long_institution_block_stay_original(self):
+        from paperlocale.source_layout import _preserve_front_matter
+        def block(text,y,size,parts=None):
+            return {'kind':'body','page':1,'text':text,'rect':[40,y,400,y+20],
+                    'parts':parts or [{'size':size,'text':text}]}
+        institutions = 'a Department of Earth Science, Example University, City, Country; '*5
+        blocks = [block('Precipitation extremes',50,18),
+                  block('Jane Doea,b John Smithc',90,12,
+                        [{'text':'Jane Doe','size':12},{'text':'a,b','size':8},
+                         {'text':'John Smith','size':12},{'text':'c','size':8}]),
+                  block(institutions,120,8),block('Abstract University observations support this study.',200,10)]
+        _preserve_front_matter(blocks,paragraph=True)
+        self.assertEqual([b['kind'] for b in blocks],['body','preserve','preserve','body'])
+
+    def test_display_equation_separates_its_surrounding_prose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'equation.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                p.insert_text((40,100),'The distribution changes with',fontsize=10)
+                p.insert_text((100,125),'x = y + z',fontsize=10)
+                p.insert_text((40,150),'where the symbols denote the following quantities.',fontsize=10)
+                doc.save(source)
+            plan = extract_layout(source,[{'page':1,'rect':[98,112,160,129],'kind':'formula'}],paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),2)
+            self.assertTrue(blocks[plan['groups'][1][0]]['text'].startswith('where'))
+
     def test_appendix_after_acknowledgements_is_translated(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp)/'appendix.pdf'

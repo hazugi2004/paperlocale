@@ -31,6 +31,14 @@ def starts_paragraph(native_lines, preceding, line):
     # 即使PDF把上一条末行与下一条首行放在一个文本块，也必须分段。
     if re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])(?:\s+[A-Za-z]|$)', value):
         return True
+    prefix = ' '.join(''.join(c['c'] for s in l['spans'] for c in s['chars']) for l in preceding)
+    if re.match(r'^\d+(?:\.\d+)+\.?\s', prefix) and len(prefix.split()) <= 18:
+        # 正常字重的两行小节标题可能与正文共用PDF块。以相对本块
+        # 正文行距的额外留白结束标题，保留同样行距的标题续行。
+        ys = sorted({round(s['origin'][1],2) for l in native_lines for s in l['spans']})
+        gaps = [b-a for a,b in zip(ys,ys[1:]) if b-a > .6*size]
+        if gaps and baseline-previous_y > 1.15*median(gaps):
+            return True
     # 独立圆点/编号在左侧悬挂，不能拿它作为正文左边界，否则列表
     # 的每条续行都会被误判为首行缩进，拆成多个自然段。
     prose_lines = [l for l in native_lines if re.search(r'[A-Za-z]{2}',
@@ -83,6 +91,16 @@ def paragraph_groups(blocks):
                 heading = lambda text: bool(re.match(r'^\d+(?:\.\d+)+\.?\s+[A-Z]', text)) and len(text.split()) <= 18
                 if kind == 'body' and (heading(previous['text']) or heading(block['text']) or
                                        new_frame and re.fullmatch(r'and|or', block['text'], re.I)):
+                    connect = False
+                # 独立公式是物理和语义边界：公式两侧的“with/where”
+                # 指向不同原位等式，不能合并后将解释文字移到另一式旁。
+                # 以公式中心位于两个正文框之间为证据，同行的行内碎片
+                # 不触发；公式自身继续使用源对象并接受像素保护检查。
+                if kind == 'body' and previous['page'] == block['page'] and any(
+                        f['kind'] == 'formula' and f['page'] == block['page'] and
+                        a.y1 < (f['rect'][1]+f['rect'][3])/2 < b.y0 and
+                        max(a.x0,b.x0) < f['rect'][2] and min(a.x1,b.x1) > f['rect'][0]
+                        for f in blocks):
                     connect = False
             if connect:
                 groups[-1].append(block['id'])

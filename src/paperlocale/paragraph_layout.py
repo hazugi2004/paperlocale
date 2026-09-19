@@ -99,7 +99,7 @@ def paragraph_groups(blocks):
                 if kind == 'body' and previous['page'] == block['page'] and any(
                         f['kind'] == 'formula' and f['page'] == block['page'] and
                         a.y1 < (f['rect'][1]+f['rect'][3])/2 < b.y0 and
-                        max(a.x0,b.x0) < f['rect'][2] and min(a.x1,b.x1) > f['rect'][0]
+                        min(a.x0,b.x0) < f['rect'][2] and max(a.x1,b.x1) > f['rect'][0]
                         for f in blocks):
                     connect = False
             if connect:

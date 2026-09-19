@@ -52,7 +52,8 @@ class ParagraphTests(unittest.TestCase):
                 p = doc.new_page()
                 p.insert_text((40,100),'The distribution changes with',fontsize=10)
                 p.insert_text((100,125),'x = y + z',fontsize=10)
-                p.insert_text((40,150),'where the symbols denote the following quantities.',fontsize=10)
+                # 公式后的短解释框在左边，未必横向碰到居中公式。
+                p.insert_text((40,150),'where x.',fontsize=10)
                 doc.save(source)
             plan = extract_layout(source,[{'page':1,'rect':[98,112,160,129],'kind':'formula'}],paragraph=True)
             blocks = {b['id']:b for b in plan['blocks']}

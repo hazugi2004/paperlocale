@@ -31,7 +31,11 @@ def starts_paragraph(native_lines, preceding, line):
     # 即使PDF把上一条末行与下一条首行放在一个文本块，也必须分段。
     if re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])(?:\s+[A-Za-z]|$)', value):
         return True
-    left = min(l['bbox'][0] for l in native_lines)
+    # 独立圆点/编号在左侧悬挂，不能拿它作为正文左边界，否则列表
+    # 的每条续行都会被误判为首行缩进，拆成多个自然段。
+    prose_lines = [l for l in native_lines if re.search(r'[A-Za-z]{2}',
+                   ''.join(c['c'] for s in l['spans'] for c in s['chars']))]
+    left = min(l['bbox'][0] for l in (prose_lines or native_lines))
     indent = line['bbox'][0] - left
     widths = [l['bbox'][2] - l['bbox'][0] for l in native_lines]
     # 公式后的小片段也可能从右侧开始；段首缩进应小于四个正常字号。
@@ -72,7 +76,7 @@ def paragraph_groups(blocks):
                 if kind == 'caption':
                     connect = (style and block['page'] == previous['page'] and
                                not CAPTION.match(block['text']))
-                elif re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+[A-Za-z]', block['text']):
+                elif block.get('list_start') or re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+[A-Za-z]', block['text']):
                     connect = False
                 # 编号小节标题及独立公式之间的连接词各占原物理位置，
                 # 不能把正文分配到标题/“and”的短框中。

@@ -285,7 +285,7 @@ def _preserve_front_matter(blocks: list[dict], *, paragraph=False) -> None:
             block['kind'] = 'preserve'
 
 
-def _preserve_auxiliary_sections(blocks: list[dict]) -> None:
+def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False) -> None:
     """原位设置辅助文本分类；小标题与跨页后续内容都不发给翻译器。
 
     输入为已按阅读顺序排列的源块。依赖明确章节名称，不根据一般正文中
@@ -296,7 +296,11 @@ def _preserve_auxiliary_sections(blocks: list[dict]) -> None:
     for block in blocks:
         value = block['text']
         match = AUXILIARY_HEADING.match(value)
-        if MAIN_HEADING.fullmatch(value) and block['kind'] == 'body':
+        # 附录可能放在致谢后、书目前，仍含需要翻译的科学论证。仅接受
+        # 短的明确附录标题，不能因正文提到 Appendix 就结束辅助区保护。
+        appendix = paragraph and len(value.split()) <= 18 and re.fullmatch(
+            r'Appendix(?:\s+[A-Z0-9])?(?:\s*[:.\u2014\u2013-]\s*\S.*)?', value, re.I)
+        if (MAIN_HEADING.fullmatch(value) or appendix) and block['kind'] == 'body':
             auxiliary = False
         elif match and (not value[match.end():].strip() or
                         (block['parts'] and block['parts'][0]['bold']) or
@@ -419,11 +423,27 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 split = []
                 native_text = _plain(' '.join(''.join(c['c'] for s in line['spans'] for c in s['chars'])
                                              for line in native['lines']))
-                for line in native['lines']:
+                # 独立符号行可能用错误Unicode表示圆点（例如提取为“&”）。
+                # 依据同行、左侧悬挂位置识别标记并原位保留字形，不猜测
+                # 字符编码；其后的正文明确作为新列表项开始。
+                markers, list_starts = set(), set()
+                if paragraph:
+                    for index, candidate in enumerate(native['lines'][:-1]):
+                        value = ''.join(c['c'] for s in candidate['spans'] for c in s['chars']).strip()
+                        following = native['lines'][index+1]
+                        next_text = ''.join(c['c'] for s in following['spans'] for c in s['chars'])
+                        a, b = fitz.Rect(candidate['bbox']), fitz.Rect(following['bbox'])
+                        if (len(value) == 1 and not value.isalnum() and re.match(r'[A-Za-z]', next_text)
+                                and abs(a.y1-b.y1) < .5*b.height and .7*b.height < b.x0-a.x0 < 4*b.height):
+                            markers.add(index)
+                            list_starts.add(index+1)
+                for index, line in enumerate(native['lines']):
                     lr = fitz.Rect(line['bbox'])
                     covers = [box for box in boxes if lr.get_area() > 0 and
                               (lr & fitz.Rect(box['rect'])).get_area() / lr.get_area() > .5]
                     role = covers[0]['kind'] if covers else 'body'
+                    if index in markers and role == 'body':
+                        role = 'preserve'
                     reason = _nonprinting_line(page, line, paint) if role == 'body' else None
                     if reason:
                         role = 'preserve'
@@ -441,9 +461,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     if paragraph and split and role == 'body' and not caption_pattern.match(native_text):
                         from .paragraph_layout import starts_paragraph
                         paragraph_break = starts_paragraph(native['lines'], split[-1]['lines'], line)
-                    if not split or paragraph_break or split[-1]['_role'] != role or split[-1]['_reason'] != reason or changed:
+                    if not split or paragraph_break or index in list_starts or split[-1]['_role'] != role or split[-1]['_reason'] != reason or changed:
                         split.append({'lines': [], 'bbox': list(lr), '_role': role, '_style': style,
-                                      '_reason': reason})
+                                      '_reason': reason, '_list_start': index in list_starts})
                     split[-1]['lines'].append(line)
                     split[-1]['bbox'] = list(fitz.Rect(split[-1]['bbox']) | lr)
                 text_blocks.extend(split)
@@ -490,6 +510,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 identity = segment_id(json.dumps([number, list(rect), value], ensure_ascii=False))
                 blocks.append({'id': identity, 'page': number, 'rect': list(rect),
                                'text': value, 'parts': parts, 'kind': kind,
+                               'list_start': block['_list_start'],
                                'preserve_reason': block['_reason'],
                                'page_width': page.rect.width})
     # 期刊图注也会分成左右两栏；视觉模型有时只识别带 Fig. 标题的一栏。
@@ -515,7 +536,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     # 这仍是自动排序启发式，不代表任意版式的语义完整性已得到证明。
     blocks.sort(key=lambda b: (b['page'], int(b['rect'][0] >= b['page_width'] / 2), b['rect'][1]))
     _preserve_front_matter(blocks, paragraph=paragraph)
-    _preserve_auxiliary_sections(blocks)
+    _preserve_auxiliary_sections(blocks, paragraph=paragraph)
     if paragraph:
         from .paragraph_layout import paragraph_groups
         return {'schema': 2, 'source_sha256': digest(source), 'blocks': blocks,
@@ -876,6 +897,7 @@ def verify_unchanged(source: Path, candidate: Path, editable: list[dict], *, sca
     完全一致。正文框边界外只留一像素抗锯齿容差，保护区域仍另外逐区比较。
     """
     pages = []
+    body_masks = None
     with fitz.open(source) as before, fitz.open(candidate) as after:
         if len(before) != len(after):
             raise ValueError('源/译页数改变')
@@ -903,6 +925,16 @@ def verify_unchanged(source: Path, candidate: Path, editable: list[dict], *, sca
                     mask.rectangle((math.floor(r.x0) - 1, math.floor(r.y0) - 1,
                                     math.ceil(r.x1) + 1, math.ceil(r.y1) + 1), fill=(0, 0, 0))
             if diff.getbbox():
-                raise ValueError(f'第{number}页正文区域外像素改变，拒绝发布候选')
+                # 原始j等字形的负左侧承可能越过PDF字符推进框。只扣除
+                # 已绑定原字体、原坐标的待译正文实际墨迹，不扩大矩形
+                # 容差；未知字体仍严格失败，邻近固定字形另有独立校验。
+                if body_masks is None:
+                    from .font_geometry import source_anchor_masks
+                    body_masks, _ = source_anchor_masks(source, editable, scale=scale)
+                if number in body_masks:
+                    ink = body_masks[number].point(lambda value: 255 if value else 0)
+                    diff.paste((0, 0, 0), mask=ink)
+                if diff.getbbox():
+                    raise ValueError(f'第{number}页正文区域外像素改变，拒绝发布候选')
             pages.append({'page': number, 'outside_pixels_equal': True})
     return {'dpi': scale * 72, 'pages': pages}

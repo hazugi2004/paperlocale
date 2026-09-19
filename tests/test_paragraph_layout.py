@@ -15,6 +15,41 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_appendix_after_acknowledgements_is_translated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'appendix.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                for i,text in enumerate(['Acknowledgements', 'We thank the contributors.',
+                                         'Appendix: Theoretical analysis',
+                                         'A1. All-day versus wet-day percentiles',
+                                         'The conditional probability follows this equation.',
+                                         'Open Access This article is distributed freely.']):
+                    p.insert_text((40,80+35*i),text,fontsize=10)
+                doc.save(source)
+            blocks = extract_layout(source, paragraph=True)['blocks']
+            self.assertEqual([b['kind'] for b in blocks],
+                             ['preserve','preserve','body','body','body','preserve'])
+
+    def test_symbol_list_markers_stay_native_and_items_separate(self):
+        # 用错误映射的“&”模拟出版社圆点编码。判断依据是独立符号行
+        # 和悬挂几何，程序须保留源字形，不能把符号作为英文正文重排。
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/'bullets.pdf'
+            with fitz.open() as doc:
+                p = doc.new_page()
+                for y,label in [(100,'All-day percentiles describe intensity.'),
+                                (136,'Frequency indices describe exceedance.')]:
+                    p.insert_text((40,y),'&',fontsize=10)
+                    p.insert_text((58,y),label,fontsize=10)
+                    p.insert_text((58,y+12),'This is the continuation of the definition.',fontsize=10)
+                doc.save(source)
+            plan = extract_layout(source, paragraph=True)
+            blocks = {b['id']:b for b in plan['blocks']}
+            self.assertEqual(len(plan['groups']),2)
+            self.assertTrue(all(b['kind']=='preserve' for b in blocks.values() if b['text']=='&'))
+            self.assertTrue(all('&' not in blocks[i]['text'] for g in plan['groups'] for i in g))
+
     def test_normal_prose_after_subscript_is_not_frozen_as_superscript(self):
         from paperlocale.source_layout import _parts
         def span(text, x, y, size, flags, font='Times-Roman'):

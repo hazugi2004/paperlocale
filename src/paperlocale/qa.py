@@ -13,6 +13,7 @@ from pathlib import Path
 import pymupdf as fitz
 from PIL import Image, ImageDraw
 from pypdf import PdfReader
+from pypdf.generic import ContentStream
 
 PLACEHOLDER_RE = re.compile(r"\{v\d+\}|<style\s+id=|</style>", re.IGNORECASE)
 VECTOR_PAINT_OPERATORS = {
@@ -52,8 +53,33 @@ def _image_counts(pdf_path: Path) -> list[int]:
     数量判定缺图；否则清理冗余资源就会误报。仍检查实际放置次数减少。
     """
 
-    with fitz.open(pdf_path) as document:
-        return [len(page.get_image_info()) for page in document]
+    # MuPDF会把sh渐变绘制展开成临时小位图；它们不是PDF图片调用，
+    # 相同渐变在编辑前后可能展开成不同数量，不能据此判定缺图。
+    # 直接计数内容流中的Image/内联图片，并逐次展开Form调用；渐变
+    # 的可见完整性仍由源版面像素核验负责，真实图片减少仍报错。
+    reader = PdfReader(pdf_path)
+
+    def count(stream, resources, active):
+        if stream is None:
+            return 0
+        total = 0
+        for operands, operator in ContentStream(stream, reader).operations:
+            if operator == b'INLINE IMAGE':
+                total += 1
+            elif operator == b'Do':
+                reference = resources.get('/XObject', {})[operands[0]]
+                obj = reference.get_object()
+                if obj.get('/Subtype') == '/Image':
+                    total += 1
+                elif obj.get('/Subtype') == '/Form':
+                    identity = id(obj)
+                    if identity in active:
+                        raise ValueError('PDF Form资源存在循环引用，不能完成图片核验')
+                    total += count(obj, obj.get('/Resources', resources), active | {identity})
+        return total
+
+    return [count(page.get_contents(), page.get('/Resources', {}), set())
+            for page in reader.pages]
 
 
 def _vector_paint_count(page: object) -> int:

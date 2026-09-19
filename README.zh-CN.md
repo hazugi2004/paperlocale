@@ -71,16 +71,18 @@ v0.6.3 发布后，可按以下方式安装精确公开版本：
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.0"
+python -m pip install "paperlocale[layout]==0.7.2"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-## 开始翻译（0.7.0）
+## 开始翻译（0.7.2）
 
-新运行默认采用全自动源版面模式，只翻译标题、摘要和正文（含方法）。作者与机构、致谢、作者贡献、利益冲突、资助声明、数据与代码可用性、参考文献及其他辅助信息连同小标题全部保留原文。跨页、跨栏及被图片分开的正文按逻辑段落联合翻译；图表、图注、公式和固定引用保留原文与位置。透明图片按实际可见内容判断占用，标题保留字号与粗体。正文在原栏位内重新换行、分配行距，中文字体及文字行不会与英文完全相同。
+新运行默认采用段落框模式（`--layout-mode paragraph`），翻译标题、摘要、正文（含方法）和图注/表注。先按原文缩进、行距与标题样式拆分自然段，再将跨页、跨栏或被图片分隔的同一段联合翻译，写回对应物理框。中文连续换行，不分散到每条旧英文行，不插入汉字间空格。行内引文和已支持的数学字形使用原字体随正文移动，链接目标保留、点击区域同步移动。
+
+图中文字、表内文字、独立公式、作者与机构、致谢等辅助章节及参考文献保留原文。为容纳完整内容，每段字号最多缩小到原字号的80%；可用 `--min-font-size` 明确指定下限。既有 `preserved` 和 `legacy` 运行继续使用原模式及缓存。
 
 ```bash
 paperlocale run paper.pdf --run-dir runs/paper \

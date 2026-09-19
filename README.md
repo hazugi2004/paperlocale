@@ -106,22 +106,25 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.0"
+python -m pip install "paperlocale[layout]==0.7.2"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start (0.7.0)
+## Quick start (0.7.2)
 
-New runs use the automatic source-layout pipeline. Body paragraphs spanning pages,
-columns, or image gaps are translated together. Only the title, abstract, and main
-text (including methods) are translated. Author details, affiliations, acknowledgements,
-contributions, declarations, data/code availability, and references—including their
-headings—remain original. Figures, tables, captions, formulas, and fixed citations
-also retain their source text and positions.
-Transparent images reserve only their visible content. Headings retain size and
-weight; translated body text is wrapped and spaced within its original columns.
-Chinese fonts and line breaks naturally differ from the English source.
+New runs use paragraph frames (`--layout-mode paragraph`). The title, abstract,
+main text and figure/table captions are translated. Natural paragraph boundaries
+are detected inside PDF text blocks; a paragraph split across pages, columns or
+figures is translated once and placed into its corresponding frames. Chinese lines
+flow continuously, without artificial spaces or spreading short lines across the
+old English lines. Inline citations and supported mathematical glyphs move with
+the text using the original font programs; their link targets are preserved.
+
+Figure labels, tables, standalone formulas, author details, auxiliary sections and
+references remain original. Fonts may shrink within each paragraph to 80% of the
+source size to fit complete content; `--min-font-size` specifies an explicit floor.
+Existing `preserved` and `legacy` runs retain their original engines and caches.
 
 ```bash
 paperlocale run paper.pdf --run-dir runs/paper \

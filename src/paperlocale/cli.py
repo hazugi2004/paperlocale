@@ -154,8 +154,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--target-language", default="zh-CN")
     run.add_argument("--pages")
     run.add_argument("--domain", default="atmospheric-science")
-    run.add_argument("--layout-mode", choices=("preserved", "legacy"),
-                     help="新运行默认源版面模式；既有运行保持原模式")
+    run.add_argument("--layout-mode", choices=("paragraph", "preserved", "legacy"),
+                     help="新运行默认段落框模式；既有运行保持原模式")
     run.add_argument("--font-file", type=Path, help="源版面模式使用的中文字体")
     run.add_argument("--min-font-size", type=float, help="显式允许缩小正文的字号下限")
     run.add_argument("--wait-on-error", action=argparse.BooleanOptionalAction, default=None,
@@ -503,20 +503,20 @@ def _execute(args: argparse.Namespace) -> int:
             pages=args.pages,
         )
         from .workflow import save_manifest
-        recorded_mode = manifest.get("layout_mode", "preserved" if is_new else "legacy")
+        recorded_mode = manifest.get("layout_mode", "paragraph" if is_new else "legacy")
         mode = args.layout_mode or recorded_mode
         if mode != recorded_mode and manifest["status"] != "initialized":
             raise ValueError("不能在已开始的运行中切换版面模式")
         manifest["layout_mode"] = mode
         save_manifest(root, manifest)
-        if mode == "preserved":
+        if mode in {"paragraph", "preserved"}:
             from .preserved_workflow import run_preserved
             if args.reference_policy != "preserve":
                 raise ValueError("源版面模式固定保留参考文献，不能翻译标题")
             result = run_preserved(
                 root, provider=_provider_from_args(args) if args.provider and manifest["status"] not in {"rendered", "qa_generated", "accepted"} else None,
                 domain=load_domain_pack(args.domain), plan_path=None,
-                font_file=args.font_file,
+                font_file=args.font_file, paragraph=mode == "paragraph",
                 min_font_size=args.min_font_size, contract_repair=args.contract_repair,
                 dpi=args.dpi, pdftoppm_bin=args.pdftoppm_bin,
                 max_segments=args.max_segments, max_characters=args.max_characters)
@@ -670,7 +670,7 @@ def _execute(args: argparse.Namespace) -> int:
             page_number=args.page,
             rectangle=tuple(args.rect),
             replacement=args.replacement,
-            font_file=args.font_file,
+            font_file=args.font_file, paragraph=mode == "paragraph",
             font_size=args.font_size,
             description=args.description,
             single_line=args.single_line,

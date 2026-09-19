@@ -145,6 +145,31 @@ def compact_target(text):
     return re.sub(r'(?<=[\u3400-\u9fff，。；：！？（）]) +| +(?=[\u3400-\u9fff，。；：！？（）])', '', text)
 
 
+def frame_boundary(tokens, desired, anchors):
+    """在容量比例附近择句读跨框，避免把“我们”拆为两个框的孤字。
+
+    只移动切点，不改写或增删译文。括号内单位和行内原字形一起参与
+    括号深度判断；优先附近句读，否则保留合法的原比例边界。
+    """
+    depth = 0
+    balanced, clauses = [], []
+    for i, token in enumerate(tokens[:-1], 1):
+        match = re.fullmatch(r'\{v(\d+)\}', token)
+        value = anchors[int(match[1])]['text'] if match else token
+        for char in value:
+            if char in '（([【':
+                depth += 1
+            elif char in '）)]】':
+                depth = max(0, depth-1)
+        if depth == 0 and tokens[i][0] not in NO_LINE_START and value[-1] not in NO_LINE_END:
+            balanced.append(i)
+            if value[-1] in '。；，！？;!?':
+                clauses.append(i)
+    nearby = [i for i in clauses if abs(i-desired) <= 24]
+    choices = nearby or balanced
+    return min(choices, key=lambda i: (abs(i-desired), i)) if choices else desired
+
+
 def fit_paragraph(unit, target, font, min_size, bold_font):
     """在完整段落框中逐词元顺序排字；不分散行、不右推引文前的文字。
 
@@ -169,12 +194,15 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
             # 跨物理边界保留两侧的内容；分配完整连续词元，不另起逻辑段落。
             share = frame['weight']/sum(f['weight'] for f in unit['frames'][fi:])
             limit = len(remaining) if fi == len(unit['frames'])-1 else max(1, round(len(remaining)*share))
+            if limit < len(remaining):
+                limit = frame_boundary(remaining, limit, unit['anchors'])
             while limit < len(remaining) and (remaining[limit][0] in NO_LINE_START or remaining[limit-1][-1] in NO_LINE_END):
                 limit += 1
             portion = remaining[:limit]
             cursor = 0
             baseline = rect.y0 + current*.88
             row = 0
+            previous_bottom = rect.y0 - .5
             while cursor < len(portion) and baseline <= rect.y1+.01:
                 x = rect.x0 + (min(frame['indent'], 2*current) if row == 0 and fi == 0 else 0)
                 line_items = []
@@ -220,6 +248,22 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                     cursor -= 1
                     line_items.pop()
                 if not line_items:
+                    break
+                # 上标/下标的真实墨迹可能高于当前中文行高；按相邻两行
+                # 的实际墨迹留出间隔，避免缩字号后公式撞入上一行。
+                gap = min(p['rect'][1] for p in line_items) - previous_bottom
+                if gap < .5:
+                    delta = .5-gap
+                    baseline += delta
+                    for p in line_items:
+                        p['baseline'] += delta
+                        p['rect'][1] += delta
+                        p['rect'][3] += delta
+                        if 'shift' in p:
+                            p['shift'][1] += delta
+                previous_bottom = max(p['rect'][3] for p in line_items)
+                if previous_bottom > rect.y1 + .001:
+                    cursor = 0
                     break
                 placed.extend(line_items)
                 baseline += leading
@@ -397,3 +441,24 @@ def relocate_links(document, original, placements):
             expected[source_page].remove(link)
             expected[item['page']].append(changed)
     return expected
+
+
+def links_equal(expected, actual):
+    """链接目标逐字段相同；新浮点坐标仅容许PDF序列化的0.002点误差。"""
+    pending = list(actual)
+    def same(a,b):
+        keys = (set(a)|set(b))-{'xref','id'}
+        for key in keys:
+            x,y=a.get(key),b.get(key)
+            if isinstance(x,(fitz.Point,fitz.Rect)) and isinstance(y,type(x)):
+                if max(abs(m-n) for m,n in zip(x,y)) > .002:
+                    return False
+            elif x != y:
+                return False
+        return True
+    for link in expected:
+        found = next((i for i,p in enumerate(pending) if same(link,p)),None)
+        if found is None:
+            return False
+        pending.pop(found)
+    return not pending

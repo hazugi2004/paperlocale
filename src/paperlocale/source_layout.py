@@ -57,12 +57,13 @@ def _rect_union(chars: list) -> list[float]:
     return list(rect)
 
 
-def _bold(span):
+def _bold(span, *, paragraph=False):
     """出版社子集字体有时遗漏 PDF 粗体 flag，但保留明确的字重名称。"""
-    return bool(span['flags'] & 16 or re.search(r'(?:[.-]B|Bold(?:Italic|Oblique)?)(?:\+[A-Za-z0-9]+)?$', span['font']))
+    suffix = r'(?:\+[A-Za-z0-9]+)?' if paragraph else ''
+    return bool(span['flags'] & 16 or re.search(r'(?:[.-]B|Bold(?:Italic|Oblique)?)'+suffix+'$', span['font']))
 
 
-def _parts(block: dict, page_number: int, links: list) -> list[dict]:
+def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> list[dict]:
     """按字符坐标分开普通文字和固定锚点，不用白块覆盖公式/引用。
 
     上标、数学字体及明确引文模式保持原对象。普通斜体不能一律当公式，
@@ -79,7 +80,7 @@ def _parts(block: dict, page_number: int, links: list) -> list[dict]:
                                                   or not char['c'].isprintable()),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
                                   re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
-                              'bold': _bold(span),
+                              'bold': _bold(span, paragraph=paragraph),
                               'superscript': bool(span['flags'] & 1)})
         text = ''.join(c['c'] for c in chars)
         # 行内变量未必使用数学字体：真实论文的 β 带帽、R_n、T_d 分布在
@@ -221,7 +222,7 @@ MAIN_HEADING = re.compile(
     r"[.:]?$", re.I)
 
 
-def _preserve_front_matter(blocks: list[dict]) -> None:
+def _preserve_front_matter(blocks: list[dict], *, paragraph=False) -> None:
     """保护显著大号主标题下、摘要/长正文之前的作者与机构。
 
     短作者名单不一定带多个逗号，不能仅依赖人数。这里联合字号、页面位置
@@ -247,7 +248,8 @@ def _preserve_front_matter(blocks: list[dict]) -> None:
         names = re.sub(r"[\d*†‡]+", "", value).strip()
         names = re.split(r"\s*(?:,|;|&|\band\b)\s*", names)
         name_pattern = r"(?:[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*\s+){1,5}[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*"
-        is_name = all(re.fullmatch(name_pattern, name.strip()) for name in names if name.strip())
+        is_name = (all(re.fullmatch(name_pattern, name.strip()) for name in names if name.strip())
+                   if paragraph else all(re.fullmatch(name_pattern, name) for name in names))
         affiliation = re.search(r"\b(?:university|institute|department|laboratory|school of|"
                                 r"faculty of|hospital|college|e-mail|email)\b|\S+@\S+", value, re.I)
         if is_name or affiliation:
@@ -370,7 +372,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     # 同一个 PDF 文本块可能先有两行大号粗体章节标题，再接
                     # 小号正文。按普通字符加权的字号/字重分段，防止联合翻译
                     # 后把正文填入标题行。图注的粗体前缀仍与整条图注一起保护。
-                    style_chars = [(s['size'], _bold(s)) for s in line['spans']
+                    style_chars = [(s['size'], _bold(s, paragraph=paragraph)) for s in line['spans']
                                    for c in s['chars'] if not c['c'].isspace() and not s['flags'] & 1]
                     style = (median(s[0] for s in style_chars),
                              sum(s[1] for s in style_chars) > len(style_chars) / 2) if style_chars else (0, False)
@@ -421,7 +423,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if (number == 1 and rect.y1 < page.rect.height / 2 and value.count(',') >= 4
                         and len(words) > 8 and sum(w[0].isupper() for w in words) / len(words) > .8):
                     kind = 'preserve'
-                parts = _parts(block, number, page.get_links())
+                parts = _parts(block, number, page.get_links(), paragraph=paragraph)
                 # 只有原位数学/引用锚点的片段没有可翻译正文，直接保护；
                 # 例如被出版社拆成独立文本块的行内下标表达式。
                 if kind == 'body' and parts and all(p['fixed'] for p in parts):
@@ -453,7 +455,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     # 页内先判断是否确有双栏，再按栏阅读。通栏标题必须与下方双栏分开；
     # 这仍是自动排序启发式，不代表任意版式的语义完整性已得到证明。
     blocks.sort(key=lambda b: (b['page'], int(b['rect'][0] >= b['page_width'] / 2), b['rect'][1]))
-    _preserve_front_matter(blocks)
+    _preserve_front_matter(blocks, paragraph=paragraph)
     _preserve_auxiliary_sections(blocks)
     if paragraph:
         from .paragraph_layout import paragraph_groups
@@ -822,10 +824,15 @@ def verify_unchanged(source: Path, candidate: Path, editable: list[dict], *, sca
             if a.mediabox != b.mediabox or a.cropbox != b.cropbox or a.rotation != b.rotation:
                 raise ValueError('源页面几何改变')
             def links(values):
-                return sorted(str({k: (tuple(round(x, 3) for x in v) if isinstance(v, (fitz.Rect, fitz.Point)) else str(v)) for k, v in sorted(link.items()) if k not in {'xref', 'id'}})
+                return sorted(str({k: (tuple(round(x, 3) for x in v) if expected_links is not None and isinstance(v, (fitz.Rect, fitz.Point)) else str(v)) for k, v in sorted(link.items()) if k not in {'xref', 'id'}})
                               for link in values)
             expected = expected_links[number] if expected_links is not None else a.get_links()
-            if links(expected) != links(b.get_links()):
+            if expected_links is not None:
+                from .paragraph_layout import links_equal
+                equal = links_equal(expected, b.get_links())
+            else:
+                equal = links(expected) == links(b.get_links())
+            if not equal:
                 raise ValueError(f'第{number}页链接发生变化')
             x, y = a.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False), b.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             left, right = Image.frombytes('RGB', (x.width, x.height), x.samples), Image.frombytes('RGB', (y.width, y.height), y.samples)

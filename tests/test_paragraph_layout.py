@@ -34,6 +34,14 @@ class ParagraphTests(unittest.TestCase):
         self.assertEqual(compact_target('  土 壤\n水分 model name 3 mm 改善 。 '),
                          '土壤水分model name 3 mm改善。')
 
+    def test_frame_boundary_prefers_clause_and_keeps_parenthesized_units(self):
+        from paperlocale.paragraph_layout import frame_boundary
+        tokens=list('研究识别了主要因素。我们发现不同响应。')
+        split=frame_boundary(tokens,11,[])
+        self.assertEqual(''.join(tokens[:split]),'研究识别了主要因素。')
+        tokens=['增','强','（','month','{v0}','）','；','结','果']
+        self.assertEqual(frame_boundary(tokens,4,[{'text':'−1'}]),7)
+
     def test_caption_translated_and_inline_citation_flows_without_holes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); source=root/'source.pdf'; run=root/'run'
@@ -50,7 +58,7 @@ class ParagraphTests(unittest.TestCase):
             class Provider(TranslationProvider):
                 def translate(self,segments,context):
                     return [Translation(s.id,'Fig. 1 | 水分与植被响应。' if 'Fig.' in s.source else
-                                        '水分影响植被{v0}。同一段落保持连续。') for s in segments]
+                                        '水分影响植被{v0}。') for s in segments]
             with patch('paperlocale.layout_detection.detect_regions',return_value=[]), patch('paperlocale.preserved_workflow.qa_run'):
                 result=run_preserved(run,provider=Provider(),domain=load_domain_pack('ecology'),
                                      plan_path=None,font_file=font,paragraph=True)

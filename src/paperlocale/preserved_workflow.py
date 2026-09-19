@@ -304,10 +304,24 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     # 图文复杂的整篇论文产生大量无用解码及内存占用。
                     raw = written[item['page'] - 1].get_text('rawdict',
                           flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)
-                    page_chars[item['page']] = [c for block in raw['blocks'] for line in block.get('lines', [])
+                    page_chars[item['page']] = [{**c, 'font': span['font']} for block in raw['blocks'] for line in block.get('lines', [])
                                                for span in line['spans'] for c in span['chars']]
-                extracted = ''.join(c['c'] for c in page_chars[item['page']] if abs(c['origin'][1] - item['baseline']) < .01 and fitz.Point((c['bbox'][0] + c['bbox'][2]) / 2,
-                                                                       (c['bbox'][1] + c['bbox'][3]) / 2) in rectangle)
+                if paragraph:
+                    # 句号等墨迹很小，其字体字框中心可能落在墨迹框外。
+                    # 按写入基线和字形原点范围回读完整行，不能漏掉标点；
+                    # 右端严格开区间，避免吸入紧接的行内锚点。
+                    face = bold_font if item.get('bold') else font
+                    end = item['origin_x'] + face.text_length(item['target'], fontsize=item['font_size'])
+                    # 原始行内字形以墨迹边界定位，其字形原点可能略伸入
+                    # 中文的进宽区间；用实际写入字体区分原字形与译文。
+                    face_name = ''.join(c for c in face.name if c.isalnum()).lower()
+                    extracted = ''.join(c['c'] for c in page_chars[item['page']]
+                        if abs(c['origin'][1] - item['baseline']) < .01
+                        and ''.join(v for v in c['font'] if v.isalnum()).lower() == face_name
+                        and item['origin_x'] - .01 <= c['origin'][0] < end - .01)
+                else:
+                    extracted = ''.join(c['c'] for c in page_chars[item['page']] if abs(c['origin'][1] - item['baseline']) < .01 and fitz.Point((c['bbox'][0] + c['bbox'][2]) / 2,
+                                                                           (c['bbox'][1] + c['bbox'][3]) / 2) in rectangle)
                 if ''.join(extracted.split()) != ''.join(item['target'].split()):
                     raise ValueError(f'回读译文与排版内容不同：page={item["page"]}, expected={item["target"]!r}, actual={extracted!r}')
         evidence.update(source_sha256=digest(source), translated_sha256=digest(temporary),

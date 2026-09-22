@@ -16,12 +16,44 @@ def _source_anchor_glyphs(page, characters, cache):
     import re
     import pymupdf as fitz
     from fontTools.cffLib import CFFFontSet
-    fonts = {re.sub(r'^[A-Z]{6}\+', '', f[3]): f[0] for f in page.get_fonts(full=True)}
+    font_candidates = {}
+    for font in page.get_fonts(full=True):
+        # MuPDF 的绘制字体名可先截到31字符，再去除六字母子集前缀；
+        # get_fonts 返回完整 BaseFont。下方按完整描述符核对别名，若截短
+        # 导致两个不同字体同名，仍拒绝绑定，不能任意选择一个公式字体。
+        for name in (font[3], font[3][:31]):
+            name = re.sub(r'^[A-Z]{6}\+', '', name)
+            font_candidates.setdefault(name, set()).add(font[0])
+    fonts = {}
+    for name, refs in font_candidates.items():
+        identities = set()
+        for ref in refs:
+            kind, descriptor = page.parent.xref_get_key(ref, 'FontDescriptor')
+            identities.add((page.parent.xref_get_key(ref, 'Subtype')[1],
+                            page.parent.xref_get_key(ref, 'BaseFont')[1],
+                            page.parent.xref_object(int(descriptor.split()[0]))
+                            if kind == 'xref' else descriptor))
+        # 同一嵌入字体可被多个公式 XObject 重复引用。重放使用字形名，
+        # 不使用各引用的字符编码；仅当原字体名、类型和完整描述符一致
+        # （包括 FontFile3 程序引用）才将这些引用视为同一字体。
+        if len(identities) == 1:
+            fonts[name] = min(refs)
     traces = {}
+    continuations = {}
     for span in page.get_texttrace():
         if tuple(span['dir']) != (1, 0):
             continue
+        leader = None
         for item in span['chars']:
+            if item[1] < 0:
+                # MuPDF 将一个原字形的后续 Unicode 映射标为 gid=-1。
+                # rawdict 把这些零宽字符放在主字形右边界，texttrace 却
+                # 沿用主字形原点；它们不能作为第二个绘制字形参与匹配。
+                if leader is not None:
+                    key = (item[0], round(leader[3][2], 3), round(item[2][1], 3))
+                    continuations.setdefault(key, []).append((span, leader))
+                continue
+            leader = item
             key = (item[0], round(item[2][0], 3), round(item[2][1], 3))
             traces.setdefault(key, []).append((span, item))
     glyphs = []
@@ -29,12 +61,34 @@ def _source_anchor_glyphs(page, characters, cache):
         if not char['text'].strip():
             continue
         key = (ord(char['text']), round(char['origin'][0], 3), round(char['origin'][1], 3))
+        if 'rect' in char and abs(char['rect'][2] - char['rect'][0]) < .001:
+            matches = continuations.get(key, [])
+            if not matches:
+                # 续字符同样可能受到不同 ToUnicode 的影响；原点唯一且
+                # 下方主字形身份一致时，沿用原字符文本，不据此增加字形。
+                matches = [value for k, values in continuations.items() if k[1:] == key[1:]
+                           for value in values]
+            if len(matches) != 1 or not glyphs:
+                return None
+            span, leader = matches[0]
+            previous = glyphs[-1]
+            # 只有本锚点内已经绑定的同一主字形才可接纳续字符；不猜测
+            # 被拆到其他锚点的合字，也不丢弃文本。ToUnicode 保留完整映射。
+            if (previous['glyph_id'] != leader[1] or previous['origin'] != leader[2]
+                    or previous['xref'] != fonts.get(span['font'])):
+                return None
+            previous['text'] += char['text']
+            continue
         matches = traces.get(key, [])
-        if not matches and not char['text'].isprintable():
-            # rawdict 保留控制码，而 texttrace 可能返回 U+FFFD；只有同一
-            # 基线位置唯一对应一个原字形时才绑定，不能猜测缺失字符。
+        if not matches:
+            # 同一 CFF 程序在不同公式中可有不同 ToUnicode，rawdict 与
+            # texttrace 的 Unicode 可能不一致。以唯一原点及实际字宽
+            # 确认同一绘制字形；保留 rawdict 文本，绝不按字母猜公式轮廓。
+            # 控制码兼容原来的唯一位置检查；可打印字符必须同时有字框证据。
             matches = [value for trace_key, values in traces.items() if trace_key[1:] == key[1:]
-                       for value in values]
+                       for value in values if not char['text'].isprintable() or
+                       ('rect' in char and abs(value[1][3][0]-char['rect'][0]) < .001
+                        and abs(value[1][3][2]-char['rect'][2]) < .001)]
         if len(matches) != 1:
             return None
         span, item = matches[0]
@@ -132,7 +186,7 @@ def source_anchor_masks(source, regions, scale=4):
     return masks, supported
 
 
-def open_source_for_editing(source):
+def open_source_for_editing(source, *, normalize_descriptors=True):
     """为文字删除创建临时工作文档，不改变输入 PDF 或最终字体轮廓。
 
     部分出版社 CFF 子集沿用完整字体的巨大 FontBBox，MuPDF 会因此把
@@ -155,13 +209,12 @@ def open_source_for_editing(source):
             descriptor = document.xref_get_key(xref, 'FontDescriptor')
             if descriptor[0] != 'xref':
                 continue
-            stream_ref = document.xref_get_key(int(descriptor[1].split()[0]), 'FontFile3')
+            descriptor_xref = int(descriptor[1].split()[0])
+            stream_ref = document.xref_get_key(descriptor_xref, 'FontFile3')
             if stream_ref[0] != 'xref':
                 continue
             stream_xref = int(stream_ref[1].split()[0])
-            if stream_xref in originals:
-                continue
-            original = document.xref_stream(stream_xref)
+            original = originals.get(stream_xref, document.xref_stream(stream_xref))
             cff = CFFFontSet()
             cff.decompile(BytesIO(original), None)
             top = cff[0]
@@ -174,6 +227,14 @@ def open_source_for_editing(source):
             if top.FontBBox != old_box:
                 originals[stream_xref] = original
                 document.update_stream(stream_xref, output.getvalue())
+                # MuPDF 还使用PDF描述符的外框和升降部。只更新CFF会留下
+                # 旧的巨大字框，阻挡下一行正文删除。同步临时指标；同一流
+                # 可被多个描述符引用，因此逐个保存并更新，最终全部还原。
+                if normalize_descriptors:
+                    originals.setdefault(descriptor_xref, document.xref_object(descriptor_xref))
+                    document.xref_set_key(descriptor_xref, 'FontBBox', '[' + ' '.join(map(str, top.FontBBox)) + ']')
+                    document.xref_set_key(descriptor_xref, 'Ascent', str(top.FontBBox[3]))
+                    document.xref_set_key(descriptor_xref, 'Descent', str(top.FontBBox[1]))
         if originals:
             # 重新打开才能使 MuPDF 丢弃已经缓存的字体指标。
             normalized = fitz.open(stream=document.tobytes(), filetype='pdf')
@@ -195,7 +256,10 @@ def open_source_for_editing(source):
 def restore_source_fonts(document, originals):
     """写入前恢复原始 CFF 字节，最终 PDF 不携带临时字体指标修改。"""
     for xref, stream in originals.items():
-        document.update_stream(xref, stream)
+        if isinstance(stream, str):
+            document.update_object(xref, stream)
+        else:
+            document.update_stream(xref, stream)
 
 
 @lru_cache(maxsize=4)

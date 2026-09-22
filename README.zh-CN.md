@@ -413,3 +413,17 @@ python scripts/layout_smoke.py \
 `run` 增加 `--no-contract-repair`，与 `--no-restore-source-vectors` 一起使用时，遇到内容或矢量 QA 错误就停止，不执行可选模型/矢量修复。合格片段与失败证据先保存；不控制外部 Provider/CLI 内部的网络重试。`translate` 和 `translate-segments` 也支持关闭模型修复。作者姓名必须先核对原 PDF，再通过完整片段 ID 执行 `confirm-passthrough`，不放宽正文中文门禁。
 
 `apply-text-repair` 使用实际嵌入字体预检中英混排换行；可显式指定 `--font-size 8.2 --min-font-size 7.5`，允许按 0.1 pt 缩小至下限。默认不缩小、不自动扩大矩形；放不下时保留原 PDF。修复后仍须 `qa -> 逐页视觉复核 -> accept`。标题拆分、残留英文与作者版面问题仍可能需要依据源 PDF 局部修复，结构 QA 通过不代表翻译完成。
+
+
+### 0.7.4 补丁：恢复与局部 OCR
+
+遇到旧运行的模型额度耗尽或新版分类变化，可用新的运行目录，增加
+`--import-cache-from 旧运行目录` 并明确指定新 Provider、模型和推理档位。
+只复用源文字及公式锚点一致、通过当前内容门禁的译文，拒收项与来源写入
+`cache_handoff.json`，旧运行保持原样。
+
+提取层遇到无法由源字形证据解释的控制码时，只裁剪异常的待译区域做本地 OCR。
+已安装 Tesseract 时使用英文识别；macOS 可用 Swift 调用系统 Vision。
+`local_ocr/` 中保留裁剪图、提取文本及识别建议；不会把 OCR 猜测直接写入原文。
+`translation_coverage.json` 记录实际翻译范围，机器 QA 通过后仍需语义及逐页视觉复核。
+详见 [0.7.4 说明](docs/releases/v0.7.4.md)。

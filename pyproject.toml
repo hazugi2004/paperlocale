@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paperlocale"
-version = "0.7.3"
+version = "0.7.4"
 description = "Verified, layout-preserving academic PDF translation with pluggable providers and domain packs."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,4 +54,4 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-paperlocale = ["packs/*/*"]
+paperlocale = ["packs/*/*", "local_ocr.swift"]

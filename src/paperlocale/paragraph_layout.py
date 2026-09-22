@@ -21,7 +21,12 @@ def starts_paragraph(native_lines, preceding, line):
     if not preceding:
         return False
     previous = preceding[-1]
-    size = median(s['size'] for s in line['spans'] for c in s['chars'] if not c['c'].isspace())
+    sizes = [s['size'] for s in line['spans'] for c in s['chars'] if not c['c'].isspace()]
+    # 控制码空格恢复后可能留下纯空白的原生行；它不构成新段落，
+    # 也没有可用于估算正文行距的字号样本。
+    if not sizes:
+        return False
+    size = median(sizes)
     baseline = max(s['origin'][1] for s in line['spans'])
     previous_y = max(s['origin'][1] for s in previous['spans'])
     if baseline - previous_y < .6 * size:
@@ -29,7 +34,7 @@ def starts_paragraph(native_lines, preceding, line):
     value = ''.join(c['c'] for s in line['spans'] for c in s['chars'])
     # 悬挂列表的新编号相对正文是向左退回，而不是首行向右缩进。
     # 即使PDF把上一条末行与下一条首行放在一个文本块，也必须分段。
-    if re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])(?:\s+[A-Za-z]|$)', value):
+    if re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])(?:\s+[A-Za-z]|$)', value):
         return True
     prefix = ' '.join(''.join(c['c'] for s in l['spans'] for c in s['chars']) for l in preceding)
     if re.match(r'^\d+(?:\.\d+)+\.?\s', prefix) and len(prefix.split()) <= 18:
@@ -54,6 +59,19 @@ def starts_paragraph(native_lines, preceding, line):
 def paragraph_groups(blocks):
     """正文与图注分别建立阅读链；缩进段首和标题是不可跨越的段落边界。"""
     groups = []
+    # AGU 首页为窄侧栏加宽正文，按页面中线分类会把侧栏续行与摘要交错。
+    # 只在首面存在明确的宽正文和完全位于其左侧的窄栏时分别读取两条链；
+    # 常规双栏/通栏及后续跨页顺序沿用原计划。
+    first = [b for b in blocks if b['page'] == 1 and b['kind'] == 'body']
+    wide = [b for b in first if 'page_width' in b and b['rect'][2]-b['rect'][0] > .5*b['page_width']
+            and .25*b['page_width'] < b['rect'][0] < .5*b['page_width']]
+    gutter = min((b['rect'][0] for b in wide), default=None)
+    sidebar = gutter is not None and any(b['rect'][2] < gutter and
+                  b['rect'][2]-b['rect'][0] < .3*b['page_width'] for b in first)
+    if sidebar:
+        blocks = sorted(blocks, key=lambda b: (b['page'],
+            int(b['rect'][2] >= gutter) if b['page'] == 1 else int(b['rect'][0] >= b['page_width']/2),
+            b['rect'][1]))
     for kind in ('body', 'caption'):
         previous = None
         for block in [b for b in blocks if b['kind'] == kind]:
@@ -78,17 +96,20 @@ def paragraph_groups(blocks):
                 # 编号首行可能以句号结束，后续悬挂行仍属于该列表项。
                 # 只在同页紧邻、字号字重一致且左侧确有悬挂缩进时连接。
                 if (kind == 'body' and style and block['page'] == previous['page'] and
-                        re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+[A-Za-z]', previous['text']) and
+                        re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])\s+[A-Za-z]', previous['text']) and
                         .7*size < b.x0-a.x0 < 4*size and -.5*size <= b.y0-a.y1 < size):
                     connect = True
                 if kind == 'caption':
                     connect = (style and block['page'] == previous['page'] and
                                not CAPTION.match(block['text']))
-                elif block.get('list_start') or re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+[A-Za-z]', block['text']):
+                elif block.get('list_start') or re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])\s+[A-Za-z]', block['text']):
                     connect = False
                 # 编号小节标题及独立公式之间的连接词各占原物理位置，
                 # 不能把正文分配到标题/“and”的短框中。
                 heading = lambda text: bool(re.match(r'^\d+(?:\.\d+)+\.?\s+[A-Z]', text)) and len(text.split()) <= 18
+                if sidebar and kind == 'body' and previous['page'] == block['page'] == 1 and (
+                        (a.x1 < gutter) != (b.x1 < gutter)):
+                    connect = False
                 if kind == 'body' and (heading(previous['text']) or heading(block['text']) or
                                        new_frame and re.fullmatch(r'and|or', block['text'], re.I)):
                     connect = False
@@ -134,7 +155,7 @@ def attach_frames(units, plan):
             # 仅合并同页、右边界一致、紧邻且有明确列表编号的片段；后续
             # 行仍保留内缩，不能借合并框侵入编号左侧空白或邻近公式。
             hanging = (last and last['page'] == frame['page'] and
-                       re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])\s+',
+                       re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])\s+',
                                 blocks[last['source_block']]['text']) and
                        .7*size < rect.x0-last['rect'][0] < 4*size)
             # 同段末行可比前行短；原生数学片段也可能与同一行正文框
@@ -245,6 +266,7 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
         remaining, placed = list(tokens), []
         for fi, frame in enumerate(unit['frames']):
             rect = fitz.Rect(frame['rect'])
+            obstacles = [fitz.Rect(b) for b in frame.get('obstacles', [])]
             face = bold_font if frame['bold'] and bold_font is not None else font
             leading = max(current*1.13, frame['leading']*current/size)
             # 跨物理边界保留两侧的内容；分配完整连续词元，不另起逻辑段落。
@@ -256,10 +278,23 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                 limit += 1
             portion = remaining[:limit]
             cursor = 0
+            prose = ''.join(t for t in portion if not re.fullmatch(r'\{v\d+\}', t))
+            _, prose_bottom, _, prose_top = line_ink(face, prose, current) if prose.strip() else (0,0,0,0)
             baseline = rect.y0 + current*.88
             row = 0
             previous_bottom = rect.y0 - .5
             while cursor < len(portion) and baseline <= rect.y1+.01:
+                # 图框边缘有时仅侵入图注首行不到 1 pt。若先排左侧几个字
+                # 再横跳整幅图，会产生巨大的词间空白。宽障碍覆盖半行以上
+                # 时先将整行基线降至其下沿，仍受段落边界和最终墨迹检查约束。
+                while True:
+                    wide = [b for b in obstacles if (b & rect).width > .5*rect.width
+                            and b.intersects(fitz.Rect(rect.x0, baseline-prose_top,
+                                                       rect.x1, baseline-prose_bottom))]
+                    if not wide:
+                        break
+                    baseline = max(b.y1 for b in wide) + prose_top + .001
+                line_start = cursor
                 x = rect.x0 + (min(frame['indent'], 2*current) if row == 0 and fi == 0
                                else frame.get('hanging_indent', 0))
                 line_items = []
@@ -274,6 +309,14 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                     else:
                         width = face.text_length(token, fontsize=current)
                         _, bottom, _, top = line_ink(face, token, current) if token.strip() else (0,0,0,0)
+                    # 同行逐个跳过固定公式墨迹，整行被占用时改到下一行。
+                    # 文字、行内锚点都适用；不覆盖、移动或删减固定公式。
+                    while True:
+                        hit = [b for b in obstacles if b.intersects(
+                            fitz.Rect(x, baseline-top, x+width, baseline-bottom))]
+                        if not hit:
+                            break
+                        x = max(b.x1 for b in hit) + .001
                     if x+width > rect.x1+.001 or baseline-bottom > rect.y1+.001:
                         break
                     if baseline-top < rect.y0-.001:
@@ -305,7 +348,9 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                     cursor -= 1
                     line_items.pop()
                 if not line_items:
-                    break
+                    baseline += leading
+                    row += 1
+                    continue
                 # 上标/下标的真实墨迹可能高于当前中文行高；按相邻两行
                 # 的实际墨迹留出间隔，避免缩字号后公式撞入上一行。
                 gap = min(p['rect'][1] for p in line_items) - previous_bottom
@@ -318,6 +363,13 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                         p['rect'][3] += delta
                         if 'shift' in p:
                             p['shift'][1] += delta
+                # 上下标导致基线下移后重新检查；整行重新排，不能留下一条
+                # 调整前安全、调整后撞入公式的文字。词元游标回退保证不丢字。
+                if any(fitz.Rect(p['rect']).intersects(b) for p in line_items for b in obstacles):
+                    cursor = line_start
+                    baseline += leading
+                    row += 1
+                    continue
                 previous_bottom = max(p['rect'][3] for p in line_items)
                 if previous_bottom > rect.y1 + .001:
                     cursor = 0
@@ -493,7 +545,26 @@ def relocate_links(document, original, placements):
             dx,dy=item['shift'];box=fitz.Rect(box.x0+dx,box.y0+dy,box.x1+dx,box.y1+dy)
             changed = {k:v for k,v in link.items() if k not in ('xref','id')}
             changed['from'] = box
-            document[source_page-1].delete_link(link)
+            deletion = link
+            if not link.get('xref'):
+                # 部分命名目标使MuPDF返回xref=0；delete_link此时静默无效，
+                # 会留下旧点击区域。源对象不重编号，从原注释的唯一矩形
+                # 找回真实编号；不凭顺序猜测，也不删除同页其他链接。
+                candidates = []
+                for xref, kind, _ in source.annot_xrefs():
+                    if kind != fitz.PDF_ANNOT_LINK:
+                        continue
+                    value = original.xref_get_key(xref, 'Rect')
+                    if value[0] != 'array':
+                        continue
+                    coords = [float(v) for v in value[1].strip('[]').split()]
+                    box_source = fitz.Rect(coords).normalize() * source.transformation_matrix
+                    if max(abs(a-b) for a,b in zip(box_source, rect)) < .002:
+                        candidates.append(xref)
+                if len(candidates) != 1:
+                    raise ValueError(f'第{source_page}页链接原注释无法唯一定位')
+                deletion = {**link, 'xref': candidates[0]}
+            document[source_page-1].delete_link(deletion)
             document[item['page']-1].insert_link(changed)
             expected[source_page].remove(link)
             expected[item['page']].append(changed)

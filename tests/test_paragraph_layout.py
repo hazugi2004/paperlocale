@@ -15,6 +15,156 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_paragraph_skips_fixed_formula_without_losing_text(self):
+        """段落框首行被公式占满时，从下一条可用行完整排字，不覆盖公式。"""
+        from paperlocale.paragraph_layout import fit_paragraph
+        obstacle = fitz.Rect(0,0,150,16)
+        unit = {'id':'blocked','source':'Hello world','anchors':[], 'frames':[{
+            'page':1,'rect':[0,0,150,80],'size':10,'bold':False,'leading':12,
+            'weight':11,'indent':0,'obstacles':[list(obstacle)]}]}
+        placed = fit_paragraph(unit,'Hello world',fitz.Font('china-s'),None,None)
+        self.assertEqual(''.join(p['target'] for p in placed),'Hello world')
+        self.assertTrue(all(not fitz.Rect(p['rect']).intersects(obstacle) for p in placed))
+
+    def test_wide_figure_edge_does_not_split_caption_with_large_gap(self):
+        from paperlocale.paragraph_layout import fit_paragraph
+        unit={'id':'caption','source':'A complete caption.','anchors':[], 'frames':[{
+            'page':1,'rect':[0,10,200,60],'size':10,'bold':False,'leading':12,
+            'weight':20,'indent':0,'obstacles':[[25,0,180,12]]}]}
+        placed=fit_paragraph(unit,'A complete caption.',fitz.Font('china-s'),None,None)
+        self.assertEqual(''.join(p['target'] for p in placed),'A complete caption.')
+        self.assertAlmostEqual(placed[0]['rect'][0],0)
+        self.assertTrue(all(p['rect'][1]>12 for p in placed))
+        self.assertTrue(all(b['rect'][0]-a['rect'][2]<4 for a,b in zip(placed,placed[1:])))
+
+    def test_sidebar_bullets_keep_continuations_before_main_column(self):
+        from paperlocale.paragraph_layout import paragraph_groups
+        def block(key,text,x,y,width):
+            return {'id':key,'kind':'body','page':1,'page_width':600,
+                    'rect':[x,y,x+width,y+10],'text':text,
+                    'parts':[{'text':text,'bold':False,'fixed':False,'size':10,
+                              'rect':[x,y,x+width,y+10]}]}
+        blocks=[block('a','• Changes increased rapidly after the',30,100,120),
+                block('main','This main-column paragraph has a distinct reading order.',180,101,390),
+                block('year','1990s',30,112,30),
+                block('next','• The relative contributions vary',30,124,120),
+                block('tail','with regions and seasons',30,136,120)]
+        self.assertEqual(paragraph_groups(blocks),[['a','year'],['next','tail'],['main']])
+
+    def test_reference_union_does_not_hide_sidebar_acknowledgements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp)/'sidebar.pdf'
+            with fitz.open() as doc:
+                page=doc.new_page(width=600,height=800)
+                page.insert_text((180,270),'References',fontsize=10)
+                page.insert_text((180,290),'Example, A. (2021). Research. Journal 1, 2.',fontsize=10)
+                page.insert_text((30,270),'Acknowledgments',fontsize=8)
+                page.insert_text((30,282),'We thank the editors.',fontsize=8)
+                doc.save(source)
+            refs=[{'page':1,'rect':[29,250,580,700]}]
+            with patch('paperlocale.source_layout._reference_geometry',return_value=(None,None,None,refs)):
+                plan=extract_layout(source,paragraph=True)
+            block=next(b for b in plan['blocks'] if 'We thank' in b['text'])
+            self.assertEqual(block['kind'],'body')
+            self.assertTrue(all(not fitz.Rect(r['rect']).intersects(fitz.Rect(block['rect']))
+                for r in plan['protected_regions'] if r['kind']=='reference'))
+
+    def test_protected_region_does_not_include_adjacent_caption_pixel(self):
+        """保护框外的图注像素不触发重放，框内仅1级色差仍必须被发现。"""
+        from PIL import Image
+        from paperlocale.safe_text import region_pixels
+        source = Image.new('RGB',(30,30),'white')
+        changed = source.copy()
+        rect = [2,2,10,10.2]
+        changed.putpixel((6,20),(0,0,0))  # 中心y=10.25，位于框外。
+        self.assertEqual(region_pixels(source,rect),region_pixels(changed,rect))
+        changed.putpixel((6,19),(254,255,255))
+        self.assertNotEqual(region_pixels(source,rect),region_pixels(changed,rect))
+
+    def test_link_without_xref_moves_once_and_preserves_other_link(self):
+        """模拟读取为xref=0的链接：跨页后旧区域消失，目标和无关链接保留。"""
+        from paperlocale.paragraph_layout import relocate_links, links_equal
+        with fitz.open() as seed:
+            seed.new_page(); seed.new_page()
+            seed[0].insert_link({'kind': fitz.LINK_URI, 'from': fitz.Rect(10,20,30,30), 'uri':'https://example.org/move'})
+            seed[0].insert_link({'kind': fitz.LINK_URI, 'from': fitz.Rect(60,20,80,30), 'uri':'https://example.org/keep'})
+            data = seed.tobytes()
+        placements = [{'page':2, 'shift':[100,100], 'inline_anchor':{
+            'page':1, 'ink':[10,20,30,30], 'glyphs':[{'rect':[10,20,30,30]}]}}]
+        get_links = fitz.Page.get_links
+        def without_xref(page):
+            return [{**v, 'xref':0} for v in get_links(page)]
+        with fitz.open(stream=data,filetype='pdf') as original, fitz.open(stream=data,filetype='pdf') as written:
+            with patch.object(fitz.Page, 'get_links', without_xref):
+                expected = relocate_links(written,original,placements)
+            output = written.tobytes()
+        with fitz.open(stream=output,filetype='pdf') as result:
+            self.assertTrue(links_equal(expected[1],result[0].get_links()))
+            self.assertTrue(links_equal(expected[2],result[1].get_links()))
+            self.assertEqual(len(result[0].get_links()),1)
+            self.assertEqual(len(result[1].get_links()),1)
+
+    def test_tall_formula_box_does_not_protect_empty_space_beside_it(self):
+        """同基线高竖线旁的下一行正文可删，但竖线自身仍完全受保护。"""
+        from paperlocale.safe_text import fixed_text_rectangles, safe_erase_rectangles
+        protected = {'page': 1, 'rect': [10, 80, 100, 120], 'chars': [
+            {'text': '|', 'origin': [10, 100], 'rect': [10, 80, 12, 120]},
+            {'text': 'x', 'origin': [90, 100], 'rect': [90, 92, 100, 103]}]}
+        edit = {'page': 1, 'rect': [40, 104, 50, 115], 'chars': [
+            {'text': 'r', 'origin': [40, 112], 'rect': [40, 104, 50, 115]}]}
+        boxes = fixed_text_rectangles(protected)
+        self.assertEqual(sum(r.get_area() for r in boxes), 190)
+        self.assertTrue(safe_erase_rectangles([edit], [protected]))
+        blocked = {**edit, 'rect': [10, 104, 12, 115], 'chars': [
+            {'text': 'r', 'origin': [10, 112], 'rect': [10, 104, 12, 115]}]}
+        with self.assertRaisesRegex(ValueError, '没有安全删除范围'):
+            safe_erase_rectangles([blocked], [protected])
+
+    def test_panel_title_inside_figure_is_not_translated_as_caption(self):
+        """相交面板标题保持原图；明确图注及图外无标签图注仍可翻译。"""
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'source.pdf'
+            with fitz.open() as doc:
+                page = doc.new_page()
+                for y, text in [(100, 'ERA5 average index'),
+                                (200, 'Figure 1. Annual values.'),
+                                (300, 'Annual average values.')]:
+                    page.insert_text((40, y), text, fontsize=10)
+                doc.save(source)
+            detections = [dict(page=1, kind='figure_caption', rect=[35,y-12,350,y+3])
+                          for y in (100,200,300)]
+            detections += [dict(page=1, kind='figure', rect=[35,y-1,400,y+60])
+                           for y in (100,200)]
+            plan = extract_layout(source, detections, paragraph=True)
+            kinds = {b['text']: b['kind'] for b in plan['blocks']}
+            self.assertEqual(kinds['ERA5 average index'], 'figure')
+            self.assertEqual(kinds['Figure 1. Annual values.'], 'caption')
+            self.assertEqual(kinds['Annual average values.'], 'caption')
+
+    def test_blank_native_line_does_not_start_paragraph(self):
+        from paperlocale.paragraph_layout import starts_paragraph
+        line = {'spans': [{'size': 7, 'chars': [{'c': ' '}]}]}
+        self.assertFalse(starts_paragraph([line], [line], line))
+
+    def test_control_space_requires_unique_font_position_and_width(self):
+        """重叠首字母不阻止空格恢复；未知、歧义或字体不符不得被删除。"""
+        from copy import deepcopy
+        from paperlocale.source_layout import normalize_traced_spaces
+        raw = [{'lines': [{'spans': [{'font': 'STIX-Regular', 'chars': [
+            {'c': '\x07', 'origin': (40, 100), 'bbox': (40, 90, 42, 103)}]}]}]}]
+        trace = {'font': 'STIX-Regular', 'dir': (1, 0), 'chars': [
+            (32, 1, (40, 100), (40, 95, 42, 102)),
+            (65, 30, (40, 100), (40, 95, 46, 102))]}
+        valid = deepcopy(raw)
+        normalize_traced_spaces(valid, [trace])
+        self.assertEqual(valid[0]['lines'][0]['spans'][0]['chars'][0]['c'], ' ')
+        for traces in ([], [trace, trace], [{**trace, 'font': 'Other'}],
+                       [{**trace, 'chars': [(32, 1, (40, 100), (40, 95, 43, 102))]}]):
+            with self.subTest(traces=traces):
+                unknown = deepcopy(raw)
+                normalize_traced_spaces(unknown, traces)
+                self.assertEqual(unknown, raw)
+
     def test_isolated_letter_list_marker_keeps_separator(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp)/'list.pdf'
@@ -120,7 +270,7 @@ class ParagraphTests(unittest.TestCase):
                 doc.save(source)
             blocks = extract_layout(source, paragraph=True)['blocks']
             self.assertEqual([b['kind'] for b in blocks],
-                             ['preserve','preserve','body','body','body','preserve'])
+                             ['body','body','body','body','body','preserve'])
 
     def test_symbol_list_markers_stay_native_and_items_separate(self):
         # 用错误映射的“&”模拟出版社圆点编码。判断依据是独立符号行

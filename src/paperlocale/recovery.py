@@ -43,6 +43,9 @@ def _message(error: Exception) -> str:
 def _transient(error: Exception) -> bool:
     # 不对普通 ValueError/RuntimeError 猜测性重试：它们可能是内容校验、
     # 磁盘空间或身份校验失败。HTTP 401/403 等永久问题直接等待外部恢复。
+    from .providers.qwen_mt import QwenRequestError
+    if isinstance(error, QwenRequestError):
+        return False
     seen = set()
     while error.__cause__ is not None and id(error) not in seen:
         seen.add(id(error))

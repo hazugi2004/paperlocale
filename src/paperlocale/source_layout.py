@@ -304,6 +304,12 @@ def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False) -> None
     这是自动识别规则而非任意文档的语义证明，未知版式仍受后续质量门禁约束。
     """
     auxiliary = False
+    # 新段落模式翻译摘要、致谢、数据/代码声明、贡献和利益声明等阅读内容。
+    # 仅出版服务信息、作者机构和书目继续保护；旧模式保持既有缓存含义。
+    preserved_heading = re.compile(
+        r"^(?:references|bibliography|literature cited|author (?:information|affiliations?)|"
+        r"affiliations?|publisher[’']s note|open access|correspondence|peer review information|"
+        r"reprints and permissions)(?:[.:]?(?:\s|$))", re.I)
     for block in blocks:
         value = block['text']
         match = AUXILIARY_HEADING.match(value)
@@ -311,13 +317,15 @@ def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False) -> None
         # 短的明确附录标题，不能因正文提到 Appendix 就结束辅助区保护。
         appendix = paragraph and len(value.split()) <= 18 and re.fullmatch(
             r'Appendix(?:\s+[A-Z0-9])?(?:\s*[:.\u2014\u2013-]\s*\S.*)?', value, re.I)
-        if (MAIN_HEADING.fullmatch(value) or appendix) and block['kind'] == 'body':
+        if (MAIN_HEADING.fullmatch(value) or appendix or paragraph and
+                re.match(r'^(?:Plain Language Summary|Abstract|Introduction)\b', value, re.I)) and block['kind'] == 'body':
             auxiliary = False
         elif match and (not value[match.end():].strip() or
+                        any(AUXILIARY_HEADING.fullmatch(p['text'].strip()) for p in block['parts'][:1]) or
                         (block['parts'] and block['parts'][0]['bold']) or
                         re.match(r"^(?:Correspondence|Publisher[’']s note|Open Access|"
                                  r"Peer review information|Reprints and permissions)\b", value, re.I)):
-            auxiliary = True
+            auxiliary = not paragraph or bool(preserved_heading.match(value))
         if auxiliary and block['kind'] == 'body':
             block['kind'] = 'preserve'
 
@@ -370,7 +378,30 @@ def _list_marker_box(page, box):
     return False
 
 
-def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False) -> dict:
+def normalize_traced_spaces(raw, traces):
+    """将有绘制证据的控制码空格恢复为空格，不改动 PDF 或未知数学字形。
+
+    部分 CFF PDF 的 rawdict 将空格提取为控制码，texttrace 却正确识别为
+    空格。正文首字母可能与该空格同原点，因此还要核对字体和横向字框，
+    且只接受唯一匹配。没有此证据的控制码仍交给原字形安全检查。
+    """
+    spaces = [(s['font'], c) for s in traces if tuple(s['dir']) == (1, 0)
+              for c in s['chars'] if c[0] == 32 and c[1] >= 0]
+    for block in raw:
+        for line in block.get('lines', []):
+            for span in line['spans']:
+                for char in span['chars']:
+                    if char['c'].isprintable() or char['c'].isspace():
+                        continue
+                    matches = [c for font, c in spaces if font == span['font']
+                               and all(abs(a-b) < .001 for a, b in zip(c[2], char['origin']))
+                               and abs(c[3][0]-char['bbox'][0]) < .001
+                               and abs(c[3][2]-char['bbox'][2]) < .001]
+                    if len(matches) == 1:
+                        char['c'] = ' '
+
+
+def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
@@ -381,7 +412,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     caption_pattern = CAPTION if paragraph else LEGACY_CAPTION
     _, _, _, references = _reference_geometry(source)
     blocks, protected, issues = [], [], []
-    document, _ = open_source_for_editing(source)
+    # 版面计划沿用源描述符坐标，保持已有段落身份与译文缓存；只有实际
+    # 删除及安全删除范围计算使用修正后的临时描述符，不能混入持久计划。
+    document, _ = open_source_for_editing(source, normalize_descriptors=False)
     with document:
         for number, page in enumerate(document, 1):
             if page.rotation or list(page.annots(types=(fitz.PDF_ANNOT_REDACT,)) or []):
@@ -418,6 +451,23 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if covered_by_image and not covered_by_figure:
                     issues.append(f'第{number}页图片外框覆盖自动识别的正文，尚不能自动区分透明图片与图内文字')
                     break
+            if paragraph:
+                # AGU 的书目总框横跨页面，可能罩住左侧独立致谢栏。只有
+                # 看到明确 References 标题和完全位于其左侧的辅助章节，
+                # 才从书目保护框扣除该原生块；不能把任意邻栏当成正文。
+                native_blocks = page.get_text('blocks')
+                reference_heads = [fitz.Rect(b[:4]) for b in native_blocks
+                                   if b[6] == 0 and re.match(r'^References\s*$', b[4].strip(), re.I)]
+                auxiliary = [fitz.Rect(b[:4]) for b in native_blocks if b[6] == 0
+                             and AUXILIARY_HEADING.match(b[4].strip())
+                             and not re.match(r'^(?:References|Bibliography)\b', b[4].strip(), re.I)
+                             and any(b[2] < h.x0 and abs(b[1]-h.y0) < 2*(h.height+1)
+                                     for h in reference_heads)]
+                if auxiliary:
+                    holes = [fitz.Rect(r.x0-.5,r.y0-.5,r.x1+.5,r.y1+.5) for r in auxiliary]
+                    boxes = [piece for box in boxes for piece in (
+                        [{**box, 'rect': list(r)} for r in writing_rectangles(box['rect'], holes)]
+                        if box['kind'] == 'reference' else [box])]
             protected.extend(b for b in boxes if not paragraph or b['kind'] != 'caption')
             # 同一坐标可能有不可见OCR层与可见文字重叠：只有全部绘制记录
             # 都不着色才认定为非打印对象，不能因一份隐藏副本而排除可见正文。
@@ -427,6 +477,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 for code, _, origin, _ in span['chars']:
                     paint.setdefault((code, round(origin[0], 3), round(origin[1], 3)), []).append(hidden)
             raw = page.get_text('rawdict')['blocks']
+            normalize_traced_spaces(raw, page.get_texttrace())
             text_blocks = []
             for native in raw:
                 if not native.get('lines'):
@@ -478,6 +529,17 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     covers = [box for box in boxes if lr.get_area() > 0 and
                               (lr & fitz.Rect(box['rect'])).get_area() / lr.get_area() > .5]
                     role = covers[0]['kind'] if covers else 'body'
+                    # 检测器可能把图上沿的面板标题同时标成图注。没有明确
+                    # Figure/Table 标签、且全部字符基线位于图内时保留原图；
+                    # 不扩大图框，不把图外无标签图注一概排除。
+                    if role == 'caption' and paragraph:
+                        line_text = ''.join(c['c'] for s in line['spans'] for c in s['chars'])
+                        origins = [c['origin'] for s in line['spans'] for c in s['chars']
+                                   if not c['c'].isspace()]
+                        if (origins and not caption_pattern.match(_plain(line_text))
+                                and any(all(region.contains(fitz.Point(origin)) for origin in origins)
+                                        for region in figure_regions)):
+                            role = 'figure'
                     if index in markers and role == 'body':
                         role = 'preserve'
                     reason = _nonprinting_line(page, line, paint) if role == 'body' else None
@@ -518,7 +580,8 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     # 独立网址（含句末标点）无需翻译。不能只留下网址对象、
                     # 却将其 2 pt 的句点当成正文用中文字体重新排字。
                     kind = 'preserve'
-                elif kind == 'body' and not re.search(r'[A-Za-z]{2}', value):
+                elif kind == 'body' and not re.search(r'[A-Za-z]{2}', value) and not (
+                        paragraph and re.fullmatch(r'(?:18|19|20)\d0s', value)):
                     kind = 'formula'
                 elif kind == 'body' and (rect.y1 < 35 or rect.y0 > page.rect.height - 30):
                     kind = 'header-footer'
@@ -543,6 +606,19 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 # 例如被出版社拆成独立文本块的行内下标表达式。
                 if kind == 'body' and parts and all(p['fixed'] for p in parts):
                     kind = 'formula'
+                if paragraph and number == 1 and (
+                        re.match(r'^(?:Received|Accepted)\s+\d', value) or
+                        re.match(r'^[A-Z][A-Za-z-]+,\s+[A-Z]\.', value) and
+                        re.search(r'\(20\d{2}\)', value) and 'doi.' in value.lower()):
+                    kind = 'preserve'
+                if kind in ({'body', 'caption'} if paragraph else {'body'}):
+                    from .local_ocr import anomalous_lines, diagnose_lines
+                    anomalies = anomalous_lines([block])
+                    if anomalies:
+                        if ocr_dir is not None:
+                            # 每块单独目录避免同页多块的局部截图互相覆盖。
+                            diagnose_lines(page, anomalies, ocr_dir / f'block-{len(blocks):04d}')
+                        issues.append(f'第{number}页待译区域有未解决的异常编码；需核对局部 OCR 与源字形')
                 identity = segment_id(json.dumps([number, list(rect), value], ensure_ascii=False))
                 blocks.append({'id': identity, 'page': number, 'rect': list(rect),
                                'text': value, 'parts': parts, 'kind': kind,
@@ -643,6 +719,15 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
             rect = fitz.Rect(values)
             if rect.is_empty or not document[number - 1].rect.contains(rect):
                 raise ValueError('保护区域为空或越界')
+    return plan, units_from_plan(plan, paragraph=paragraph)
+
+
+def units_from_plan(plan: dict, *, paragraph: bool) -> list[dict]:
+    """由已验证的计划构建段落；调用者必须先核对来源及完整字符几何。"""
+    blocks = plan['blocks']
+    by_id = {b['id']: b for b in blocks}
+    translated_kinds = {'body', 'caption'} if paragraph else {'body'}
+    protected = list(plan['protected_regions']) + [b for b in blocks if b['kind'] not in translated_kinds]
     units = []
     for ids in plan['groups']:
         if not ids:
@@ -743,7 +828,7 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
     if paragraph:
         from .paragraph_layout import attach_frames
         attach_frames(units, plan)
-    return plan, units
+    return units
 
 
 def anchor_errors(unit: dict, target: str) -> list[str]:

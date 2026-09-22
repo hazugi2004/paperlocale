@@ -71,14 +71,14 @@ v0.6.3 发布后，可按以下方式安装精确公开版本：
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.3"
+python -m pip install "paperlocale[layout]==0.7.5"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-## 开始翻译（0.7.3）
+## 开始翻译（0.7.5）
 
 新运行默认采用段落框模式（`--layout-mode paragraph`），翻译标题、摘要、正文（含方法）和图注/表注。先按原文缩进、行距与标题样式拆分自然段，再将跨页、跨栏或被图片分隔的同一段联合翻译，写回对应物理框。中文连续换行，不分散到每条旧英文行，不插入汉字间空格。行内引文和已支持的数学字形使用原字体随正文移动，链接目标保留、点击区域同步移动。
 
@@ -427,3 +427,7 @@ python scripts/layout_smoke.py \
 `local_ocr/` 中保留裁剪图、提取文本及识别建议；不会把 OCR 猜测直接写入原文。
 `translation_coverage.json` 记录实际翻译范围，机器 QA 通过后仍需语义及逐页视觉复核。
 详见 [0.7.4 说明](docs/releases/v0.7.4.md)。
+
+### 0.7.5：完整标题、科学符号与编号段落
+
+修复斜体标题漏译、科学符号乱码及编号段落内的大块空白。符号仅按已核验的原字体轮廓精确恢复；未知字形不猜测。旧运行使用新目录显式导入合格缓存。详见 [修复与限制](docs/releases/v0.7.5.md)。

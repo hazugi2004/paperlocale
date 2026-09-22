@@ -44,6 +44,16 @@ def starts_paragraph(native_lines, preceding, line):
         gaps = [b-a for a,b in zip(ys,ys[1:]) if b-a > .6*size]
         if gaps and baseline-previous_y > 1.15*median(gaps):
             return True
+    # 同一编号项的正文左边界来自续行，不能把含编号的首行当左边界；
+    # 否则每条续行都会被误判为新段落。
+    if re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)])\s+', prefix):
+        body_left = min((l['bbox'][0] for l in preceding[1:]), default=line['bbox'][0])
+        if abs(line['bbox'][0]-body_left) < .7*size and baseline-previous_y < 1.65*size:
+            return False
+    # 字母编号的斜体标题可以自然续行；正文开始时的字体变化终止续接。
+    if (re.match(r'^[a-z]\.\s+', prefix) and baseline-previous_y < 1.65*size and
+            all(s['flags'] & 2 for l in [*preceding, line] for s in l['spans'])):
+        return False
     # 独立圆点/编号在左侧悬挂，不能拿它作为正文左边界，否则列表
     # 的每条续行都会被误判为首行缩进，拆成多个自然段。
     prose_lines = [l for l in native_lines if re.search(r'[A-Za-z]{2}',
@@ -110,9 +120,16 @@ def paragraph_groups(blocks):
                 if sidebar and kind == 'body' and previous['page'] == block['page'] == 1 and (
                         (a.x1 < gutter) != (b.x1 < gutter)):
                     connect = False
-                if kind == 'body' and (heading(previous['text']) or heading(block['text']) or
+                if kind == 'body' and (previous.get('heading') or block.get('heading') or heading(previous['text']) or heading(block['text']) or
                                        new_frame and re.fullmatch(r'and|or', block['text'], re.I)):
                     connect = False
+                # 标题可能被出版社拆成两个原生块。仅连续接纳同样斜体、
+                # 同栏紧邻且没有新编号的续行；普通正文永远终止标题组。
+                title_group = any(b.get('heading') for b in blocks if b['id'] in groups[-1])
+                if kind == 'body' and title_group:
+                    connect = (style and block.get('italic') and not block.get('heading') and
+                               block['page'] == previous['page'] and
+                               -.5*size <= b.y0-a.y1 < size and abs(b.x0-a.x0) < 4*size)
                 # 独立公式是物理和语义边界：公式两侧的“with/where”
                 # 指向不同原位等式，不能合并后将解释文字移到另一式旁。
                 # 以公式中心位于两个正文框之间为证据，同行的行内碎片
@@ -162,8 +179,8 @@ def attach_frames(units, plan):
             # 交叠。合并这些连续框，不把最后一句硬塞到短末行里。
             overlap = (last and (fitz.Rect(last['rect']) & rect).get_area() > 0)
             if (last and last['page'] == frame['page'] and
-                    ((abs(last['rect'][0] - rect.x0) < 1 and rect.x1 <= last['rect'][2]+2) or
-                     hanging and abs(last['rect'][2] - rect.x1) < 2 or overlap) and
+                    ((abs(last['rect'][0] + last.get('hanging_indent', 0) - rect.x0) < 1 and rect.x1 <= last['rect'][2]+2) or
+                     hanging and rect.x1 <= last['rect'][2]+2 or overlap) and
                     (overlap or -.5*size <= rect.y0-last['rect'][3] < size) and
                     frame['indent'] < .7*size):
                 if hanging:

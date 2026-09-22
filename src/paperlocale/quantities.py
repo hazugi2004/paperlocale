@@ -18,6 +18,7 @@ for symbol, aliases in {
     'cm': ['厘米'], 'mm': ['毫米'], 'kg': ['千克', '公斤'], 'g': ['克'],
     's': ['秒', 'second', 'seconds'], 'min': ['分钟'], 'h': ['小时', 'hour', 'hours'],
     'd': ['天', '日', 'day', 'days'], 'yr': ['年', 'year', 'years'],
+    'event': ['events', '次事件', '次'], 'decade': ['decades', '十年'],
     'Pa': ['帕', '帕斯卡'], 'hPa': ['百帕'], 'kPa': ['千帕'],
     'K': ['开尔文'], '°C': ['摄氏度', '℃'], '°F': ['华氏度', '℉'],
     '°': ['度'], '%': ['百分比', 'percent'], 'W': ['瓦', '瓦特'], 'MW': ['兆瓦'],
@@ -36,7 +37,7 @@ _ATOM = re.compile('|'.join(re.escape(k).replace(r'\ ', r'\s*')
 _SUPERS = str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺', '0123456789-+')
 _EXP = re.compile(r'(?:\s*\^\s*[+−-]?\d+|\s*[−-]\s*\d+|[⁻⁺]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+|\d+)')
 _POWER = r'10(?:\^[+−-]?\d+|−\d+|[⁻⁺]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+)'
-_NUM = rf'(?:{_POWER}|[+−-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+−-]?\d+)?(?:\s*[×x]\s*{_POWER})?)'
+_NUM = rf'(?:[+−-]?{_POWER}|[+−-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+−-]?\d+)?(?:\s*[×x]\s*{_POWER})?)'
 _VALUES = re.compile(rf'(?<![A-Za-z0-9_./])(?P<a>{_NUM})(?:\s*[–—~-]\s*(?P<b>{_NUM}))?')
 _NON_CJK_LETTER = re.compile(r'[^\W\d_\u3400-\u9fff]')
 _BARE = {'m', 'km', 'cm', 'mm', 'kg', 'Pa', 'hPa', 'kPa', 'K', '°C', '°F', '°', '%', 'ppm', 'ppb'}

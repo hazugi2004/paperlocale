@@ -106,12 +106,12 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.3"
+python -m pip install "paperlocale[layout]==0.7.5"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start (0.7.3)
+## Quick start (0.7.5)
 
 New runs use paragraph frames (`--layout-mode paragraph`). The title, abstract,
 main text and figure/table captions are translated. Natural paragraph boundaries
@@ -458,3 +458,7 @@ are checked; imported provenance and rejected rows are recorded. Old runs are no
 Unresolved extraction codes generate local OCR crops and suggestions (installed Tesseract,
 or macOS Vision via Swift); OCR never silently rewrites source scientific text.
 See [validation and limitations](docs/releases/v0.7.4.md).
+
+### 0.7.5: headings, scientific symbols and numbered paragraphs
+
+See [changes, validation and limits](docs/releases/v0.7.5.md). Existing runs use a new directory with explicit cache import.

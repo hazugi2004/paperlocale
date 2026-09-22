@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5 — 2026-09-22
+
+- Translate complete italic headings and reflow numbered conclusions without internal gaps.
+- Restore reviewed scientific symbols from exact source-glyph outlines and retain correct copy text.
+- Bind coordinates, signed thresholds, scientific notation and event-rate units; reuse only compatible old translations.
+- See [validation and limitations](docs/releases/v0.7.5.md).
+
 ## 0.7.4 — 2026-09-22
 
 - Repair source font metrics, ligatures, fixed-formula avoidance and native-link relocation.

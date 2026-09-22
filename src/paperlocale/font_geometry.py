@@ -120,7 +120,7 @@ def _source_anchor_glyphs(page, characters, cache):
         glyphs.append({'rect': fitz.Rect(x + left * scale, y - upper * scale,
                                         x + right * scale, y - bottom * scale),
                        'xref': xref, 'name': name, 'origin': (x, y), 'size': span['size'],
-                       'text': char['text'], 'color': span['color'], 'glyph_id': item[1]})
+                       'text': char.get('semantic_text', char['text']), 'color': span['color'], 'glyph_id': item[1]})
     return glyphs or None
 
 

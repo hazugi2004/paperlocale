@@ -93,6 +93,8 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
     否则会把物种名或强调正文误排除；独立数学区域另外由自动检测保护。
     """
     result = []
+    # 全行斜体自然语言（常见小节标题）中的短词不是变量。变量混排、
+    # 数学字体、真实上下标和希腊字母仍走原保护规则。
     for line in block.get('lines', []):
         chars = []
         for span in line['spans']:
@@ -102,7 +104,7 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
                 # 出版社数学字体可能将括号映射到控制码，普通中文字体
                 # 无法重建其字形；保留源字形，不能把控制码当正文传给模型。
                 chars.append({**char, 'fixed': bool(superscript or math_font
-                                                  or not char['c'].isprintable()),
+                                                  or 'native_text' in char or not char['c'].isprintable()),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
                                   re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
                               'bold': _bold(span, paragraph=paragraph),
@@ -112,12 +114,15 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
         # 普通斜体和小字号下标中。按完整变量词元保护基字及上下标，避免
         # 只留下原帽号、却用中文字体重写 β。普通斜体物种名/强调词不适用。
         normal_size = median(c['size'] for c in chars)
+        words = re.findall(r'[A-Za-z]+', text)
+        italic_prose = (paragraph and sum(len(w) > 3 for w in words) >= 2 and
+                        all(c['italic'] for c in chars if c['c'].isalpha()))
         for token in re.finditer(r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9∧]*', text):
             run = chars[token.start():token.end()]
             variable = (bool(re.search('[α-ωΑ-Ω]', token.group())) or
                         (paragraph and all(c['italic'] for c in run) and
                          min(c['size'] for c in run) < .85*max(c['size'] for c in run)) or
-                        (len(token.group()) <= 3 and (run[0]['italic'] or
+                        (not italic_prose and len(token.group()) <= 3 and (run[0]['italic'] or
                          run[0]['fixed'] and any(c['italic'] for c in run)) and
                          not (len(token.group()) > 1 and re.fullmatch(r'-\s*', text[token.end():]))) or
                         (token.group().isupper() and len(token.group()) <= 6 and
@@ -134,6 +139,15 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
             if any(c['fixed'] for c in chars[start:end]):
                 for char in chars[start:end]:
                     char['fixed'] = True
+        # 坐标和科学计数法必须完整保护，不能把度/负号/指数拆散后
+        # 让模型把余下数字当作普通整数。单位文字可翻译，数值不换算。
+        if paragraph:
+            literals = [r'[<>≤≥]?\s*[−-]\d+(?:\.\d+)?', r'[<>≤≥]\s*\d+(?:\.\d+)?', r'\d{1,3}°\d{1,2}′(?:[–−-]\d{1,3}°\d{1,2}′)?[EWNS]?',
+                        r'[+−-]?(?:\d+(?:\.\d+)?\s*×\s*)?10[−-]\d+']
+            for pattern in literals:
+                for match in re.finditer(pattern, text):
+                    for char in chars[match.start():match.end()]:
+                        char['fixed'] = True
         ranges = [m.span() for pattern in (CITATION, URL_RE) for m in pattern.finditer(text)] + scientific_literal_spans(text)
         # 实测 (r: 0.79–0.99; p < 0.01) 曾只保留斜体 r/p，数字和
         # 运算符却被重新排字。括号内完全由短变量、数字和数学分隔符构成
@@ -152,7 +166,9 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
         # 作为正文字号重排既改变公式排印，又会制造并不存在的空间不足。
         relation = r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9]*(?:,\d+)*\s*[=<>≤≥]\s*[+−-]?\d+(?:[.,]\d+)*(?:[eE][+−-]?\d+)?'
         for expression in re.finditer(relation, text):
-            if chars[expression.start()]['fixed']:
+            if chars[expression.start()]['fixed'] or (paragraph and any(
+                    'native_text' in c for c in chars[expression.start():expression.end()]) and
+                    re.match(r'[A-Z][A-Z0-9]*\s*[=<>≤≥]', expression.group())):
                 for char in chars[expression.start():expression.end()]:
                     char['fixed'] = True
         # 标准数学函数名可能用普通正体；仅在紧随已识别数学变量或
@@ -226,7 +242,8 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
                            'bold': run[0]['bold'],
                            'size': median(c['size'] for c in run),
                            'baseline': median(c['origin'][1] for c in run),
-                           'chars': [{'text': c['c'], 'rect': list(c['bbox']), 'origin': list(c['origin'])}
+                           'chars': [{'text': c.get('native_text', c['c']), 'rect': list(c['bbox']), 'origin': list(c['origin']),
+                                      **({'semantic_text': c['c']} if 'native_text' in c else {})}
                                      for c in run]})
     return result
 
@@ -338,7 +355,7 @@ def _nonprinting_line(page: fitz.Page, line: dict, paint: dict) -> str | None:
     未匹配绘制记录、低对比度或部分可见时都保守保留普通分类路径。
     """
     chars = [c for s in line['spans'] for c in s['chars'] if not c['c'].isspace()]
-    keys = [(ord(c['c']), round(c['origin'][0], 3), round(c['origin'][1], 3)) for c in chars]
+    keys = [(ord(c.get('native_text', c['c'])), round(c['origin'][0], 3), round(c['origin'][1], 3)) for c in chars]
     if keys and all(k in paint and all(paint[k]) for k in keys):
         return 'nonpainting-text'
     # PyMuPDF 版本可能返回带符号 ARGB；颜色仅取 RGB，透明度单独按绘制记录核验。
@@ -412,6 +429,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     caption_pattern = CAPTION if paragraph else LEGACY_CAPTION
     _, _, _, references = _reference_geometry(source)
     blocks, protected, issues = [], [], []
+    symbol_cache = {}
     # 版面计划沿用源描述符坐标，保持已有段落身份与译文缓存；只有实际
     # 删除及安全删除范围计算使用修正后的临时描述符，不能混入持久计划。
     document, _ = open_source_for_editing(source, normalize_descriptors=False)
@@ -478,6 +496,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     paint.setdefault((code, round(origin[0], 3), round(origin[1], 3)), []).append(hidden)
             raw = page.get_text('rawdict')['blocks']
             normalize_traced_spaces(raw, page.get_texttrace())
+            if paragraph:
+                from .source_symbols import restore_source_symbols
+                restore_source_symbols(page, raw, symbol_cache)
             text_blocks = []
             for native in raw:
                 if not native.get('lines'):
@@ -624,6 +645,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                'text': value, 'parts': parts, 'kind': kind,
                                'list_start': block['_list_start'],
                                'preserve_reason': block['_reason'],
+                               'italic': all(s['flags'] & 2 for l in block['lines'] for s in l['spans']),
+                               'heading': bool(paragraph and re.match(r'^[a-z]\.\s+[A-Z]', value) and
+                                   all(s['flags'] & 2 for l in block['lines'] for s in l['spans'])),
                                'page_width': page.rect.width})
     # 期刊图注也会分成左右两栏；视觉模型有时只识别带 Fig. 标题的一栏。
     # 将同页、同字号、横向相邻且垂直带重合的另一栏归入图注，避免把它

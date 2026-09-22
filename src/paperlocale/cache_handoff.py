@@ -43,12 +43,14 @@ def import_cache(old_root: Path, root: Path, plan: dict, units: list, domain) ->
     old_plan = json.loads(path.read_text())
     if old_plan.get('source_sha256') != plan['source_sha256']:
         raise ValueError('旧计划源 PDF 身份不一致')
-    # 新版可能把同一原生块的多个列表项重新分组，块 ID 因此改变。
-    # 核对全部原始 part（含字符、字号、字体、坐标）的多重集，允许仅重分组，
-    # 不允许删字、增字或改几何。之后还逐段比较 source 与每个锚点全文。
-    parts = lambda p: Counter(json.dumps(part, sort_keys=True, ensure_ascii=False)
-                              for b in p['blocks'] for part in b['parts'])
-    if parts(old_plan) != parts(plan):
+    # 分类、断段和符号语义修复可以改变 part 边界；原生字符身份必须
+    # 完全一致（包括重复次数）。纯空白 run 在切分时会被丢弃，不作为
+    # 墨迹身份；有意义的空格仍由逐段 source 字符串精确校验。
+    def characters(p):
+        return Counter(json.dumps([b['page'], c['text'], c['rect'], c['origin']],
+                                  ensure_ascii=False)
+                       for b in p['blocks'] for part in b['parts'] for c in part['chars'] if c['text'].strip())
+    if characters(old_plan) != characters(plan):
         raise ValueError('旧计划字符或坐标与源 PDF 不一致，拒绝导入')
     old_units = {u['id']: u for u in units_from_plan(old_plan, paragraph=True)}
     new_units = {u['id']: u for u in units}

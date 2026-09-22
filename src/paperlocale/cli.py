@@ -156,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--domain", default="atmospheric-science")
     run.add_argument("--layout-mode", choices=("paragraph", "preserved", "legacy"),
                      help="新运行默认段落框模式；既有运行保持原模式")
+    run.add_argument("--import-cache-from", type=Path, help="从同一源 PDF 的旧段落运行导入合格缓存，可显式更换模型")
     run.add_argument("--font-file", type=Path, help="源版面模式使用的中文字体")
     run.add_argument("--min-font-size", type=float, help="显式允许缩小正文的字号下限")
     run.add_argument("--wait-on-error", action=argparse.BooleanOptionalAction, default=None,
@@ -517,11 +518,14 @@ def _execute(args: argparse.Namespace) -> int:
                 root, provider=_provider_from_args(args) if args.provider and manifest["status"] not in {"rendered", "qa_generated", "accepted"} else None,
                 domain=load_domain_pack(args.domain), plan_path=None,
                 font_file=args.font_file, paragraph=mode == "paragraph",
+                import_cache_from=args.import_cache_from,
                 min_font_size=args.min_font_size, contract_repair=args.contract_repair,
                 dpi=args.dpi, pdftoppm_bin=args.pdftoppm_bin,
                 max_segments=args.max_segments, max_characters=args.max_characters)
             print(f"候选 PDF：{result['rendered_pdf']}；仍需逐页视觉验收")
             return 0
+        if args.import_cache_from:
+            raise ValueError("缓存导入只支持段落模式")
         needs_provider = manifest["status"] in {"initialized", "collected"}
         if needs_provider and args.provider is None:
             raise ValueError("运行尚未翻译；请提供 --provider 后重试")
@@ -671,6 +675,7 @@ def _execute(args: argparse.Namespace) -> int:
             rectangle=tuple(args.rect),
             replacement=args.replacement,
             font_file=args.font_file, paragraph=mode == "paragraph",
+                import_cache_from=args.import_cache_from,
             font_size=args.font_size,
             description=args.description,
             single_line=args.single_line,

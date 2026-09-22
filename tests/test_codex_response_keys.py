@@ -87,6 +87,8 @@ class CodexResponseKeysTest(unittest.TestCase):
             write_jsonl_atomic(root / "segments.jsonl", [{"id": sid, "source": source}])
 
             def fake_run(command, **kwargs):
+                if command[-1] == '--version':
+                    return type('Completed', (), {'returncode': 0, 'stdout': 'codex-cli test', 'stderr': ''})()
                 schema = json.loads(Path(command[command.index("--output-schema") + 1]).read_text())
                 self.assertEqual(schema["properties"]["translations"]["required"], ["s1"])
                 Path(command[command.index("--output-last-message") + 1]).write_text(
@@ -98,5 +100,5 @@ class CodexResponseKeysTest(unittest.TestCase):
             with patch("paperlocale.providers.codex_local.subprocess.run", side_effect=fake_run) as run:
                 self.assertEqual(translate_segment_file(**arguments), (0, 1))
                 self.assertEqual(translate_segment_file(**arguments), (1, 0))
-                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_count, 2)
             self.assertEqual(json.loads((root / "translations.jsonl").read_text())["id"], sid)

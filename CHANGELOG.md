@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.4 — 2026-09-22
+
+- Repair source font metrics, ligatures, fixed-formula avoidance and native-link relocation.
+- Validate restored anchors before caching and distinguish content failures from layout overflow.
+- Bound Qwen throughput recovery, preserve cache provenance across explicit model handoff, and translate substantive auxiliary sections.
+- Add local OCR evidence for unresolved extraction codes without guessing scientific text.
+- See [validation and limitations](docs/releases/v0.7.4.md).
+
 ## 0.7.3 — 2026-09-19
 
 - Distinguish body list markers from standalone equation labels before safe source-text erasure.

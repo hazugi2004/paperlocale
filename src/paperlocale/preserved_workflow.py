@@ -17,7 +17,7 @@ from .font_geometry import open_source_for_editing, restore_source_fonts
 
 from .contracts import read_jsonl, write_jsonl_atomic, validate_translation
 from .providers import Segment, TranslationContext
-from .pipeline import translate_segment_file
+from .pipeline import translate_segment_file, restored_content_errors
 from .safe_text import (safe_erase_rectangles, verify_text_erased, restore_changed_isolated_regions,
                         page_pixels, region_pixels, fixed_text_rectangles, fixed_characters,
                         restore_default_color_spaces, verify_fixed_ink)
@@ -33,7 +33,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                   font_file: Path | None, min_font_size: float | None = None,
                   contract_repair: bool = True, dpi: int = 144,
                   pdftoppm_bin=None, max_segments: int = 200,
-                  max_characters: int = 30000, paragraph: bool = False) -> dict:
+                  max_characters: int = 30000, paragraph: bool = False,
+                  import_cache_from: Path | None = None) -> dict:
     """逻辑段落翻译→全量预排版→源页写入→保护区域验证→机器 QA。
 
     一个逻辑段落允许跨任意多个页面/图片间隙。模型只收到带固定锚点的全文，
@@ -65,8 +66,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     from .layout_detection import detect_regions
     detections = detect_regions(source, root / 'layout_detection.json')
     if not plan_path.exists():
-        save_json(plan_path, extract_layout(source, detections, paragraph=paragraph))
+        save_json(plan_path, extract_layout(source, detections, paragraph=paragraph, ocr_dir=root / "local_ocr"))
     plan, units = load_plan(source, plan_path, detections, paragraph=paragraph)
+    if import_cache_from is not None:
+        if not paragraph:
+            raise ValueError('缓存导入只支持段落模式')
+        from .cache_handoff import import_cache
+        import_cache(import_cache_from, root, plan, units, domain)
     editable = [part for unit in units for slot in unit['slots'] for part in slot]
     protected = list(plan['protected_regions'])
     translated_kinds = {'body', 'caption'} if paragraph else {'body'}
@@ -75,6 +81,21 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         from .paragraph_layout import bind_inline_glyphs
         bind_inline_glyphs(source, units)
         editable.extend(part for unit in units for part in unit['anchors'])
+        # 段落框可包含原文绕排的独立公式，连续框合并后仍须避让其真实
+        # 墨迹。只增加运行时障碍，不改变源计划、分段ID或已有译文缓存。
+        from .font_geometry import source_anchor_ink_rectangles
+        obstacles, font_cache = {}, {}
+        with fitz.open(source) as original:
+            for region in protected:
+                chars = fixed_characters(region)
+                boxes = source_anchor_ink_rectangles(original[region['page']-1], chars, font_cache) if chars else None
+                boxes = boxes or fixed_text_rectangles(region)
+                obstacles.setdefault(region['page'], []).extend(
+                    list(fitz.Rect(b.x0-.5, b.y0-.5, b.x1+.5, b.y1+.5)) for b in map(fitz.Rect, boxes))
+        for unit in units:
+            for frame in unit['frames']:
+                frame['obstacles'] = [b for b in obstacles.get(frame['page'], [])
+                                      if fitz.Rect(b).intersects(fitz.Rect(frame['rect']))]
     else:
         protected.extend(part for unit in units for part in unit['anchors'])
     # 删除范围与排字范围分开：先证明可逐字删除，再请求翻译，避免已知
@@ -125,7 +146,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         except ValueError as error:
             failed[unit['id']] = (unit, str(error))
     if failed and not contract_repair:
-        raise ValueError('完整译文在原区域内溢出，已禁用自动等义精炼')
+        # fit_unit 同时检查锚点合同和排版，不能把所有校验错误都称为溢出。
+        save_json(root / 'layout_failures.json', {sid: reason for sid, (_, reason) in failed.items()})
+        raise ValueError('译文预排版或锚点校验失败，已禁用自动修复：' +
+                         '; '.join(f'{sid[:12]}: {reason}' for sid, (_, reason) in failed.items()))
     refinement_path = root / 'layout_refinements.json'
     refinements = json.loads(refinement_path.read_text(encoding='utf-8')) if refinement_path.exists() else {}
     for sid, (unit, reason) in failed.items():
@@ -135,6 +159,11 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         feedback = (reason, '保持全部科学事实、数字、术语和占位符顺序，使用更简练的中文同义表达。'
                     '按 {vN} 分隔的各段宽度预算（汉字约1，ASCII字符约0.5）依次为：' + str(budgets) +
                     '。零宽段不得插入非空白字符；不能删去信息、合并数值或改动引用归属。')
+        if anchor_errors(unit, targets[sid]):
+            # 括号合同失败并不意味着空间不足；只要求修正锚点归属，不以
+            # 错误的宽度诊断诱导模型删减文字。修正后仍须实际预排版。
+            feedback = (reason, '完整翻译原文并保留全部科学事实、数字、术语和占位符顺序。'
+                        '固定锚点已经包含的括号不得重复补写，保持代回锚点后的括号结构。')
         context = TranslationContext(source_language=domain.source_language, target_language=domain.target_language,
                                      domain=domain, repair_feedback={sid: (targets[sid], feedback)}, anchor_text=anchor_text)
         previous = refinements.get(sid)
@@ -151,9 +180,9 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                 raise ValueError('版面精炼返回了错误的段落 ID')
             refined = results[0].target
             refinements[sid] = {'before': targets[sid], 'after': refined, 'width_budgets': budgets,
-                                'anchor_text': anchor_text.get(sid, {})}
+                                'anchor_text': anchor_text.get(sid, {}), 'provider': provider.provenance()}
             save_json(refinement_path, refinements)
-        errors = validate_translation(unit['source'], refined, domain) + anchor_errors(unit, refined)
+        errors = validate_translation(unit['source'], refined, domain) + restored_content_errors(unit['source'], refined, anchor_text.get(sid, {}))
         if errors and 'repair' not in refinements[sid]:
             # 实测等义精炼会漏掉 ERA5，或重复锚点里原有的右括号。将明确
             # 门禁错误反馈给同一 Provider 一次。原答复和纠正答复分别落盘；
@@ -165,14 +194,23 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             refinements[sid]['repair'] = {'before': refined, 'after': results[0].target, 'errors': errors}
             refined = results[0].target
             save_json(refinement_path, refinements)
-            errors = validate_translation(unit['source'], refined, domain) + anchor_errors(unit, refined)
+            errors = validate_translation(unit['source'], refined, domain) + restored_content_errors(unit['source'], refined, anchor_text.get(sid, {}))
         if errors:
             raise ValueError('自动版面精炼未通过科学内容校验：' + str(errors))
         for occurrence in units:
             if occurrence['id'] == sid:
                 fit_unit(occurrence, refined, full_font, min_font_size, bold_font)
         targets[sid] = refined
-        write_jsonl_atomic(translations, [{**row, 'target': targets[row['id']]} for row in read_jsonl(translations)])
+        write_jsonl_atomic(translations, [{**row, 'target': targets[row['id']],
+            **({'provider': provider.provenance(), 'previous_translation': row} if row['id'] == sid else {})}
+            for row in read_jsonl(translations)])
+    # 覆盖报告说明自动翻译范围；机器合同不能证明语义忠实或视觉可接受。
+    save_json(root / 'translation_coverage.json', {
+        'translated_blocks': [b['id'] for b in plan['blocks'] if b['kind'] in translated_kinds],
+        'preserved_blocks': [{'id': b['id'], 'page': b['page'], 'kind': b['kind'],
+                              'text': b['text'], 'reason': b.get('preserve_reason') or b['kind']}
+                             for b in plan['blocks'] if b['kind'] not in translated_kinds],
+        'validated_segments': len(targets), 'semantic_review': 'pending', 'visual_review': 'pending'})
     # 预排版使用最终嵌入字体的同一个子集，避免测量原字体、写入子集产生差异。
     font_bytes, font_evidence = _subset_repair_font(font_file, ''.join(targets.values()))
     font = fitz.Font(fontbuffer=font_bytes)

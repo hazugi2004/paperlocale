@@ -6,12 +6,34 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from pathlib import Path
 
 from .contracts import read_jsonl, segment_id, validate_translation, write_jsonl_atomic
 from .domains import DomainPack
 from .providers import Segment, TranslationContext, TranslationProvider
+
+
+def restored_content_errors(source: str, target: str, anchors: dict | None) -> list[str]:
+    """检查恢复后的完整句子；只识别有证据的缺口，不声称自动证明语义忠实。
+
+    anchors=None 表示旧引擎没有锚点上下文，保持其兼容行为；空映射表示
+    段落确无锚点，仍需检查源文括号。源文自己的不配对结构不能擅自修正。
+    """
+    if anchors is None:
+        return []
+    from .contracts import FORMULA_RE
+    from .source_layout import anchor_errors
+    markers = FORMULA_RE.findall(source)
+    if any(marker not in anchors for marker in markers):
+        return ['restored_content 缺少源锚点上下文']
+    unit = {'source': source, 'anchors': [{'text': anchors[m]} for m in markers]}
+    errors = ['restored_content ' + e for e in anchor_errors(unit, target)]
+    # 本次观察到碎片翻译以省略号代替真实内容；原文已有省略号则不误报。
+    if re.search(r'…|\.{3}', target) and not re.search(r'…|\.{3}', source + ''.join(anchors.values())):
+        errors.append('restored_content 原文没有省略号，译文不得用省略号代替未翻译内容')
+    return errors
 
 
 def make_batches(
@@ -88,6 +110,10 @@ def translate_segment_file(
     if overlap:
         raise ValueError(f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}")
 
+    def full_errors(source, target, sid, selected_domain):
+        return validate_translation(source, target, selected_domain) + restored_content_errors(
+            source, target, None if anchor_text is None else anchor_text.get(sid, {}))
+
     existing_rows = read_jsonl(translations_path) if translations_path.exists() else []
     rejected_path = translations_path.with_name("rejected_translations.jsonl")
     existing: dict[str, dict[str, object]] = {}
@@ -109,9 +135,9 @@ def translate_segment_file(
         elif sid in reference_segment_ids:
             errors = validate_translation(source, target, None)
         else:
-            errors = validate_translation(source, target, domain)
+            errors = full_errors(source, target, sid, domain)
         if errors:
-            if all(error.startswith(("quantity ", "scientific_literal ")) for error in errors):
+            if all(error.startswith(("quantity ", "scientific_literal ", "restored_content ")) for error in errors):
                 quantity_rejections.append({**row, "errors": errors, "origin": "cached_quantity_validation"})
                 continue
             raise ValueError(f"既有译文未通过门禁：{sid}: {errors}")
@@ -161,6 +187,7 @@ def translate_segment_file(
         if provider_limit is not None
         else max_segments
     )
+    provenance = provider.provenance() if pending else None
     for batch in make_batches(
         pending,
         max_segments=effective_max_segments,
@@ -175,7 +202,7 @@ def translate_segment_file(
             if source_segment.id in reference_segment_ids:
                 errors = validate_translation(source_segment.source, result.target, None)
             else:
-                errors = validate_translation(source_segment.source, result.target, domain)
+                errors = full_errors(source_segment.source, result.target, source_segment.id, domain)
             if errors:
                 rejected.append(
                     {
@@ -191,6 +218,7 @@ def translate_segment_file(
                     "id": result.id,
                     "source": source_segment.source,
                     "target": result.target,
+                    "provider": provenance,
                 }
             )
         if accepted:
@@ -233,7 +261,7 @@ def translate_segment_file(
                 if source_segment.id in reference_segment_ids:
                     errors = validate_translation(source_segment.source, result.target, None)
                 else:
-                    errors = validate_translation(source_segment.source, result.target, domain)
+                    errors = full_errors(source_segment.source, result.target, source_segment.id, domain)
                 if errors:
                     initial = rejected_by_id[source_segment.id]
                     final_rejected.append(
@@ -257,6 +285,7 @@ def translate_segment_file(
                         "id": result.id,
                         "source": source_segment.source,
                         "target": result.target,
+                        "provider": provenance,
                     }
                 )
 

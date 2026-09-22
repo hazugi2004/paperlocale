@@ -325,9 +325,9 @@ class SourceLayoutTests(unittest.TestCase):
                 descriptor = int(document.xref_get_key(descendant, 'FontDescriptor')[1].split()[0])
                 stream = int(document.xref_get_key(descriptor, 'FontFile3')[1].split()[0])
                 document.xref_set_key(stream, 'Subtype', '/Type1C')
-                document.xref_set_key(descriptor, 'Ascent', '0')
-                document.xref_set_key(descriptor, 'Descent', '0')
-                document.xref_set_key(descriptor, 'FontBBox', '[50 -1000 450 0]')
+                document.xref_set_key(descriptor, 'Ascent', '770')
+                document.xref_set_key(descriptor, 'Descent', '-2958')
+                document.xref_set_key(descriptor, 'FontBBox', '[-20 -2958 1447 770]')
                 document.update_object(font_xref, f'<< /Type /Font /Subtype /Type1 /BaseFont /FixtureMath '
                     f'/FirstChar 80 /LastChar 80 /Widths [500] /Encoding /WinAnsiEncoding '
                     f'/FontDescriptor {descriptor} 0 R >>')
@@ -341,7 +341,10 @@ class SourceLayoutTests(unittest.TestCase):
                 document[0].apply_redactions(images=0, graphics=0, text=0)
                 restore_source_fonts(document, originals)
                 for xref, stream in originals.items():
-                    self.assertEqual(document.xref_stream(xref), stream)
+                    if isinstance(stream, str):
+                        self.assertEqual(document.xref_object(xref), stream)
+                    else:
+                        self.assertEqual(document.xref_stream(xref), stream)
                 result = document.tobytes()
             with fitz.open(stream=result, filetype='pdf') as written:
                 self.assertIn('P', written[0].get_text())
@@ -777,7 +780,7 @@ class SourceLayoutTests(unittest.TestCase):
             {'text': 'A', 'rect': [40, 50, 50, 60], 'origin': [40, 58]},
             {'text': ' ', 'rect': [50, 45, 53, 85], 'origin': [50, 58]},
             {'text': '1', 'rect': [60, 45, 65, 50], 'origin': [60, 49]}]}
-        self.assertEqual([list(r) for r in fixed_text_rectangles(part)],
+        self.assertCountEqual([list(r) for r in fixed_text_rectangles(part)],
                          [[40, 50, 50, 60], [60, 45, 65, 50]])
         formula = {'kind': 'formula', 'rect': part['rect'], 'parts': [part]}
         self.assertEqual(fixed_text_rectangles(formula), fixed_text_rectangles(part))

@@ -16,6 +16,10 @@ from ..quantities import standalone_units
 from .base import Segment, Translation, TranslationContext, TranslationProvider
 
 
+class QwenRequestError(RuntimeError):
+    """Provider 已完成其有界处理；外层工作流不得再次自动重放 HTTP 请求。"""
+
+
 class QwenMTProvider(TranslationProvider):
     """逐片段调用 Qwen-MT，避免把控制提示误当成待翻译正文。"""
 
@@ -83,8 +87,11 @@ class QwenMTProvider(TranslationProvider):
         translations: list[Translation] = []
         for segment in segments:
             literal_spans = scientific_literal_spans(segment.source)
-            if literal_spans == [(0, len(segment.source))]:
-                # 完整数学片段不包含待翻译正文，原样返回，仍由流水线验证全部门禁。
+            from ..contracts import DOI_RE
+            if (literal_spans == [(0, len(segment.source))]
+                    or DOI_RE.fullmatch(segment.source.strip())):
+                # 完整数学片段或纯 DOI 不包含待翻译正文，原样返回，仍由
+                # 流水线验证全部门禁。fullmatch 防止把含 DOI 的正文整段透传。
                 translations.append(Translation(segment.id, segment.source))
                 continue
             # 专用翻译模型有时会把纯占位符视为无语义噪声并删除。先替换成可读的
@@ -228,10 +235,22 @@ class QwenMTProvider(TranslationProvider):
                 for marker, value in sentinels.items():
                     restored_target = restored_target.replace(marker, value)
             domain = None if segment.id in context.reference_segment_ids else context.domain
+            def restored_anchor_errors(candidate):
+                # 通用合同只检查占位符本身；有原文锚点时还须代回其括号，
+                # 避免把“1990)”外再加右括号的译文保存成合格断点。
+                if segment.id not in context.anchor_text:
+                    return []
+                from ..source_layout import anchor_errors
+                mapping = context.anchor_text[segment.id]
+                unit = {"source": segment.source, "anchors": [
+                    {"text": mapping[marker]} for marker in FORMULA_RE.findall(segment.source)
+                ]}
+                return anchor_errors(unit, candidate)
             # 标记完整也可能被模型粘到额外数字上，如 20[year] -> 202015。
             # 对还原后的整段运行同一门禁，不能仅凭标记个数就接受候选。
             needs_repair = not valid_markers or bool(
                 validate_translation(segment.source, restored_target, domain)
+                + restored_anchor_errors(restored_target)
             )
             if needs_repair:
                 # 已实测专用模型会删去重复 SST 的某次标记。仅做一次确定性分段：
@@ -241,6 +260,9 @@ class QwenMTProvider(TranslationProvider):
                 # 恢复阶段把数值、范围、完整单位表达式作为不可拆的原文片段。
                 # 裸单位也在原位保留，防止原先km所在的短间隙再次丢单位。
                 recovery_ranges = spans + quantity_ranges + [(a, b) for a, b, _ in standalone_units(segment.source)]
+                # 括号跨越文字与固定锚点时，片段模型看不到另一半。将原文
+                # 括号同样原位保留，避免各片段自行补齐而产生重复或缺失。
+                recovery_ranges += [m.span() for m in re.finditer(r'[()（）\[\]［］]', segment.source)]
                 source_for_translation = protect_ranges(recovery_ranges)
                 parts = re.split("(" + marker_pattern + ")", source_for_translation)
                 repaired = []
@@ -254,7 +276,13 @@ class QwenMTProvider(TranslationProvider):
                                           and not re.fullmatch(marker_pattern, entry["source"])]
                         fragment_body = {
                             **body, "messages": [{"role": "user", "content": part.strip()}],
-                            "translation_options": {**options, "terms": fragment_terms},
+                            # 分段输入已移除全部保护标记；整段的标记映射及修正反馈
+                            # 不再适用，沿用它们会诱导模型凭空输出标记。仅保留领域
+                            # 基础说明和本片段实际出现的术语，标记仍由本地原位恢复。
+                            "translation_options": {
+                                **options, "domains": context.domain.prompt,
+                                "terms": fragment_terms,
+                            },
                         }
                         translated_part = self._request_translation(fragment_body)
                         if re.search(returned_marker_pattern, translated_part):
@@ -275,6 +303,9 @@ class QwenMTProvider(TranslationProvider):
                 "-",
                 target,
             )
+            errors = restored_anchor_errors(target)
+            if errors:
+                raise ValueError('Qwen-MT 译文固定锚点校验失败：' + '; '.join(errors))
             translations.append(Translation(id=segment.id, target=target.strip()))
         return translations
 
@@ -306,11 +337,19 @@ class QwenMTProvider(TranslationProvider):
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", errors="replace")
                 try:
-                    code = json.loads(detail).get("error", {}).get("code")
+                    error = json.loads(detail).get("error", {})
+                    code = error.get("code")
+                    message = error.get("message", "")
                 except (ValueError, AttributeError):
                     code = None
-                if exc.code == 429 and code == "limit_requests" and not rate_limit_retried and attempt < 2:
-                    # 仅处理已经观察到的请求限流；计费/凭据/权限错误不重试。
+                    message = ""
+                token_throttled = code == "Throttling.AllocationQuota" or (
+                    code == "insufficient_quota" and isinstance(message, str)
+                    and message.startswith("Allocated quota exceeded, please increase your quota limit."))
+                if (exc.code == 429 and (code in {"limit_requests", "Throttling.RateQuota"} or token_throttled)
+                        and not rate_limit_retried and attempt < 2):
+                    # 百炼此特定 AllocationQuota 消息表示 TPS/TPM 限流。
+                    # 不把其他 insufficient_quota（如套餐总额度）当可恢复限流。
                     # 不无限等待配额窗口；最多等待60秒并重试一次，仍失败交回断点。
                     retry_after = exc.headers.get("Retry-After", "60") if exc.headers else "60"
                     try:
@@ -319,10 +358,10 @@ class QwenMTProvider(TranslationProvider):
                         wait_seconds = 60.0
                     if math.isfinite(wait_seconds) and 0 <= wait_seconds <= 60:
                         rate_limit_retried = True
-                        print("Qwen-MT：请求限流，等待后仅重试一次", flush=True)
+                        print("Qwen-MT：请求或Token限流，等待后仅重试一次", flush=True)
                         time.sleep(max(1.0, wait_seconds))
                         continue
-                raise RuntimeError(
+                raise QwenRequestError(
                     f"Qwen-MT 接口返回 HTTP {exc.code}：{detail[-2000:]}"
                 ) from exc
             except (urllib.error.URLError, http.client.RemoteDisconnected) as exc:
@@ -333,6 +372,14 @@ class QwenMTProvider(TranslationProvider):
                     raise RuntimeError(f"无法连接 Qwen-MT 接口：{reason}") from exc
                 time.sleep(2)
 
+        # 根据服务端实际输入+输出Token用量平滑后续请求，目标20,000 TPM。
+        # 这是本进程的保守调度目标，不是账户额度承诺；其他进程共用配额
+        # 仍可能触发上面的有界等待。未返回有效usage时不猜测Token数量。
+        usage = payload.get("usage")
+        tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
+        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
+            self._next_request_at = max(self._next_request_at,
+                                        time.monotonic() + tokens * 60 / 20000)
         try:
             target = payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:

@@ -448,3 +448,13 @@ GNU Affero General Public License v3.0 only. This choice is aligned with the AGP
 Use `--no-contract-repair --no-restore-source-vectors` with `run` to stop before optional model or vector repair. Successful segments and rejection evidence remain resumable; this does not override retries inside an external provider/CLI. Author names are not prose: inspect the source PDF before using `confirm-passthrough` with the full segment ID.
 
 `apply-text-repair` now preflights Chinese wrapping using the embedded font. `--font-size 8.2 --min-font-size 7.5` explicitly permits shrinking in 0.1 pt steps to the requested floor; without the floor, size stays fixed. The rectangle never grows automatically. Overflow changes no PDF. Re-run `qa`, inspect every page, then `accept` after any repair. Split headings and residual English can still need source-backed local repair even when structural QA passes.
+
+
+### 0.7.4: explicit cache handoff and local OCR
+
+Use a new run directory with `--import-cache-from OLD_RUN` to reuse validated paragraph
+translations while explicitly selecting a new provider/model. Source and anchor identity
+are checked; imported provenance and rejected rows are recorded. Old runs are not edited.
+Unresolved extraction codes generate local OCR crops and suggestions (installed Tesseract,
+or macOS Vision via Swift); OCR never silently rewrites source scientific text.
+See [validation and limitations](docs/releases/v0.7.4.md).

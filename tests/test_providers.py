@@ -137,6 +137,23 @@ class ProviderTest(unittest.TestCase):
                 model="example-model",
             )
 
+    def test_qwen_pure_doi_preserved_but_doi_prose_still_translated(self):
+        """纯标识符不调用模型；包含标识符的自然语言仍必须翻译。"""
+        from paperlocale.contracts import validate_translation
+        provider = QwenMTProvider(base_url='https://example.test/v1', api_key='test',
+                                  model='qwen-mt-plus', min_request_interval_seconds=0)
+        doi = '10.1029/2021GL096181'
+        with patch('paperlocale.providers.qwen_mt.urllib.request.urlopen') as request:
+            result = provider.translate([Segment('doi', doi)], self.context)
+            self.assertEqual(result[0].target, doi)
+            self.assertFalse(validate_translation(doi, result[0].target, self.context.domain))
+            request.assert_not_called()
+        with patch('paperlocale.providers.qwen_mt.urllib.request.urlopen',
+                   side_effect=RuntimeError('正文已进入模型请求')) as request:
+            with self.assertRaisesRegex(RuntimeError, '正文已进入模型请求'):
+                provider.translate([Segment('prose', 'See '+doi)], self.context)
+            request.assert_called_once()
+
     def test_qwen_mt_translates_each_segment_with_official_options(self) -> None:
         """专用翻译模型必须收到单条正文和明确的英译简中语言代码。"""
 
@@ -291,6 +308,32 @@ class ProviderTest(unittest.TestCase):
             self.assertNotIn("PLPROTECTED", target)
             self.assertEqual(len(calls), 2)
 
+    def test_qwen_recovery_drops_full_segment_anchor_instructions(self) -> None:
+        """无标记的恢复片段不可继承整段标记映射或反馈，但领域说明须保留。"""
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        context = replace(self.context, anchor_text={"anchor-id": {"{v0}": "1990"}},
+                          repair_feedback={"anchor-id": "FULL_SEGMENT_ONLY"})
+        calls = []
+        def respond(request, timeout):
+            body = json.loads(request.data)
+            calls.append(body)
+            options = body["translation_options"]
+            if len(calls) == 1:
+                self.assertIn("PLPROTECTED", options["domains"])
+                self.assertIn("FULL_SEGMENT_ONLY", options["domains"])
+                target = "[PLPROTECTED9999]"
+            else:
+                self.assertEqual(body["messages"][0]["content"], "and")
+                self.assertEqual(options["domains"], context.domain.prompt)
+                self.assertNotIn("PLPROTECTED", json.dumps(body))
+                self.assertEqual(options["terms"], [])
+                target = "和"
+            return _Response({"choices": [{"message": {"content": target}}]})
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+            target = provider.translate([Segment("anchor-id", "{v0} and SST.")], context)[0].target
+        self.assertEqual(target, "{v0} 和 SST .")
+        self.assertEqual(len(calls), 2)
+
     def test_qwen_mt_rejects_markers_from_recovery_without_recursing(self) -> None:
         """恢复请求再次幻化标记时必须停止；不能吞掉异常标记或无限分段。"""
         provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
@@ -372,6 +415,44 @@ class ProviderTest(unittest.TestCase):
                     provider._request_translation({})
                 self.assertEqual(call.call_count, expected)
 
+    def test_qwen_token_throttling_is_bounded_and_not_plan_exhaustion(self):
+        """实际错误等待一次；套餐耗尽和重复限流不可无限重试。"""
+        import io
+        import urllib.error
+        def error(message):
+            return urllib.error.HTTPError('https://example.test/v1', 429, 'rejected', {},
+                io.BytesIO(json.dumps({'error': {'code': 'insufficient_quota', 'message': message}}).encode()))
+        message = 'Allocated quota exceeded, please increase your quota limit.'
+        response = _Response({'choices': [{'message': {'content': '译文'}}]})
+        for responses, expected_calls, succeeds in (
+                ([error(message), response], 2, True),
+                ([error(message), error(message)], 2, False),
+                ([error('Your token-plan 1-week quota has been exhausted.')], 1, False)):
+            provider = QwenMTProvider(base_url='https://example.test/v1', api_key='test',
+                                      model='qwen-mt-plus', min_request_interval_seconds=0)
+            with patch('paperlocale.providers.qwen_mt.urllib.request.urlopen', side_effect=responses) as call, \
+                    patch('paperlocale.providers.qwen_mt.time.sleep') as sleep:
+                if succeeds:
+                    self.assertEqual(provider._request_translation({}), '译文')
+                else:
+                    with self.assertRaises(RuntimeError):
+                        provider._request_translation({})
+                self.assertEqual(call.call_count, expected_calls)
+                if expected_calls == 2:
+                    sleep.assert_called_once_with(60.0)
+                else:
+                    sleep.assert_not_called()
+
+    def test_qwen_actual_usage_smooths_next_request(self):
+        provider = QwenMTProvider(base_url='https://example.test/v1', api_key='test', model='qwen-mt-plus')
+        response = _Response({'choices': [{'message': {'content': '译文'}}], 'usage': {'total_tokens': 3000}})
+        with patch('paperlocale.providers.qwen_mt.urllib.request.urlopen', return_value=response), \
+                patch('paperlocale.providers.qwen_mt.time.monotonic', return_value=10), \
+                patch('paperlocale.providers.qwen_mt.time.sleep') as sleep:
+            provider._request_translation({})
+            provider._request_translation({})
+            sleep.assert_called_once_with(9.0)
+
     def test_qwen_requests_share_minimum_interval(self) -> None:
         provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret", model="qwen-mt-plus")
         response = _Response({"choices": [{"message": {"content": "译文"}}]})
@@ -410,14 +491,34 @@ class ProviderTest(unittest.TestCase):
             if len(calls) == 1:
                 target = "BAD OMITTED TRANSLATION"
             else:
-                self.assertEqual(content, "Standardized Precipitation Index (")
-                target = "标准化降水指数（"
+                self.assertEqual(content, "Standardized Precipitation Index")
+                target = "标准化降水指数"
             return _Response({"choices": [{"message": {"content": target}}]})
         with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
             target = provider.translate([Segment("id-style", "Standardized Precipitation Index (SPI{v1}).")], self.context)[0].target
         self.assertEqual(len(calls), 2)
         self.assertIn("SPI{v1}", target)
         self.assertNotIn("BAD", target)
+
+    def test_qwen_checks_restored_parentheses_before_accepting_markers(self):
+        """标记完整但重复右括号时，从原文恢复，源括号和锚点内括号均不改写。"""
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret-key", model="qwen-mt-plus", min_request_interval_seconds=0)
+        context = replace(self.context, anchor_text={"brackets": {"{v0}": "1990)"}})
+        calls = []
+        def respond(request, timeout):
+            content = json.loads(request.data)["messages"][0]["content"]
+            calls.append(content)
+            if len(calls) == 1:
+                marker = re.findall(r'\[PLPROTECTED\d+\]', content)[0]
+                target = "（观测 " + marker + "）"
+            else:
+                self.assertEqual(content, "Observed")
+                target = "观测"
+            return _Response({"choices": [{"message": {"content": target}}]})
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+            target = provider.translate([Segment("brackets", "(Observed {v0}")], context)[0].target
+        self.assertEqual(target, "( 观测 {v0}")
+        self.assertEqual(len(calls), 2)
 
     def test_qwen_mt_repairs_year_glued_to_extra_digits(self) -> None:
         """标记数正确但还原后变成202015时，按原文间隙重译而非放宽数字门禁。"""

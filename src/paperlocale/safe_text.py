@@ -1,5 +1,6 @@
 """将正文删除范围和排字范围分离，保留原始引用/公式字符。"""
 import pymupdf as fitz
+import math
 from PIL import Image, ImageChops
 
 
@@ -56,8 +57,12 @@ def verify_fixed_ink(source, written, reference_bytes, protected, editable):
 
 
 def region_pixels(image, rect):
-    box = (fitz.Rect(rect) * 2).irect
-    return image.crop(tuple(box)).tobytes()
+    # 整页144dpi取样中，用像素中心确定归属；向外取整会把保护框外
+    # 紧邻图注的首行像素纳入图组，误触发整图重放。此处不允许色差，
+    # 只排除中心确实位于矩形之外的像素；全页差异另由正文区域门禁检查。
+    box = fitz.Rect(rect) * 2
+    bounds = tuple(math.ceil(value - .5) for value in box)
+    return image.crop(bounds).tobytes()
 
 
 def fixed_characters(part):
@@ -70,21 +75,29 @@ def fixed_characters(part):
 
 
 def fixed_text_rectangles(part):
-    """按原字符基线划分固定文本核验区，避免把上标下方正文算成引用。
+    """保护每个完整原字框，仅合并相邻且上下边界相同的矩形。
 
-    网址与紧接的上标可属于同一个固定锚点，但它们的联合外框包含上标
-    下方的空白。真实论文中后续正文句点的抗锯齿恰落在该空白内。逐基线
-    使用全部原字符外框仍完整覆盖固定文字，同时不保护并不存在的文字。
+    同一基线的括号、竖线和普通符号高度可能不同。把它们按基线合成
+    一个大外框，会把高符号两侧的空白及下一行正文也误判成公式。
+    这里保留字框的精确并集，不缩小任何原字符保护范围。
     """
-    lines = {}
+    rectangles = []
     for char in fixed_characters(part):
         # 空白字符没有可见墨迹，其字体外框可能伸入下一行；不能让空格
         # 的空框将待翻译正文误算成公式。非空字形仍保留完整原字框。
         if 'text' in char and not char['text'].strip():
             continue
-        baseline = round(char['origin'][1], 3)
-        lines[baseline] = lines.get(baseline, fitz.Rect()) | fitz.Rect(char['rect'])
-    return list(lines.values()) or [fitz.Rect(part['rect'])]
+        rect = fitz.Rect(char['rect'])
+        if not rect.is_empty:
+            rectangles.append(rect)
+    merged = []
+    for rect in sorted(rectangles, key=lambda r: (r.y0, r.y1, r.x0)):
+        if (merged and rect.y0 == merged[-1].y0 and rect.y1 == merged[-1].y1
+                and rect.x0 <= merged[-1].x1):
+            merged[-1] |= rect
+        else:
+            merged.append(rect)
+    return merged or [fitz.Rect(part['rect'])]
 
 
 def subtract_rectangles(rect, obstacles):
@@ -138,8 +151,16 @@ def safe_erase_rectangles(editable, protected, source=None):
     """
     result, ligatures = [], {}
     if source is not None:
-        with fitz.open(source) as document:
+        from .font_geometry import open_source_for_editing
+        document, _ = open_source_for_editing(source)
+        metrics = {}
+        with document:
             for number, page in enumerate(document, 1):
+                for block in page.get_text('rawdict')['blocks']:
+                    for line in block.get('lines', []):
+                        for span in line['spans']:
+                            for c in span['chars']:
+                                metrics.setdefault((number, c['c'], tuple(c['origin'])), []).append(c['bbox'])
                 parts = []
                 for span in page.get_texttrace():
                     leader = None
@@ -152,6 +173,13 @@ def safe_erase_rectangles(editable, protected, source=None):
                             # 删除主字形即可删除整个合字，不能把零宽字当漏译跳过。
                             parts.append((chr(item[0]), leader[3][2], item[2][1], leader[3]))
                 ligatures[number] = parts
+        # 删除计划与实际删除必须使用同一临时字体指标。只采纳唯一匹配且
+        # 被原字框包含的新框；不修改持久化版面计划或最终保护校验坐标。
+        protected = [{**p, 'chars': [
+            {**c, 'rect': list(matches[0])} if len(matches := metrics.get(
+                (p['page'], c['text'], tuple(c['origin'])), [])) == 1
+            and fitz.Rect(c['rect']).contains(fitz.Rect(matches[0])) else c
+            for c in fixed_characters(p)]} if fixed_characters(p) else p for p in protected]
     for part in editable:
         obstacles = [rect for p in protected if p['page'] == part['page']
                      for rect in fixed_text_rectangles(p)]
@@ -165,6 +193,18 @@ def safe_erase_rectangles(editable, protected, source=None):
                 matches = [box for text, x, y, box in ligatures.get(part['page'], [])
                            if text == char['text'] and abs(x - char['origin'][0]) < .001
                            and abs(y - char['origin'][1]) < .001]
+                if not matches:
+                    # 与原字形绑定采用相同证据：不同 ToUnicode 可使续字符
+                    # 文本不一致，但 gid=-1 的右边界和基线仍确定其主字形。
+                    # 同一待删片段必须确实包含该非零宽主字形，不能把孤立的
+                    # 零宽字符当成已删除，也不因此扩大实际删除矩形。
+                    matches = [box for _, x, y, box in ligatures.get(part['page'], [])
+                               if abs(x-char['origin'][0]) < .001
+                               and abs(y-char['origin'][1]) < .001
+                               and any(abs(c['rect'][0]-box[0]) < .001
+                                       and abs(c['rect'][2]-x) < .001
+                                       and abs(c['origin'][1]-y) < .001
+                                       and c['rect'][2] > c['rect'][0] for c in part['chars'])]
                 if len(matches) == 1:
                     footprint = fitz.Rect(matches[0])
             if char['text'].strip() and not any(footprint.intersects(r) for r in patches):

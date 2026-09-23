@@ -240,16 +240,18 @@ class CliTest(unittest.TestCase):
         """新运行默认 sol/medium；旧断点沿用当时记录的模型与档位。"""
 
         args = build_parser().parse_args(
-            ["run", "paper.pdf", "--run-dir", "run"]
+            ["run", "paper.pdf", "--run-dir", "run", "--codex-bin", "/fake/codex"]
         )
         _apply_run_provider_defaults(args, {"status": "initialized"}, True)
-        self.assertEqual(_provider_from_args(args).provenance()["model"], "gpt-6-sol")
-        self.assertEqual(_provider_from_args(args).provenance()["reasoning_effort"], "medium")
-        resumed = build_parser().parse_args(["run", "paper.pdf", "--run-dir", "run"])
+        self.assertEqual(_provider_from_args(args).model, "gpt-6-sol")
+        self.assertEqual(_provider_from_args(args).reasoning_effort, "medium")
+        resumed = build_parser().parse_args(
+            ["run", "paper.pdf", "--run-dir", "run", "--codex-bin", "/fake/codex"]
+        )
         _apply_run_provider_defaults(resumed, {"status": "collected", "translation_provider": {
             "provider": "codex-local", "model": "gpt-5.6-sol", "reasoning_effort": "high"}}, False)
-        self.assertEqual(_provider_from_args(resumed).provenance()["model"], "gpt-5.6-sol")
-        self.assertEqual(_provider_from_args(resumed).provenance()["reasoning_effort"], "high")
+        self.assertEqual(_provider_from_args(resumed).model, "gpt-5.6-sol")
+        self.assertEqual(_provider_from_args(resumed).reasoning_effort, "high")
 
     def test_run_parser_accepts_qwen_mt_provider(self) -> None:
         """Qwen-MT 使用独立 Provider，不能冒充通用聊天模型接口。"""

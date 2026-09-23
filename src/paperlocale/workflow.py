@@ -10,6 +10,7 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import os
 import re
 import shlex
 import shutil
@@ -146,6 +147,51 @@ def _verify_rendered_pdf(
     if actual != expected:
         raise ValueError("译文 PDF 在 render 后发生变化；请重新执行 render 和 qa")
     return path
+
+
+def export_run_pdf(run_dir: Path) -> Path:
+    """机器 QA 通过后，将完整候选按源文件名安全复制到源 PDF 所在目录。
+
+    运行目录里的 PDF 仍是 QA 和修复的唯一依据。目标若属于本运行的旧导出，
+    可在重新 QA 后更新；未知文件一律拒绝覆盖，以免误删用户已有译文。
+    """
+    root = run_dir.expanduser().resolve()
+    manifest = load_manifest(root)
+    if manifest["status"] not in {"qa_generated", "accepted"}:
+        raise ValueError("只有完成机器 QA 的译文才能导出到原文件目录")
+    source = _verify_source_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest)
+    report = json.loads(Path(str(manifest["qa_report"])).read_text(encoding="utf-8"))
+    if (report.get("errors") or report.get("translated_sha256") != manifest["rendered_sha256"]
+            or report.get("source_sha256") != manifest["source_sha256"]):
+        raise ValueError("机器 QA 与当前源文或译文不一致，不能导出")
+    destination = source.with_name(f"{source.stem}_translated_by_paperlocale.pdf")
+    if destination.is_symlink():
+        raise FileExistsError(f"目标是符号链接，拒绝覆盖：{destination}")
+    if destination.exists():
+        existing_hash = _sha256(destination) if destination.is_file() else None
+        if existing_hash != manifest["rendered_sha256"] and (
+                manifest.get("exported_pdf") != str(destination)
+                or manifest.get("exported_sha256") != existing_hash):
+            raise FileExistsError(f"目标已有不同内容，拒绝覆盖：{destination}")
+        if existing_hash == manifest["rendered_sha256"]:
+            manifest.update(exported_pdf=str(destination), exported_sha256=existing_hash)
+            save_manifest(root, manifest)
+            return destination
+    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+    try:
+        with rendered.open("rb") as source_handle, temporary.open("wb") as output_handle:
+            shutil.copyfileobj(source_handle, output_handle)
+            output_handle.flush()
+            os.fsync(output_handle.fileno())
+        if _sha256(temporary) != manifest["rendered_sha256"]:
+            raise RuntimeError("译文复制后哈希不一致，未替换目标文件")
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    manifest.update(exported_pdf=str(destination), exported_sha256=manifest["rendered_sha256"])
+    save_manifest(root, manifest)
+    return destination
 
 
 def _verify_domain_languages(

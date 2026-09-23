@@ -259,7 +259,9 @@ def frame_boundary(tokens, desired, anchors):
             balanced.append(i)
             if value[-1] in '。；，！？;!?':
                 clauses.append(i)
-    nearby = [i for i in clauses if abs(i-desired) <= 24]
+    # 窄侧栏的单行框通常只能容纳容量估算附近的字。跨出数十词元去追
+    # 后一句逗号会把整句硬塞到该行，导致后续框尚有空间却提前报溢出。
+    nearby = [i for i in clauses if abs(i-desired) <= 3]
     choices = nearby or balanced
     return min(choices, key=lambda i: (abs(i-desired), i)) if choices else desired
 
@@ -399,7 +401,9 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
             del remaining[:limit]
         if not remaining:
             return merge_text_runs(placed)
-    raise ValueError(f"完整译文无法放入段落框：{unit['id'][:12]}，剩余 {len(remaining)} 个词元")
+    pages = sorted({frame['page'] for frame in unit['frames']})
+    page_label = f"第{pages[0]}页" if len(pages) == 1 else f"第{pages[0]}–{pages[-1]}页"
+    raise ValueError(f"{page_label}完整译文无法放入段落框：{unit['id'][:12]}，剩余 {len(remaining)} 个词元")
 
 
 def write_inline(page, item, font_refs):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -30,6 +31,7 @@ from .workflow import (
     collect_run,
     confirm_passthrough_run,
     confirm_reference_run,
+    export_run_pdf,
     initialize_run,
     load_manifest,
     prepare_reference_review_run,
@@ -87,8 +89,21 @@ def _initialize_or_load_run(
     )
 
 
+class _HelpfulArgumentParser(argparse.ArgumentParser):
+    """参数错误也在当前终端给出原因、位置和可执行的帮助入口。"""
+
+    def error(self, message: str) -> None:
+        from .recovery import _message
+
+        print(f"PaperLocale 参数错误\n原因：{_message(ValueError(message))}\n"
+              f"位置：命令行参数（{self.prog}）\n"
+              f"解决办法：执行 {self.prog} --help 核对参数后重试。",
+              file=sys.stderr, flush=True)
+        self.exit(2)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="paperlocale", description=__doc__)
+    parser = _HelpfulArgumentParser(prog="paperlocale", description=__doc__)
     parser.add_argument(
         "--version",
         action="version",
@@ -172,8 +187,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--provider", choices=("codex-local", "openai-compatible", "qwen-mt")
     )
-    run.add_argument("--model")
-    run.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
+    run.add_argument("--model", help="codex-local 新运行默认 gpt-6-sol；续跑沿用原模型")
+    run.add_argument("--reasoning-effort", choices=REASONING_EFFORTS,
+                     help="codex-local 新运行默认 medium；续跑沿用原档位")
     run.add_argument("--codex-bin")
     run.add_argument("--base-url")
     run.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
@@ -398,11 +414,9 @@ def _provider_from_args(args: argparse.Namespace):
     if key_csv is not None and args.provider != "qwen-mt":
         raise ValueError("--api-key-csv 只适用于 qwen-mt")
     if args.provider == "codex-local":
-        if not args.model:
-            raise ValueError("codex-local 必须显式提供 --model，才能审计实际模型")
         return CodexLocalProvider(
-            model=args.model,
-            reasoning_effort=args.reasoning_effort,
+            model=args.model or "gpt-6-sol",
+            reasoning_effort=args.reasoning_effort or "medium",
             codex_bin=args.codex_bin,
         )
     if args.reasoning_effort:
@@ -434,12 +448,27 @@ def _provider_from_args(args: argparse.Namespace):
 
 def main() -> int:
     args = build_parser().parse_args()
-    if args.command == "run":
-        from .recovery import run_waiting
-        wait = args.contract_repair if args.wait_on_error is None else args.wait_on_error
-        if wait:
-            return run_waiting(lambda: _execute(args), args.run_dir)
-    return _execute(args)
+    from .recovery import print_error, run_waiting
+    try:
+        if args.command == "run":
+            wait = args.contract_repair if args.wait_on_error is None else args.wait_on_error
+            if wait:
+                return run_waiting(lambda: _execute(args), args.run_dir)
+        return _execute(args)
+    except Exception as error:
+        print_error(error, getattr(args, "run_dir", None))
+        return 1
+
+
+def _apply_run_provider_defaults(args: argparse.Namespace, manifest: dict, is_new: bool) -> None:
+    """新运行选定默认模型；已有 Codex 断点始终沿用记录的模型身份。"""
+    recorded = manifest.get("translation_provider")
+    codex_recorded = isinstance(recorded, dict) and recorded.get("provider") == "codex-local"
+    if args.provider is None and (is_new or manifest["status"] == "initialized" or codex_recorded):
+        args.provider = "codex-local"
+    if args.provider == "codex-local" and codex_recorded:
+        args.model = args.model or recorded.get("model")
+        args.reasoning_effort = args.reasoning_effort or recorded.get("reasoning_effort")
 
 
 def _execute(args: argparse.Namespace) -> int:
@@ -494,8 +523,6 @@ def _execute(args: argparse.Namespace) -> int:
     if args.command == "run":
         root = args.run_dir.expanduser().resolve()
         is_new = not (root / "run_manifest.json").is_file()
-        if is_new and args.provider is None:
-            raise ValueError("新运行必须提供 --provider")
         manifest = _initialize_or_load_run(
             source_pdf=args.source_pdf,
             run_dir=root,
@@ -503,6 +530,7 @@ def _execute(args: argparse.Namespace) -> int:
             target_language=args.target_language,
             pages=args.pages,
         )
+        _apply_run_provider_defaults(args, manifest, is_new)
         from .workflow import save_manifest
         recorded_mode = manifest.get("layout_mode", "paragraph" if is_new else "legacy")
         mode = args.layout_mode or recorded_mode
@@ -522,7 +550,11 @@ def _execute(args: argparse.Namespace) -> int:
                 min_font_size=args.min_font_size, contract_repair=args.contract_repair,
                 dpi=args.dpi, pdftoppm_bin=args.pdftoppm_bin,
                 max_segments=args.max_segments, max_characters=args.max_characters)
-            print(f"候选 PDF：{result['rendered_pdf']}；仍需逐页视觉验收")
+            exported = export_run_pdf(root)
+            if result["status"] == "accepted":
+                print(f"已验收 PDF 已保存到：{exported}")
+            else:
+                print(f"候选 PDF 已保存到：{exported}；仍需逐页视觉验收")
             return 0
         if args.import_cache_from:
             raise ValueError("缓存导入只支持段落模式")
@@ -544,13 +576,14 @@ def _execute(args: argparse.Namespace) -> int:
             contract_repair=args.contract_repair,
         )
         if final_manifest["status"] == "qa_generated":
+            exported = export_run_pdf(root)
             comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"
-            rendered_pdf = Path(str(final_manifest["rendered_pdf"]))
             if args.unattended:
-                print(f"无人值守翻译完成：{rendered_pdf}")
+                print(f"无人值守翻译完成，候选 PDF 已保存到：{exported}")
                 print(f"机器 QA 逐页对照：{comparisons}")
                 print("候选 PDF 尚未人工视觉验收；请逐页检查后执行 paperlocale accept")
             else:
+                print(f"候选 PDF 已保存到：{exported}")
                 print(f"运行已推进到机器 QA；请逐页检查：{comparisons}")
                 print("确认无误后执行 paperlocale accept，人工验收不会自动完成")
         else:
@@ -690,8 +723,9 @@ def _execute(args: argparse.Namespace) -> int:
         print(f"参考文献版面处理完成：{restore_reference_layout(args.run_dir, regions_file=args.regions_file)}；请重新 QA")
         return 0
     if args.command == "accept":
+        exported = export_run_pdf(args.run_dir)
         accept_run(args.run_dir, reviewed_by=args.reviewed_by)
-        print("人工视觉验收已记录")
+        print(f"人工视觉验收已记录：{exported}")
         return 0
     pack = load_domain_pack(args.domain) if args.domain else None
     validate_translation_files(

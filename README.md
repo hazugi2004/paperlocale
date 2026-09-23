@@ -106,12 +106,12 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.5"
+python -m pip install "paperlocale[layout]==0.7.6"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start (0.7.5)
+## Quick start (0.7.6)
 
 New runs use paragraph frames (`--layout-mode paragraph`). The title, abstract,
 main text and figure/table captions are translated. Natural paragraph boundaries
@@ -127,8 +127,7 @@ source size to fit complete content; `--min-font-size` specifies an explicit flo
 Existing `preserved` and `legacy` runs retain their original engines and caches.
 
 ```bash
-paperlocale run paper.pdf --run-dir runs/paper \
-  --provider codex-local --model gpt-5.6-sol --reasoning-effort high
+paperlocale run paper.pdf --run-dir runs/paper
 ```
 
 No manual layout-plan review is required. A complete candidate is created only
@@ -137,6 +136,14 @@ Errors save progress and keep the process waiting. After correcting an external
 problem, run `paperlocale resume-waiting --run-dir runs/paper`. Transient failures
 receive at most one automatic retry; saved translations and refinement responses
 are reused without changing the provider.
+
+New runs default to `codex-local`, model `gpt-6-sol`, and reasoning effort
+`medium`. Explicit options override these defaults; resumed runs retain their
+recorded model. After machine QA passes, the candidate is also saved beside the
+source as `paper_translated_by_paperlocale.pdf`. An existing unrelated file is
+never overwritten. The terminal prints the error cause, location, and recovery
+step immediately, including when a run remains waiting. Human visual review and
+`paperlocale accept` are still required.
 
 `qa_generated` remains a machine-checked candidate requiring visual acceptance.
 This is not a guarantee for arbitrary PDFs: scanned pages, rotated body text, or

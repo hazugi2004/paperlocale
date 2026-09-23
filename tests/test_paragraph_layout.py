@@ -420,6 +420,20 @@ class ParagraphTests(unittest.TestCase):
         tokens=['增','强','（','month','{v0}','）','；','结','果']
         self.assertEqual(frame_boundary(tokens,4,[{'text':'−1'}]),7)
 
+    def test_frame_boundary_does_not_overfill_narrow_sidebar_line(self):
+        """句读远离首行预算时按容量切分，让后续三行容纳完整译文。"""
+        from paperlocale.paragraph_layout import frame_boundary, fit_paragraph
+        target='未来变暖预计使DPATs转向高温干旱主导路径，加剧生态系统损失与暴露风险'
+        tokens=list(target.replace('DPATs', 'D'))
+        self.assertLessEqual(frame_boundary(tokens, 13, []), 16)
+        unit={'id':'sidebar','source':'Future warming increases the risk', 'anchors':[], 'frames':[
+            {'page':1,'rect':[41.44,225.34,142.96,232.31],'size':6.97,'bold':False,
+             'leading':8.37,'indent':0,'weight':36},
+            {'page':1,'rect':[41.44,234.30,150.24,259.19],'size':6.97,'bold':False,
+             'leading':8.37,'indent':0,'weight':89}]}
+        placed=fit_paragraph(unit,target,fitz.Font('china-s'),None,None)
+        self.assertEqual(''.join(p['target'] for p in placed),target)
+
     def test_caption_translated_and_inline_citation_flows_without_holes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); source=root/'source.pdf'; run=root/'run'

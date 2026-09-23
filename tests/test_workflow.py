@@ -30,6 +30,7 @@ from paperlocale.workflow import (
     _normalized_pdf_text,
     _resolve_pdf2zh,
     accept_run,
+    export_run_pdf,
     apply_text_repair,
     apply_vector_repair,
     collect_run,
@@ -144,7 +145,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
-        self.assertEqual(manifest["paperlocale_version"], "0.7.5")
+        self.assertEqual(manifest["paperlocale_version"], "0.7.6")
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)
@@ -166,6 +167,56 @@ class WorkflowTest(unittest.TestCase):
         manifest["qa_report"] = str(report_path)
         save_manifest(run_dir, manifest)
         return run_dir, translated
+
+    def test_export_uses_source_directory_and_is_repeatable(self) -> None:
+        """默认交付位置取自原 PDF，重复命令不产生第二份或改变已验收内容。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, translated = self._make_qa_ready_run(root)
+            target = (root / "source.pdf").resolve().with_name(
+                "source_translated_by_paperlocale.pdf"
+            )
+            self.assertEqual(export_run_pdf(run_dir), target)
+            self.assertEqual(target.read_bytes(), translated.read_bytes())
+            self.assertEqual(export_run_pdf(run_dir), target)
+            manifest = load_manifest(run_dir)
+            self.assertEqual(manifest["exported_pdf"], str(target))
+            self.assertEqual(manifest["exported_sha256"], manifest["rendered_sha256"])
+
+    def test_export_rejects_unowned_destination(self) -> None:
+        """同名文件若不是当前运行导出的内容，绝不覆盖用户已有 PDF。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, _ = self._make_qa_ready_run(root)
+            target = root / "source_translated_by_paperlocale.pdf"
+            target.write_bytes(b"user-owned-pdf")
+            with self.assertRaisesRegex(FileExistsError, "拒绝覆盖"):
+                export_run_pdf(run_dir)
+            self.assertEqual(target.read_bytes(), b"user-owned-pdf")
+
+    def test_export_updates_only_its_previous_qa_bound_copy(self) -> None:
+        """重新 QA 后可更新本运行旧导出，外部改动则仍被保护。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, translated = self._make_qa_ready_run(root)
+            target = export_run_pdf(run_dir)
+            translated.write_bytes(b"translated-after-repair")
+            manifest = load_manifest(run_dir)
+            updated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
+            manifest["rendered_sha256"] = updated_hash
+            save_manifest(run_dir, manifest)
+            report_path = Path(str(manifest["qa_report"]))
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["translated_sha256"] = updated_hash
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            self.assertEqual(export_run_pdf(run_dir), target)
+            self.assertEqual(target.read_bytes(), b"translated-after-repair")
+            target.write_bytes(b"externally-edited")
+            with self.assertRaises(FileExistsError):
+                export_run_pdf(run_dir)
 
     def _make_source_vector_repair_run(
         self,

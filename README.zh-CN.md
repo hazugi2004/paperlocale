@@ -17,7 +17,7 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 第一条正式生产路径固定为：
 
 1. 从 PDF 版面引擎收集待译片段；
-2. 由用户明确选择一个翻译 Provider；
+2. 由用户选择翻译 Provider，未指定时使用本机 Codex；
 3. 对公式、富文本、数字、单位、缩写、URL、DOI 和领域术语执行硬门禁；
 4. 仅使用通过门禁的译文重建 PDF；
 5. 渲染全部页面并生成可复核的质量报告。
@@ -66,30 +66,31 @@ PaperLocale 0.4.2 增加下文所述的 `--unattended` 与可审计修复命令�
 v0.4.0 网页桥接的操作与额度边界见
 [ChatGPT 网页端人工翻译桥接](docs/CHATGPT_WEB_MANUAL.zh-CN.md)。
 
-v0.6.3 发布后，可按以下方式安装精确公开版本：
+可按以下方式安装精确公开版本：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.5"
+python -m pip install "paperlocale[layout]==0.7.6"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-## 开始翻译（0.7.5）
+## 开始翻译（0.7.6）
 
 新运行默认采用段落框模式（`--layout-mode paragraph`），翻译标题、摘要、正文（含方法）和图注/表注。先按原文缩进、行距与标题样式拆分自然段，再将跨页、跨栏或被图片分隔的同一段联合翻译，写回对应物理框。中文连续换行，不分散到每条旧英文行，不插入汉字间空格。行内引文和已支持的数学字形使用原字体随正文移动，链接目标保留、点击区域同步移动。
 
 图中文字、表内文字、独立公式、作者与机构、致谢等辅助章节及参考文献保留原文。为容纳完整内容，每段字号最多缩小到原字号的80%；可用 `--min-font-size` 明确指定下限。既有 `preserved` 和 `legacy` 运行继续使用原模式及缓存。
 
 ```bash
-paperlocale run paper.pdf --run-dir runs/paper \
-  --provider codex-local --model gpt-5.6-sol --reasoning-effort high
+paperlocale run paper.pdf --run-dir runs/paper
 ```
 
 无需核对或修改版面计划。全部正文通过内容、排版、保护区和回读检查后才生成完整候选；错误会保存断点并保持等待，不生成有缺口的 PDF。外部问题修正后，执行 `paperlocale resume-waiting --run-dir runs/paper` 继续。瞬时网络故障最多自动重试一次，已有翻译与精炼答复继续复用，不切换模型。
+
+新运行默认使用 `codex-local`、`gpt-6-sol` 和 `medium`；显式参数可覆盖，已有断点沿用记录的模型与档位。机器 QA 通过后，候选译文同时写到原 PDF 所在目录，文件名为 `原文件名_translated_by_paperlocale.pdf`。若同名文件不属于当前运行，程序拒绝覆盖。报错时当前命令行窗口立即显示原因、位置和处理办法，即使任务保持等待也无需先搜索 JSON。交付前仍须逐页检查并执行 `paperlocale accept`。
 
 状态 `qa_generated` 表示候选通过机器检查，仍需逐页视觉验收；它不等于对任意 PDF 的无损保证。扫描件、旋转正文和无法通过安全检查的版面会保持等待。详细范围、恢复方式与验收证据见[源版面翻译](docs/PRESERVED_LAYOUT.zh-CN.md)。
 
@@ -115,7 +116,7 @@ paperlocale run paper.pdf --layout-mode legacy \
 
 命令会连续完成初始化、片段收集、确定性参考文献映射、必要的版面
 安全透传、全文翻译、内容门禁、PDF 重建和全页机器 QA。成功后直接
-打印 `runs/paper/render_output/` 中候选 PDF 的精确路径。默认
+打印原 PDF 同目录候选 PDF 的精确路径。默认
 `preserve` 策略仍保留参考文献；被确定性判定为不能安全独立翻译的
 碎片也会原样保留并在清单中留痕。因此“完整候选 PDF”表示所有页面和
 片段都已闭合，不表示参考文献、公式或碎片会被强行改成中文。

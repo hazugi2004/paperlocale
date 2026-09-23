@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import contextlib
+import io
 from pathlib import Path
 from unittest.mock import patch
 
 from paperlocale import __version__, cli
-from paperlocale.cli import _initialize_or_load_run, _provider_from_args, build_parser
+from paperlocale.cli import _apply_run_provider_defaults, _initialize_or_load_run, _provider_from_args, build_parser
 
 
 class CliTest(unittest.TestCase):
     def test_package_version_matches_current_release(self) -> None:
-        self.assertEqual(__version__, "0.7.5")
+        self.assertEqual(__version__, "0.7.6")
 
     def test_qwen_csv_key_is_opaque_and_takes_explicit_precedence(self) -> None:
         """有标点的完整CSV字段传入Provider；环境变量不得替换显式选定的密钥。"""
@@ -58,6 +60,18 @@ class CliTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             build_parser().parse_args(["--version"])
         self.assertEqual(raised.exception.code, 0)
+
+    def test_argument_errors_explain_location_and_help_command(self) -> None:
+        """缺少必填参数时，终端无需用户翻查运行日志。"""
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            build_parser().parse_args(["run", "paper.pdf"])
+        self.assertEqual(raised.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("原因：", output)
+        self.assertIn("位置：命令行参数", output)
+        self.assertIn("解决办法：执行 paperlocale run --help", output)
 
     def test_run_parser_accepts_single_command_workflow_options(self) -> None:
         """一键命令必须同时接收源 PDF、运行目录和明确 Provider。"""
@@ -222,14 +236,22 @@ class CliTest(unittest.TestCase):
             f"最后一次修复已回滚并记录：{restored}；请重新执行 qa"
         )
 
-    def test_codex_provider_requires_explicit_model_for_auditing(self) -> None:
-        """忽略用户配置后不能把未知默认模型写成可审计运行。"""
+    def test_codex_provider_uses_auditable_default_and_keeps_resume_identity(self) -> None:
+        """新运行默认 sol/medium；旧断点沿用当时记录的模型与档位。"""
 
         args = build_parser().parse_args(
-            ["translate", "--run-dir", "run", "--provider", "codex-local"]
+            ["run", "paper.pdf", "--run-dir", "run", "--codex-bin", "/fake/codex"]
         )
-        with self.assertRaisesRegex(ValueError, "显式提供 --model"):
-            _provider_from_args(args)
+        _apply_run_provider_defaults(args, {"status": "initialized"}, True)
+        self.assertEqual(_provider_from_args(args).model, "gpt-6-sol")
+        self.assertEqual(_provider_from_args(args).reasoning_effort, "medium")
+        resumed = build_parser().parse_args(
+            ["run", "paper.pdf", "--run-dir", "run", "--codex-bin", "/fake/codex"]
+        )
+        _apply_run_provider_defaults(resumed, {"status": "collected", "translation_provider": {
+            "provider": "codex-local", "model": "gpt-5.6-sol", "reasoning_effort": "high"}}, False)
+        self.assertEqual(_provider_from_args(resumed).model, "gpt-5.6-sol")
+        self.assertEqual(_provider_from_args(resumed).reasoning_effort, "high")
 
     def test_run_parser_accepts_qwen_mt_provider(self) -> None:
         """Qwen-MT 使用独立 Provider，不能冒充通用聊天模型接口。"""
@@ -313,6 +335,7 @@ class CliTest(unittest.TestCase):
                     "paperlocale.cli.run_to_qa",
                     return_value=qa_generated,
                 ) as run,
+                patch("paperlocale.cli.export_run_pdf", return_value=Path(directory) / "paper_translated_by_paperlocale.pdf"),
                 patch("paperlocale.cli._provider_from_args") as build_provider,
                 patch("builtins.print"),
             ):

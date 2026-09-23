@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.6 — 2026-09-23
+
+- Keep complete paragraph translations when source punctuation lies near a frame boundary; report the affected PDF page on overflow.
+- Save QA-passed candidates beside the source PDF as `<source>_translated_by_paperlocale.pdf`, without overwriting unrelated files.
+- Show the error cause, location, and recovery action directly in the terminal, including while a run waits.
+- Default new runs to `codex-local`, `gpt-6-sol`, and `medium`; preserve model identity when resuming.
+- See [validation and limitations](docs/releases/v0.7.6.md).
+
 ## 0.7.5 — 2026-09-22
 
 - Translate complete italic headings and reflow numbered conclusions without internal gaps.

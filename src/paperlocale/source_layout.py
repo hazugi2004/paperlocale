@@ -513,6 +513,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                         last = lines[-1] if lines else None
                         a, b = fitz.Rect(last['bbox']) if last else fitz.Rect(), fitz.Rect(line['bbox'])
                         size = max(s['size'] for s in line['spans'])
+                        old_size = max((s['size'] for s in last['spans']), default=0) if last else 0
                         baseline = max(s['origin'][1] for s in line['spans'])
                         old_baseline = max(s['origin'][1] for s in last['spans']) if last else 0
                         previous_text = ''.join(c['c'] for s in last['spans'] for c in s['chars']) if last else ''
@@ -521,8 +522,14 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                 # 悬挂编号不是公式片段；保持独立，后续提取
                                 # 才能保留编号与正文的间隔及列表缩进。
                                 and not re.fullmatch(r'(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)])', previous_text.strip())
-                                and a.x1-size <= b.x0 <= a.x1+size and b.x0 > a.x0 and
-                                min(a.y1,b.y1) > max(a.y0,b.y0) and abs(baseline-old_baseline) < .6*size):
+                                and (a.x1-max(size, old_size) <= b.x0 <= a.x1+max(size, old_size) and b.x0 > a.x0
+                                     # p 的长上标后，r 下标会退回到 p 右侧，不能
+                                     # 按横向倒退拆成独立公式。只接纳小字号、位于
+                                     # 已有行带内部的低位片段；分式/下一正文行不合并。
+                                     or size < .8*old_size and a.x0 < b.x0 < a.x1
+                                     and b.y0 > a.y0 and b.y1 < a.y1+.6*old_size) and
+                                min(a.y1,b.y1) > max(a.y0,b.y0) and
+                                abs(baseline-old_baseline) < .6*max(size, old_size)):
                             last['spans'].extend(line['spans'])
                             last['bbox'] = list(a | b)
                         else:

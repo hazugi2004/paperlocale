@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.7 — 2026-09-26
+
+- Keep backtracking subscripts with their inline variables and complete paragraphs.
+- Recover a reviewed C0-encoded minus by exact glyph outline; retain unknown-code diagnostics.
+- Avoid replaying existing fill paths after zero-area curve simplification; separate proven caption-only detection edges.
+- Discover installed macOS Codex binaries when PATH is missing, and allow explicit `--no-qa` without claiming QA acceptance.
+- Add an experimental native macOS CLI frontend, with explicit model/effort selection. Requires the CLI runtime; ad-hoc signed, not notarized.
+- See [release scope and limitations](docs/releases/v0.7.7.md).
+
 ## 0.7.6 — 2026-09-23
 
 - Keep complete paragraph translations when source punctuation lies near a frame boundary; report the affected PDF page on overflow.

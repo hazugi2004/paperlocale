@@ -37,6 +37,21 @@ jobs:
           "$venv_root/bin/python" -c \
             'import paperlocale; print(paperlocale.__version__)'
 
+  macos-app-build:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build native launcher and check signed bundle
+        run: |
+          python scripts/build_macos_app.py
+          dist/PaperLocale.app/Contents/MacOS/PaperLocale --version
+          lipo -verify_arch arm64 x86_64 dist/PaperLocale.app/Contents/MacOS/PaperLocale
+          codesign --verify --deep --strict dist/PaperLocale.app
+
   layout-dependency-resolution:
     runs-on: ubuntu-latest
     timeout-minutes: 10

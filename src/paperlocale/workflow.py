@@ -1228,7 +1228,15 @@ def _vector_drawing_key(drawing: dict[str, object]) -> tuple[object, ...]:
             return tuple(normalized(item) for item in value)
         return value
 
-    return tuple(normalized(drawing.get(key)) for key in (
+    # MuPDF 重写填充路径时会删除四点完全重合的零长度贝塞尔段。
+    # 该段没有填充面积；若按指令数量误判丢失，会把整个置信带再次叠画。
+    # 仅规范化纯填充路径中的这种精确退化段。描边路径可能有可见端帽，
+    # 以及任一点不同的曲线，都必须保留并参与身份核对。
+    items = drawing.get('items')
+    if drawing.get('type') == 'f' and items is not None:
+        items = [item for item in items if not (
+            item[0] == 'c' and len(item) == 5 and all(p == item[1] for p in item[2:]))]
+    return tuple(normalized(items if key == 'items' else drawing.get(key)) for key in (
         "items", "type", "color", "fill", "width", "lineCap", "lineJoin",
         "dashes", "even_odd", "closePath", "fill_opacity", "stroke_opacity",
     ))

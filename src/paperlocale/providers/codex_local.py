@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import shutil
 import subprocess
 import tempfile
@@ -91,6 +93,29 @@ def _parse_keyed_response(text: str, segments: list[Segment]) -> list[Translatio
 REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 
 
+def resolve_codex(codex_bin: str | Path | None) -> str:
+    """显式路径 > PATH > macOS 常见用户安装位置；不修改系统符号链接。
+
+    Finder 的 PATH 不含 .local/bin，本次还遇到已失效的 codex 软链。
+    仅在未指定且 PATH 没有可执行命令时探测本机 app；绝不为模型报错
+    自动换 CLI 或模型。显式路径仍由 subprocess 报告其真实启动错误。
+    """
+    if codex_bin:
+        return str(Path(codex_bin).expanduser())
+    resolved = shutil.which("codex")
+    if resolved:
+        return resolved
+    if sys.platform == "darwin":
+        candidates = [Path.home() / ".local/bin/codex"]
+        for base in (Path("/Applications"), Path.home() / "Applications"):
+            candidates.extend(base / app / "Contents/Resources/codex"
+                              for app in ("Codex.app", "ChatGPT.app"))
+        for candidate in candidates:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    raise FileNotFoundError("未找到可执行的 codex（请检查软链接是否失效）；请先安装 Codex CLI 并执行 codex login，或使用 --codex-bin 指定")
+
+
 class CodexLocalProvider(TranslationProvider):
     """通过官方 Codex CLI 的结构化非交互模式翻译一个批次。"""
 
@@ -101,10 +126,7 @@ class CodexLocalProvider(TranslationProvider):
         codex_bin: str | Path | None = None,
         timeout_seconds: int = 1800,
     ) -> None:
-        resolved = str(codex_bin) if codex_bin else shutil.which("codex")
-        if not resolved:
-            raise FileNotFoundError("未找到 codex；请先安装 Codex CLI 并执行 codex login")
-        self.codex_bin = resolved
+        self.codex_bin = resolve_codex(codex_bin)
         self.model = model
         if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
             raise ValueError(

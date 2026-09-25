@@ -536,7 +536,11 @@ def merge_inline_parts(parts):
     for part in parts:
         last = result[-1] if result else None
         if (last and last['fixed'] and part['fixed'] and last['page'] == part['page'] and
-                -part['size'] < part['rect'][0]-last['rect'][2] < part['size'] and
+                (-max(part['size'],last['size']) < part['rect'][0]-last['rect'][2] < max(part['size'],last['size'])
+                 # 上下标共享横向起点，较长上标后出现的下标仍属于同一
+                 # 不可拆分锚点；保持字符原坐标，绝不把 r 另排到下一行。
+                 or part['size'] < .8*last['size'] and
+                 last['rect'][0] < part['rect'][0] < last['rect'][2]) and
                 min(last['rect'][3],part['rect'][3]) > max(last['rect'][1],part['rect'][1])):
             last['text'] += part['text']
             last['rect'] = list(fitz.Rect(last['rect'])|fitz.Rect(part['rect']))

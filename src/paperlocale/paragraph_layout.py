@@ -504,7 +504,12 @@ def merge_text_runs(placements):
 
 
 def source_text(parts):
-    """恢复物理行内相邻字体片段，避免 De + ﬁ + nition 变成三个词。"""
+    """从保留源字符/坐标的片段生成语义文本，复原合字与可选断词。
+
+    U+00AD 仅在普通正文中作为排印控制移除，原始 parts 不变，供逐字
+    删除校验。断词后的字母续接不插空格；显式连字符、减号和公式锚点
+    保持原义，不把所有横线当作可删除断词符。
+    """
     import unicodedata
     result, previous, anchor_index = '', None, 0
     for part in parts:
@@ -514,8 +519,13 @@ def source_text(parts):
             same_line = (part['page'] == previous['page'] and
                          abs(part['baseline']-previous['baseline']) < .2*part['size'])
             gap = part['rect'][0]-previous['rect'][2]
-            if not same_line or gap > .15*part['size']:
+            soft_join = (not previous['fixed'] and not part['fixed']
+                         and previous['text'].endswith('\u00ad')
+                         and bool(re.match(r'[A-Za-z]', value)))
+            if (not same_line or gap > .15*part['size']) and not soft_join:
                 result += ' '
+        if not part['fixed']:
+            value = value.replace('\u00ad', '')
         result += value
         previous = part
     # 只展开排印合字，不用全局 NFKC 改变上标数值或数学含义。

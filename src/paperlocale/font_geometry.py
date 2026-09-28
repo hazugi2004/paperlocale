@@ -38,6 +38,37 @@ def _source_anchor_glyphs(page, characters, cache):
         # （包括 FontFile3 程序引用）才将这些引用视为同一字体。
         if len(identities) == 1:
             fonts[name] = min(refs)
+    resolved_spans = {}
+
+    def font_for_span(span):
+        """同名不同子集按整条绘制记录的 Unicode/GID 对绑定，不猜字体。
+
+        出版社可在一页同时嵌入正文和公式的 STIX 子集，去掉子集前缀后
+        名称相同但字形编号不同。只有原嵌入程序对所有非空白绘制字符的
+        Unicode→GID 映射都吻合，且候选程序字节完全一致，才允许绑定。
+        无映射、未知编码或不同轮廓仍有歧义时返回 None，保留原安全门禁。
+        """
+        if span['font'] in fonts:
+            return fonts[span['font']]
+        key = id(span)
+        if key not in resolved_spans:
+            pairs = {(code, gid) for code, gid, _, _ in span['chars']
+                     if gid >= 0 and not chr(code).isspace()}
+            matches = {}
+            for ref in font_candidates.get(span['font'], ()):
+                if page.parent.xref_get_key(ref, 'Subtype')[1] != '/Type1':
+                    continue
+                cache_key = ('unicode-font', ref)
+                if cache_key not in cache:
+                    _, extension, _, data = page.parent.extract_font(ref)
+                    cache[cache_key] = (fitz.Font(fontbuffer=data), data) if extension == 'cff' else None
+                candidate = cache[cache_key]
+                if candidate and pairs and all(gid > 0 and candidate[0].has_glyph(
+                        code, fallback=False) == gid for code, gid in pairs):
+                    matches.setdefault(candidate[1], []).append(ref)
+            resolved_spans[key] = min(next(iter(matches.values()))) if len(matches) == 1 else None
+        return resolved_spans[key]
+
     traces = {}
     continuations = {}
     for span in page.get_texttrace():
@@ -75,7 +106,7 @@ def _source_anchor_glyphs(page, characters, cache):
             # 只有本锚点内已经绑定的同一主字形才可接纳续字符；不猜测
             # 被拆到其他锚点的合字，也不丢弃文本。ToUnicode 保留完整映射。
             if (previous['glyph_id'] != leader[1] or previous['origin'] != leader[2]
-                    or previous['xref'] != fonts.get(span['font'])):
+                    or previous['xref'] != font_for_span(span)):
                 return None
             previous['text'] += char['text']
             continue
@@ -92,7 +123,7 @@ def _source_anchor_glyphs(page, characters, cache):
         if len(matches) != 1:
             return None
         span, item = matches[0]
-        xref = fonts.get(span['font'])
+        xref = font_for_span(span)
         if xref is None or item[1] < 0:
             return None
         if page.parent.xref_get_key(xref, 'Subtype')[1] != '/Type1':

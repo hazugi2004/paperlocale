@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
     @Published var effort = "medium"
     @Published var runQA = true
     @Published var running = false
-    @Published var log = "选择论文 PDF，确认模型和推理强度后开始。\n需要本机已安装 PaperLocale 0.7.7 的 layout 依赖与已登录的 Codex CLI。"
+    @Published var log = "选择论文 PDF，确认模型和推理强度后开始。\n需要本机已安装 PaperLocale 0.7.8 的 layout 依赖与已登录的 Codex CLI。"
     private var process: Process?
     private var pipe: Pipe?
     // 保存尾部不完整的 UTF-8 序列，防止管道恰好在汉字中间分块而显示乱码。
@@ -61,7 +61,7 @@ import UniformTypeIdentifiers
     func start() {
         guard !running else { return }
         guard FileManager.default.isExecutableFile(atPath: cli) else {
-            log = "找不到可执行的 PaperLocale：\(cli)\n请按发行说明安装 paperlocale[layout]==0.7.7，或选择已安装的命令。"
+            log = "找不到可执行的 PaperLocale：\(cli)\n请按发行说明安装 paperlocale[layout]==0.7.8，或选择已安装的命令。"
             return
         }
         guard FileManager.default.fileExists(atPath: pdf), !model.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -138,7 +138,7 @@ struct ContentView: View {
                 Image(systemName: "doc.text").font(.largeTitle).foregroundStyle(.blue)
                 VStack(alignment: .leading) {
                     Text("PaperLocale").font(.title.bold())
-                    Text("0.7.7 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
+                    Text("0.7.8 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -167,7 +167,7 @@ struct ContentView: View {
                         TextField("PaperLocale 路径", text: $job.cli)
                         Button("选择…", action: job.selectCLI)
                     }.disabled(job.running)
-                    Text("此应用调用本机 CLI；需要 PaperLocale 0.7.7、layout 依赖、Poppler，以及已登录的 Codex。模型是否可用由你的账户决定。")
+                    Text("此应用调用本机 CLI；需要 PaperLocale 0.7.8、layout 依赖、Poppler，以及已登录的 Codex。模型是否可用由你的账户决定。")
                         .font(.caption).foregroundStyle(.secondary)
                     if !job.pdf.isEmpty {
                         Text(job.runDirectory.path).font(.caption).textSelection(.enabled)
@@ -197,7 +197,7 @@ struct ContentView: View {
     @StateObject private var job = TranslationJob()
     init() {
         if CommandLine.arguments.contains("--version") {
-            print("PaperLocale macOS 0.7.7")
+            print("PaperLocale macOS 0.7.8")
             exit(0)
         }
     }

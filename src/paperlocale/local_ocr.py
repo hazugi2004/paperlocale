@@ -38,7 +38,10 @@ def recognize_crop(image: Path) -> dict:
 def anomalous_lines(raw: list) -> list[dict]:
     """仅选尚未由绘制记录解决的控制码及 Unicode 替代字符所在行。"""
     return [line for b in raw for line in b.get('lines', [])
-            if any(c['c'] == '\ufffd' or not c['c'].isprintable() and not c['c'].isspace()
+            # U+00AD 是已定义的可选断词符，不是损坏编码；保留其源字符，
+            # 由段落文本拼接处理。未知控制码和替代字符仍须诊断。
+            if any(c['c'] == '\ufffd' or (not c['c'].isprintable()
+                   and not c['c'].isspace() and c['c'] != '\u00ad')
                    for s in line['spans'] for c in s['chars'])]
 
 

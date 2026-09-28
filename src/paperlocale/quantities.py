@@ -123,6 +123,12 @@ def find_quantities(text: str, excluded: list[tuple[int, int]] = ()) -> list[Qua
         # 英文1960s表示年代，不是1960秒；SI量值写成1960 s时仍可识别。
         if re.fullmatch(r"(?:18|19|20)\d{2}s", text[match.start():end]):
             continue
+        # 单数 event 前的四位年份标识某年的事件，不是事件次数。
+        # 仅排除无范围、无复合单位的年份写法；2019 events、2 event、
+        # 2019 event yr−1 等实际计数/频率仍须配对校验。年份留给数字门禁。
+        if (_count == 1 and re.fullmatch(r'(?:18|19|20)\d{2}\s+event',
+                                       text[match.start():end])):
+            continue
         if any(match.start() < b and end > a for a, b in excluded):
             continue
         values = tuple(_value(x) for x in (match.group('a'), match.group('b')) if x is not None)
@@ -146,6 +152,11 @@ def standalone_units(text: str) -> list[tuple[int, int, str]]:
         if parsed is None:
             continue
         end, signature, count = parsed
+        # second 在自然语言“第二次事件”中是序数，不是秒；没有数值、
+        # 乘除号或幂的 second event 不构成单位。显式 second·event、
+        # event s−1 和带数值的量值不走此例外，继续接受完整科学校验。
+        if re.fullmatch(r'second\s+event', text[match.start():end]):
+            continue
         # “all-day/hour / wet-day/hour percentiles”中的斜杠列举两种
         # 时间尺度，不是day除以hour。仅排除这个有明确语境的裸词组；
         # 有数值的“2 day/hour”等量值仍由find_quantities完整校验。

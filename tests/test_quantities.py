@@ -42,6 +42,23 @@ class QuantityTests(unittest.TestCase):
         self.assertEqual(validate_translation('m/s','米/秒'), [])
         self.assertTrue(validate_translation('m s−1','m'))
 
+    def test_calendar_event_and_ordinal_are_not_units(self):
+        source = 'The 2019 event was long-lasting. The second event lasted longer.'
+        self.assertEqual(scientific_quantities(source), [])
+        self.assertEqual(validate_translation(source,
+                         '2019年的事件持续较久。第二次事件持续时间更长。'), [])
+        # 放行普通语义不能丢失年份；显式次数、频率、秒及乘积仍严格保护。
+        self.assertTrue(validate_translation(source,
+                        '2020年的事件持续较久。第二次事件持续时间更长。'))
+        for text in ('2019 events', '2 event', '2019 event yr−1', '5 seconds'):
+            with self.subTest(text=text):
+                self.assertTrue(scientific_quantities(text))
+                self.assertTrue(validate_translation(text, '发生了事件。'))
+        self.assertEqual(validate_translation('2 events', '2次事件'), [])
+        self.assertEqual(validate_translation('5 seconds', '5秒'), [])
+        self.assertTrue(validate_translation('second·event', '事件'))
+        self.assertTrue(validate_translation('event s−1', '事件'))
+
     def test_wet_day_hour_alternatives_are_not_a_divided_unit(self):
         self.assertEqual(validate_translation(
             'All-day/hour percentiles differ from wet-day/hour percentiles.',

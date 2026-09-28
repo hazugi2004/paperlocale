@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.8 — 2026-09-28
+
+- Rejoin discretionary soft-hyphen line wraps without changing hard hyphens, scientific minus signs, or unknown-code diagnostics.
+- Resolve same-name embedded CFF subsets only when the full trace span uniquely matches their Unicode/glyph-ID mapping.
+- Distinguish calendar-year and ordinal event phrases from physical units while retaining number, event-count, and rate checks.
+- Update the macOS frontend to use the 0.7.8 CLI.
+- See [validation and limitations](docs/releases/v0.7.8.md).
+
 ## 0.7.7 — 2026-09-28
 
 - Keep backtracking subscripts with their inline variables and complete paragraphs.

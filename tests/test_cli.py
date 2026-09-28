@@ -28,7 +28,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(manifest["status"], "rendered")
 
     def test_package_version_matches_current_release(self) -> None:
-        self.assertEqual(__version__, "0.7.7")
+        self.assertEqual(__version__, "0.7.8")
 
     def test_qwen_csv_key_is_opaque_and_takes_explicit_precedence(self) -> None:
         """有标点的完整CSV字段传入Provider；环境变量不得替换显式选定的密钥。"""

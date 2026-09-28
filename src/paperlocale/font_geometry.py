@@ -6,18 +6,78 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.boundsPen import BoundsPen
 
 
+def _font_descriptor(document, xref):
+    """取得简单字体或单一 CID 后代的原描述符；不猜测未知字体结构。"""
+    import re
+    if document.xref_get_key(xref, 'Subtype')[1] == '/Type0':
+        kind, value = document.xref_get_key(xref, 'DescendantFonts')
+        if kind == 'xref':
+            value = document.xref_object(int(value.split()[0]))
+        match = re.fullmatch(r'\[\s*(\d+) 0 R\s*\]', value)
+        if not match:
+            return None
+        xref = int(match[1])
+        if document.xref_get_key(xref, 'Subtype')[1] != '/CIDFontType2':
+            return None
+    kind, value = document.xref_get_key(xref, 'FontDescriptor')
+    return int(value.split()[0]) if kind == 'xref' else None
+
+
+def _truetype_trace_fonts(page, cache):
+    """在只读内存副本中标记字体资源名，找回 trace 丢失的子集身份。
+
+    同页 TimesNewRoman 两个子集可能拥有相同的 Unicode/GID，却包含不同
+    字体程序。不能凭名称或 cmap 任选其一。仅改副本的 PDF 名称后重新读取
+    绘制记录；原点、GID、Unicode、字号必须逐项一致，才接受资源引用。
+    字体字节和源文件完全不改。结果在本次绑定内缓存，不持有打开的副本文档。
+    """
+    import pymupdf as fitz
+    import re
+    key = ('truetype-traces',)
+    if key not in cache:
+        with fitz.open(stream=page.parent.tobytes(), filetype='pdf') as probe:
+            refs = {font[0] for p in probe for font in p.get_fonts(full=True) if font[1] == 'ttf'}
+            descriptors = {}
+            for ref in refs:
+                descriptor = _font_descriptor(probe, ref)
+                if descriptor is not None:
+                    # 共享同一描述符的重复引用使用同一个名字，其字体流相同。
+                    owner = descriptors.setdefault(descriptor, ref)
+                    name = f'/PLTrueType{owner}'
+                    probe.xref_set_key(ref, 'BaseFont', name)
+                    probe.xref_set_key(descriptor, 'FontName', name)
+                    if probe.xref_get_key(ref, 'Subtype')[1] == '/Type0':
+                        kind, value = probe.xref_get_key(ref, 'DescendantFonts')
+                        if kind == 'xref':
+                            value = probe.xref_object(int(value.split()[0]))
+                        descendant = int(re.fullmatch(r'\[\s*(\d+) 0 R\s*\]', value)[1])
+                        probe.xref_set_key(descendant, 'BaseFont', name)
+            data = probe.tobytes()
+        with fitz.open(stream=data, filetype='pdf') as tagged:
+            cache[key] = {}
+            for p in tagged:
+                traces = cache[key][p.number] = {}
+                for span in p.get_texttrace():
+                    if span['font'].startswith('PLTrueType'):
+                        for char in span['chars']:
+                            traces.setdefault(char[:3], []).append(span)
+    return cache[key].get(page.number, {})
+
+
 def _source_anchor_glyphs(page, characters, cache):
-    """按嵌入 CFF 字形轮廓核验锚点，排除字框内其他基线的正文墨迹。
+    """按嵌入 CFF/TrueType 字形轮廓核验锚点，排除字框内其他基线的正文墨迹。
 
     返回每个非空字形的完整墨迹矩形，不合并上下标/标点的空白角落。
-    仅支持已明确验证的水平、标准 FontMatrix CFF；未知字体、编码或
+    仅支持水平标准 FontMatrix CFF 和有资源级证据的嵌入 TrueType；未知字体、编码或
     缺失字符返回 None，由调用方继续使用原完整字框检查，不静默跳过。
     """
     import re
     import pymupdf as fitz
     from fontTools.cffLib import CFFFontSet
     font_candidates = {}
-    for font in page.get_fonts(full=True):
+    resources = page.get_fonts(full=True)
+    truetype_refs = {f[0] for f in resources if f[1] == 'ttf'}
+    for font in resources:
         # MuPDF 的绘制字体名可先截到31字符，再去除六字母子集前缀；
         # get_fonts 返回完整 BaseFont。下方按完整描述符核对别名，若截短
         # 导致两个不同字体同名，仍拒绝绑定，不能任意选择一个公式字体。
@@ -40,7 +100,7 @@ def _source_anchor_glyphs(page, characters, cache):
             fonts[name] = min(refs)
     resolved_spans = {}
 
-    def font_for_span(span):
+    def font_for_span(span, item):
         """同名不同子集按整条绘制记录的 Unicode/GID 对绑定，不猜字体。
 
         出版社可在一页同时嵌入正文和公式的 STIX 子集，去掉子集前缀后
@@ -48,6 +108,18 @@ def _source_anchor_glyphs(page, characters, cache):
         Unicode→GID 映射都吻合，且候选程序字节完全一致，才允许绑定。
         无映射、未知编码或不同轮廓仍有歧义时返回 None，保留原安全门禁。
         """
+        # TrueType 的 cmap 可能被出版社整个移除，资源级绘制证据仍能
+        # 唯一确定原 GID；没有证据时继续拒绝，而不是用系统字体替代。
+        # MuPDF 会合并同名字体的连续绘制记录，改名后 span 边界和 seqno
+        # 因而可能改变；按单字 Unicode/GID/原点及绘制属性对应，不按序号。
+        if truetype_refs:
+            tagged = _truetype_trace_fonts(page, cache).get(item[:3], [])
+            matches = {int(s['font'].removeprefix('PLTrueType')) for s in tagged
+                       if all(s[k] == span[k] for k in ('dir', 'size', 'color'))}
+            if matches:
+                return next(iter(matches)) if len(matches) == 1 else None
+            if truetype_refs.intersection(font_candidates.get(span['font'], ())):
+                return None
         if span['font'] in fonts:
             return fonts[span['font']]
         key = id(span)
@@ -81,7 +153,12 @@ def _source_anchor_glyphs(page, characters, cache):
                 # rawdict 把这些零宽字符放在主字形右边界，texttrace 却
                 # 沿用主字形原点；它们不能作为第二个绘制字形参与匹配。
                 if leader is not None:
-                    key = (item[0], round(leader[3][2], 3), round(item[2][1], 3))
+                    # PDF 声明字宽与字体内部宽度可能取整不同；零宽续字符
+                    # 在 rawdict 主字形右边界，而不是 trace 计算的右边界。
+                    raw_leaders = [c for c in characters if c['text'] == chr(leader[0])
+                                   and tuple(c['origin']) == tuple(leader[2]) and 'rect' in c]
+                    edge = raw_leaders[0]['rect'][2] if len(raw_leaders) == 1 else leader[3][2]
+                    key = (item[0], round(edge, 3), round(item[2][1], 3))
                     continuations.setdefault(key, []).append((span, leader))
                 continue
             leader = item
@@ -106,7 +183,7 @@ def _source_anchor_glyphs(page, characters, cache):
             # 只有本锚点内已经绑定的同一主字形才可接纳续字符；不猜测
             # 被拆到其他锚点的合字，也不丢弃文本。ToUnicode 保留完整映射。
             if (previous['glyph_id'] != leader[1] or previous['origin'] != leader[2]
-                    or previous['xref'] != font_for_span(span)):
+                    or previous['xref'] != font_for_span(span, leader)):
                 return None
             previous['text'] += char['text']
             continue
@@ -123,11 +200,42 @@ def _source_anchor_glyphs(page, characters, cache):
         if len(matches) != 1:
             return None
         span, item = matches[0]
-        xref = font_for_span(span)
+        xref = font_for_span(span, item)
         if xref is None or item[1] < 0:
             return None
-        if page.parent.xref_get_key(xref, 'Subtype')[1] != '/Type1':
+        subtype = page.parent.xref_get_key(xref, 'Subtype')[1]
+        if subtype not in {'/Type1', '/TrueType', '/Type0'}:
             return None
+        if subtype in {'/TrueType', '/Type0'}:
+            # 资源级 trace 已核对实际 GID；轮廓和 hinting 使用原字体流，
+            # 不要求源字体保留 cmap，也不通过 Unicode 重新选择字体。
+            key = ('truetype', xref)
+            if key not in cache:
+                _, extension, _, data = page.parent.extract_font(xref)
+                cache[key] = TTFont(BytesIO(data)) if extension == 'ttf' else None
+            table = cache[key]
+            if table is None or 'glyf' not in table or item[1] >= len(table.getGlyphOrder()):
+                return None
+            descriptor = _font_descriptor(page.parent, xref)
+            if descriptor is None:
+                return None
+            name = table.getGlyphName(item[1])
+            outlines = table.getGlyphSet()
+            pen = BoundsPen(outlines)
+            outlines[name].draw(pen)
+            if pen.bounds is None:
+                continue
+            left, bottom, right, upper = pen.bounds
+            x, y = item[2]
+            scale = span['size'] / table['head'].unitsPerEm
+            glyphs.append({'rect': fitz.Rect(x+left*scale, y-upper*scale,
+                                            x+right*scale, y-bottom*scale),
+                           'xref': xref, 'name': name, 'origin': (x, y), 'size': span['size'],
+                           'text': char.get('semantic_text', char['text']), 'color': span['color'],
+                           'glyph_id': item[1], 'truetype': True,
+                           'descriptor': descriptor,
+                           'advance': table['hmtx'][name][0] * 1000 / table['head'].unitsPerEm})
+            continue
         if xref not in cache:
             _, extension, _, data = page.parent.extract_font(xref)
             if extension != 'cff':
@@ -186,31 +294,11 @@ def source_anchor_masks(source, regions, scale=4):
         for number, glyphs in pages.items():
             bounds = original[number - 1].rect
             page = scratch.new_page(width=bounds.width, height=bounds.height)
-            resources, commands = {}, []
-            for glyph in glyphs.values():
-                key = glyph['xref'], glyph['name']
-                if key not in font_refs:
-                    base = scratch.xref_get_key(glyph['xref'], 'BaseFont')[1]
-                    descriptor = scratch.xref_get_key(glyph['xref'], 'FontDescriptor')[1]
-                    name = ''.join(chr(c) if 33 <= c <= 126 and chr(c) not in '#%()/<>[]{}'
-                                   else f'#{c:02X}' for c in glyph['name'].encode())
-                    xref = scratch.get_new_xref()
-                    scratch.update_object(xref, f'<< /Type /Font /Subtype /Type1 /BaseFont {base} '
-                        f'/FontDescriptor {descriptor} /FirstChar 0 /LastChar 0 /Widths [0] '
-                        f'/Encoding << /Type /Encoding /Differences [0 /{name}] >> >>')
-                    font_refs[key] = xref
-                xref = font_refs[key]
-                alias = f'G{xref}'
-                resources[alias] = xref
-                x, y = glyph['origin']
-                commands.append(f'BT /{alias} {glyph["size"]:.10f} Tf 1 0 0 1 '
-                                f'{x:.10f} {bounds.height - y:.10f} Tm <00> Tj ET')
-            scratch.xref_set_key(page.xref, 'Resources', '<< /Font << ' +
-                ' '.join(f'/{name} {xref} 0 R' for name, xref in resources.items()) + ' >> >>')
-            stream = scratch.get_new_xref()
-            scratch.update_object(stream, '<<>>')
-            scratch.update_stream(stream, ('\n'.join(commands)).encode())
-            scratch.xref_set_key(page.xref, 'Contents', f'{stream} 0 R')
+            # 与实际行内重排共用原字体写入路径，保证 CFF/TrueType
+            # 的掩模与交付字形一致；掩模仅读取 alpha，不受原颜色影响。
+            from .paragraph_layout import write_inline
+            write_inline(page, {'shift': [0, 0], 'inline_anchor':
+                                {'glyphs': list(glyphs.values())}}, font_refs)
             page = scratch.reload_page(page)
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=True)
             masks[number] = Image.frombytes('RGBA', (pix.width, pix.height), pix.samples).getchannel('A')

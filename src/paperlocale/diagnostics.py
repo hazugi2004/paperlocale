@@ -79,6 +79,10 @@ def record_error(error: Exception, root: Path) -> dict:
         actions.append({'key': 's', 'label': '跳过这些片段，保留原文并记录未翻译项'})
     if category == 'extraction' and resolved and not manifest.get('translation_provider'):
         actions.append({'key': 's', 'label': '保留这些异常区域的原文，不猜测或改写字形'})
+    if category == 'source-glyph' and resolved:
+        # 字体绑定失败发生在请求模型前，重译/缩字号不能修复字体映射。
+        # 仅允许明确保留该完整段落，避免省去其中某个数值或公式。
+        actions.append({'key': 's', 'label': '保留这些段落原文，不替换不支持的原字体字形'})
     if (root / 'recovery_undo.json').exists():
         actions.append({'key': 'b', 'label': '回退上一次修复及其后续尝试，恢复修复前断点'})
     actions.append({'key': 'q', 'label': '暂不处理，保存断点并退出'})

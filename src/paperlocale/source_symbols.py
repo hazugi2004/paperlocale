@@ -49,6 +49,10 @@ def restore_source_symbols(page, raw, cache):
         if not glyphs or len(glyphs) != len(candidates):
             continue
         for char, glyph in zip(candidates, glyphs):
+            # 已核验语义表只包含 CFF 的 1000 em 轮廓；新支持的 TrueType
+            # 可原样重放，但不能套用 CFF 的轮廓摘要来改变科学字符含义。
+            if glyph.get('truetype'):
+                continue
             key = ('semantic', glyph['xref'], glyph['name'])
             if key not in cache:
                 top = cache[glyph['xref']]

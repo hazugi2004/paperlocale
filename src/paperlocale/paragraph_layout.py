@@ -66,7 +66,7 @@ def starts_paragraph(native_lines, preceding, line):
             baseline - previous_y > 1.65 * size)
 
 
-def paragraph_groups(blocks):
+def paragraph_groups(blocks, *, section_boundaries=True):
     """正文与图注分别建立阅读链；缩进段首和标题是不可跨越的段落边界。"""
     groups = []
     # AGU 首页为窄侧栏加宽正文，按页面中线分类会把侧栏续行与摘要交错。
@@ -139,6 +139,12 @@ def paragraph_groups(blocks):
                         a.y1 < (f['rect'][1]+f['rect'][3])/2 < b.y0 and
                         min(a.x0,b.x0) < f['rect'][2] and max(a.x1,b.x1) > f['rect'][0]
                         for f in blocks):
+                    connect = False
+                # 独立的摘要/关键词标题是语义边界，即使与作者同字号、
+                # 同字重，也不能因作者行没有句号而跨过日期行合并。
+                if section_boundaries and kind == 'body' and any(
+                        re.fullmatch(r'Abstract|Keywords', value.strip(), re.I)
+                        for value in (previous['text'], block['text'])):
                     connect = False
             if connect:
                 groups[-1].append(block['id'])
@@ -216,7 +222,13 @@ def bind_inline_glyphs(source, units):
                                    if c[0] == ord(char['text']) and
                                    abs(c[2][0]-char['origin'][0]) < .001 and abs(c[2][1]-char['origin'][1]) < .001]
                         if len(matches) != 1 or matches[0][0]['font'].lower() not in fitz.Base14_fontdict:
-                            raise ValueError(f"第{anchor['page']}页行内字形尚不支持原字体重排：{anchor['text']!r}")
+                            from .diagnostics import LocatedError, unit_location
+                            location = unit_location(unit)
+                            location['anchor_text'] = anchor['text']
+                            location['anchor_region'] = {'page': anchor['page'], 'rect': anchor['rect']}
+                            raise LocatedError(
+                                f"第{anchor['page']}页行内字形尚不支持原字体重排：{anchor['text']!r}",
+                                [location], 'source-glyph')
                         span, charinfo = matches[0]
                         glyphs.append({'base14': span['font'], 'text': char['text'],
                                        'origin': char['origin'], 'size': span['size'],
@@ -421,19 +433,38 @@ def write_inline(page, item, font_refs):
         if key not in font_refs:
             original = g['xref']
             base = document.xref_get_key(original, 'BaseFont')[1]
+            # PyMuPDF 返回解码后的 PDF 名称；写回字典必须重新转义空格等字节。
+            base = '/' + ''.join(chr(c) if 33 <= c <= 126 and chr(c) not in '#%()/<>[]{}'
+                                 else f'#{c:02X}' for c in base.lstrip('/').encode())
             descriptor = document.xref_get_key(original, 'FontDescriptor')[1]
+            if g.get('truetype'):
+                descriptor = f'{g["descriptor"]} 0 R'
             name = ''.join(chr(c) if 33 <= c <= 126 and chr(c) not in '#%()/<>[]{}' else f'#{c:02X}' for c in g['name'].encode())
             cmap = document.get_new_xref()
             document.update_object(cmap, '<<>>')
             unicode = g['text'].encode('utf-16-be').hex()
+            code, limit = ('0000', 'ffff') if g.get('truetype') else ('00', 'ff')
             document.update_stream(cmap, ('/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n'
                 '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n'
-                '/CMapName /PLInline def /CMapType 2 def\n1 begincodespacerange <00> <ff> endcodespacerange\n'
-                f'1 beginbfchar <00> <{unicode}> endbfchar\nendcmap CMapName currentdict /CMap defineresource pop end end').encode())
+                f'/CMapName /PLInline def /CMapType 2 def\n1 begincodespacerange <{code}> <{limit}> endcodespacerange\n'
+                f'1 beginbfchar <{code}> <{unicode}> endbfchar\nendcmap CMapName currentdict /CMap defineresource pop end end').encode())
             ref = document.get_new_xref()
-            document.update_object(ref, f'<< /Type /Font /Subtype /Type1 /BaseFont {base} '
-                f'/FontDescriptor {descriptor} /FirstChar 0 /LastChar 0 /Widths [0] '
-                f'/Encoding << /Type /Encoding /Differences [0 /{name}] >> /ToUnicode {cmap} 0 R >>')
+            if g.get('truetype'):
+                # CID 0 显式映射到原 GID，直接引用原 FontFile2 描述符；
+                # 不转曲、不按 Unicode 猜字体，也不改变数值或字符基线。
+                mapping = document.get_new_xref()
+                document.update_object(mapping, '<<>>')
+                document.update_stream(mapping, g['glyph_id'].to_bytes(2, 'big'))
+                descendant = document.get_new_xref()
+                document.update_object(descendant, f'<< /Type /Font /Subtype /CIDFontType2 /BaseFont {base} '
+                    f'/FontDescriptor {descriptor} /DW {g["advance"]:.10f} /CIDToGIDMap {mapping} 0 R '
+                    '/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>')
+                document.update_object(ref, f'<< /Type /Font /Subtype /Type0 /BaseFont {base} '
+                    f'/Encoding /Identity-H /DescendantFonts [{descendant} 0 R] /ToUnicode {cmap} 0 R >>')
+            else:
+                document.update_object(ref, f'<< /Type /Font /Subtype /Type1 /BaseFont {base} '
+                    f'/FontDescriptor {descriptor} /FirstChar 0 /LastChar 0 /Widths [0] '
+                    f'/Encoding << /Type /Encoding /Differences [0 /{name}] >> /ToUnicode {cmap} 0 R >>')
             font_refs[key] = ref
         ref = font_refs[key]
         alias = f'PLInline{ref}'
@@ -450,7 +481,7 @@ def write_inline(page, item, font_refs):
         document.xref_set_key(owner, prefix+alias, f'{ref} 0 R')
         paint = ' '.join(str(v) for v in color) + (' g' if len(color)==1 else ' rg' if len(color)==3 else ' k')
         commands.append(f'q {paint} BT /{alias} {g["size"]:.10f} Tf 1 0 0 1 '
-                        f'{x:.10f} {page.rect.height-y:.10f} Tm <00> Tj ET Q')
+                        f'{x:.10f} {page.rect.height-y:.10f} Tm <{"0000" if g.get("truetype") else "00"}> Tj ET Q')
     if commands:
         ref = document.get_new_xref()
         document.update_object(ref, '<<>>')

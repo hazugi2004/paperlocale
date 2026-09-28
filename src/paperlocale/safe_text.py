@@ -105,7 +105,9 @@ def fixed_characters(part):
     """公式块与行内锚点使用同一批原字符；图表等整区保护不拆分。"""
     if 'chars' in part:
         return part['chars']
-    if part.get('kind') == 'formula':
+    if part.get('kind') == 'formula' or part.get('preserve_reason') == '用户选择跳过，保留原文':
+        # 明确跳过的原文块也按真实字符保护；其多行外接框可能罩住
+        # 同行的独立小标题，不能把框内空白一起当作不可触及的文字。
         return [char for child in part.get('parts', []) for char in child.get('chars', [])]
     return []
 
@@ -207,7 +209,13 @@ def safe_erase_rectangles(editable, protected, source=None):
                             # MuPDF 用 glyph_id=-1 明确表示合字的续字符。
                             # rawdict 的续字符位于主字形右边界，且没有独立宽度；
                             # 删除主字形即可删除整个合字，不能把零宽字当漏译跳过。
-                            parts.append((chr(item[0]), leader[3][2], item[2][1], leader[3]))
+                            # TrueType 的 PDF /Widths 可对字宽取整，trace 使用
+                            # 字体内部宽度，两者会相差约 0.002 pt。续字符原点
+                            # 来自 rawdict 的主字形右边界，因此用唯一对应的
+                            # 原主字框定位；不扩大容差，也不把邻字当作合字。
+                            boxes = metrics.get((number, chr(leader[0]), tuple(leader[2])), [])
+                            box = boxes[0] if len(boxes) == 1 else leader[3]
+                            parts.append((chr(item[0]), box[2], item[2][1], box))
                 ligatures[number] = parts
         # 删除计划与实际删除必须使用同一临时字体指标。只采纳唯一匹配且
         # 被原字框包含的新框；不修改持久化版面计划或最终保护校验坐标。
@@ -228,7 +236,11 @@ def safe_erase_rectangles(editable, protected, source=None):
             if footprint.is_empty:
                 matches = [box for text, x, y, box in ligatures.get(part['page'], [])
                            if text == char['text'] and abs(x - char['origin'][0]) < .001
-                           and abs(y - char['origin'][1]) < .001]
+                           and abs(y - char['origin'][1]) < .001
+                           and any(abs(c['rect'][0]-box[0]) < .001
+                                   and abs(c['rect'][2]-x) < .001
+                                   and abs(c['origin'][1]-y) < .001
+                                   and c['rect'][2] > c['rect'][0] for c in part['chars'])]
                 if not matches:
                     # 与原字形绑定采用相同证据：不同 ToUnicode 可使续字符
                     # 文本不一致，但 gid=-1 的右边界和基线仍确定其主字形。

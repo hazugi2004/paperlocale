@@ -429,7 +429,7 @@ def normalize_traced_spaces(raw, traces):
                         char['c'] = ' '
 
 
-def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True) -> dict:
+def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, section_boundaries: bool = True) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
@@ -705,8 +705,11 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     _preserve_auxiliary_sections(blocks, paragraph=paragraph)
     if paragraph:
         from .paragraph_layout import paragraph_groups
-        return {'schema': 2, **({'journal': journal} if journal else {}), 'source_sha256': digest(source), 'blocks': blocks,
-                'protected_regions': protected, 'groups': paragraph_groups(blocks), 'issues': issues}
+        return {'schema': 2, **({'journal': journal} if journal else {}),
+                **({'grouping_revision': 2} if section_boundaries else {}),
+                'source_sha256': digest(source), 'blocks': blocks,
+                'protected_regions': protected,
+                'groups': paragraph_groups(blocks, section_boundaries=section_boundaries), 'issues': issues}
     bodies = [b for b in blocks if b['kind'] == 'body']
     groups = []
     for body in bodies:
@@ -734,7 +737,10 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
     plan = json.loads(path.read_text(encoding='utf-8'))
     if plan.get('schema') != (2 if paragraph else 1) or plan.get('source_sha256') != digest(source):
         raise ValueError('版面计划不属于当前源 PDF 或 schema 不受支持')
-    actual = extract_layout(source, detections, paragraph=paragraph, journal_adapt="journal" in plan)
+    # 旧断点按生成时的分组规则严格复核，不能暗改已有译文对应的段落。
+    # 新计划显式记录标题边界规则；尚未翻译的任务可备份后重新提取。
+    actual = extract_layout(source, detections, paragraph=paragraph, journal_adapt="journal" in plan,
+                            section_boundaries=plan.get('grouping_revision') == 2)
     if plan != actual:
         raise ValueError('自动版面计划与源文件/检测结果不一致；拒绝人工改写或过期缓存')
     skip_block_ids = skip_block_ids or set()

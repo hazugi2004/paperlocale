@@ -88,9 +88,11 @@ def apply_choice(root: Path, key: str, error_id: str) -> None:
             field = 'skip_blocks' if report['category'] == 'extraction' else 'skip'
             choices[field] = sorted(set(choices.get(field, [])) | ids)
         elif key == 'f':
-            for item in report['items']:
-                sid = item['id']
-                size = choices['font_sizes'].get(sid, item['font_size'])
+            # 相同原句可能出现于多页并共用译文 ID，一次选择只缩小一次。
+            # 多种原字号共用同一译文时取最小下限，避免超过较小原字号。
+            for sid in ids:
+                floors = [float(item['font_size']) for item in report['items'] if item['id'] == sid]
+                size = choices['font_sizes'].get(sid, min(floors))
                 choices['font_sizes'][sid] = max(6., round(size*.9, 2))
         elif key == 't':
             from .contracts import read_jsonl, write_jsonl_atomic

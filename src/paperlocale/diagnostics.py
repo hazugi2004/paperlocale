@@ -54,7 +54,9 @@ def record_error(error: Exception, root: Path) -> dict:
     resolved = []
     for item in items:
         matches = [loc for loc in locations if loc['id'] == item.get('id')]
-        resolved.extend([{**item, **loc} for loc in matches] or [item])
+        for candidate in ([{**item, **loc} for loc in matches] or [item]):
+            if candidate not in resolved:
+                resolved.append(candidate)
     page_context = []
     if not resolved and manifest.get('source_pdf'):
         import re

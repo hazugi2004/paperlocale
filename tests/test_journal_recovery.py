@@ -65,7 +65,9 @@ class JournalRecoveryTests(unittest.TestCase):
             root=Path(tmp); source=self.make_source(root); run=root/'run'
             initialize_run(source_pdf=source,run_dir=run,source_language='en',target_language='zh-CN')
             manifest_before=(run/'run_manifest.json').read_bytes()
-            error=LocatedError('溢出',[{'id':'a','source':'Actual source sentence.', 'pages':[2], 'font_size':8}], 'layout')
+            error=LocatedError('溢出',[
+                {'id':'a','source':'Actual source sentence.', 'pages':[2], 'font_size':8},
+                {'id':'a','source':'Actual source sentence.', 'pages':[3], 'font_size':8}], 'layout')
             report=record_error(error,run)
             with self.assertRaises(ValueError):apply_choice(run,'s','old-error')
             apply_choice(run,'f',report['error_id'])

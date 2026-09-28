@@ -103,8 +103,11 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
             for char in span['chars']:
                 # 出版社数学字体可能将括号映射到控制码，普通中文字体
                 # 无法重建其字形；保留源字形，不能把控制码当正文传给模型。
+                # 普通正文 U+00AD 是可选断词符，须随正文删除而非重放为
+                # 公式锚点；chars 仍完整保存原字符/坐标，旧模式保持原行为。
                 chars.append({**char, 'fixed': bool(superscript or math_font
-                                                  or 'native_text' in char or not char['c'].isprintable()),
+                                                  or 'native_text' in char or (not char['c'].isprintable()
+                                                      and not (paragraph and char['c'] == '\u00ad'))),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
                                   re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
                               'bold': _bold(span, paragraph=paragraph),
@@ -408,7 +411,10 @@ def normalize_traced_spaces(raw, traces):
         for line in block.get('lines', []):
             for span in line['spans']:
                 for char in span['chars']:
-                    if char['c'].isprintable() or char['c'].isspace():
+                    # 可选断词符在行内可没有墨迹，texttrace 会把它报告为空格。
+                    # 仍须保留 U+00AD 的语义，避免 daily-\u00adscale 被变成
+                    # daily- scale 后误按行末断词合并成 dailyscale。
+                    if char['c'].isprintable() or char['c'].isspace() or char['c'] == '\u00ad':
                         continue
                     matches = [c for font, c in spaces if font == span['font']
                                and all(abs(a-b) < .001 for a, b in zip(c[2], char['origin']))

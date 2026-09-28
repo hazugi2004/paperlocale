@@ -55,6 +55,10 @@ def record_error(error: Exception, root: Path) -> dict:
     for item in items:
         matches = [loc for loc in locations if loc['id'] == item.get('id')]
         for candidate in ([{**item, **loc} for loc in matches] or [item]):
+            # 定位表中的 source 是代回公式后的可读原文；同时保留实际参与
+            # 门禁的占位符文本，以便与失败候选逐项核对，不猜测跨语言句子对齐。
+            if 'target' in item and item.get('source') != candidate.get('source'):
+                candidate['validation_source'] = item['source']
             if candidate not in resolved:
                 resolved.append(candidate)
     page_context = []
@@ -105,5 +109,11 @@ def print_context(record: dict) -> None:
     for item in record['items']:
         pages = ', '.join(map(str, item.get('pages', []))) or '未知'
         print(f"PDF 页码：{pages}；片段：{item.get('id', '未分段')}\n原文：{item.get('source', '')}", file=sys.stderr)
+        for reason in item.get('errors', []):
+            print('违反规则与差异：' + reason, file=sys.stderr)
+        if item.get('validation_source') is not None:
+            print('校验原文（{vN} 为固定公式/引用占位符）：\n' + item['validation_source'], file=sys.stderr)
+        if 'target' in item:
+            print('失败译文（本次候选，未通过校验）：\n' + item['target'], file=sys.stderr)
         if item.get('regions'):
             print('原文坐标：'+json.dumps(item['regions'], ensure_ascii=False), file=sys.stderr)

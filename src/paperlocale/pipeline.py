@@ -142,7 +142,7 @@ def translate_segment_file(
                 quantity_rejections.append({**row, "errors": errors, "origin": "cached_quantity_validation"})
                 continue
             from .diagnostics import LocatedError
-            raise LocatedError(f"既有译文未通过门禁：{sid}: {errors}", [row], 'translation')
+            raise LocatedError(f"既有译文未通过门禁：{sid}: {errors}", [{**row, "errors": errors}], 'translation')
         existing[sid] = row
 
     if quantity_rejections:

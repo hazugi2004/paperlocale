@@ -46,6 +46,13 @@ import AppKit
         let raw = #"{"error_id":"current","message":"error","solution":"retry","items":[{"source":"Original sentence.","pages":[1,2]}],"actions":[{"key":"q","label":"退出"}]}"#
         let report = try JSONDecoder().decode(RepairReport.self, from: Data(raw.utf8))
         precondition(report.items[0].pageLabel == "PDF 第 1, 2 页")
+        precondition(report.items[0].target == nil && report.items[0].errors == nil)
+        let detailed = #"{"error_id":"new","message":"未通过","solution":"retry","items":[{"id":"segment","source":"CDHE intensity.","pages":[2],"validation_source":"CDHE {v0}.","target":"强度{v0}。","errors":["abbreviation 标记缺失：CDHE"]}],"actions":[]}"#
+        let current = try JSONDecoder().decode(RepairReport.self, from: Data(detailed.utf8))
+        precondition(current.items[0].id == "segment")
+        precondition(current.items[0].target == "强度{v0}。")
+        precondition(current.items[0].errors == ["abbreviation 标记缺失：CDHE"])
+        precondition(current.items[0].validation_source == "CDHE {v0}.")
         print("drop, progress, UTF-8, report decoding passed")
     }
 }

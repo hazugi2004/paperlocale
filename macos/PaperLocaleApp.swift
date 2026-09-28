@@ -18,7 +18,7 @@ import UniformTypeIdentifiers
     @Published var effort = "medium"
     @Published var runQA = true
     @Published var running = false
-    @Published var log = "选择论文 PDF，确认翻译服务与模型后开始。\n需要本机已安装 PaperLocale 0.8.0 的 layout 依赖；Codex 服务需要已登录的 Codex CLI，API 服务需要对应密钥。"
+    @Published var log = "选择论文 PDF，确认翻译服务与模型后开始。\n需要本机已安装 PaperLocale 0.8.1 的 layout 依赖；Codex 服务需要已登录的 Codex CLI，API 服务需要对应密钥。"
     @Published var dropTarget = false
     @Published var fraction = 0.0
     @Published var stage = "等待开始"
@@ -159,7 +159,7 @@ import UniformTypeIdentifiers
     func start(repair: RepairAction? = nil, report: RepairReport? = nil) {
         guard !running else { return }
         guard FileManager.default.isExecutableFile(atPath: cli) else {
-            log = "找不到可执行的 PaperLocale：\(cli)\n请按发行说明安装 paperlocale[layout]==0.8.0，或选择已安装的命令。"
+            log = "找不到可执行的 PaperLocale：\(cli)\n请按发行说明安装 paperlocale[layout]==0.8.1，或选择已安装的命令。"
             return
         }
         guard FileManager.default.fileExists(atPath: pdf), !model.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -269,7 +269,7 @@ struct ContentView: View {
                 MascotImage(name: "AppIcon").frame(width: 52, height: 52)
                 VStack(alignment: .leading) {
                     Text("PaperLocale").font(.title.bold())
-                    Text("0.8.0 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
+                    Text("0.8.1 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -326,7 +326,7 @@ struct ContentView: View {
                         TextField("PaperLocale 路径", text: $job.cli)
                         Button("选择…", action: job.selectCLI)
                     }.disabled(job.running)
-                    Text("此应用调用本机 CLI；需要 PaperLocale 0.8.0、layout 依赖、Poppler，以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译；模型是否可用由你的账户决定。")
+                    Text("此应用调用本机 CLI；需要 PaperLocale 0.8.1、layout 依赖、Poppler，以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译；模型是否可用由你的账户决定。")
                         .font(.caption).foregroundStyle(.secondary)
                     if !job.pdf.isEmpty {
                         Text(job.runDirectory.path).font(.caption).textSelection(.enabled)
@@ -356,7 +356,23 @@ struct ContentView: View {
                             ForEach(Array(report.items.enumerated()), id: \.offset) { _, item in
                                 Text(item.pageLabel)
                                     .font(.headline)
+                                if let id = item.id {
+                                    Text("片段：\(id)").font(.caption).textSelection(.enabled)
+                                }
+                                ForEach(Array((item.errors ?? []).enumerated()), id: \.offset) { _, reason in
+                                    Text("违反规则与差异：\(reason)").foregroundStyle(.red).textSelection(.enabled)
+                                }
+                                Text("原文").font(.subheadline.bold())
                                 Text(item.source).textSelection(.enabled)
+                                if let source = item.validation_source {
+                                    Text("校验原文（{vN} 为固定公式/引用占位符）").font(.subheadline.bold())
+                                    Text(source).textSelection(.enabled)
+                                }
+                                if let target = item.target {
+                                    Text("失败译文（本次候选，未通过校验）").font(.subheadline.bold())
+                                    Text(target.isEmpty ? "（空译文）" : target).textSelection(.enabled)
+                                }
+                                Divider()
                             }
                             if report.items.isEmpty { Text("此错误没有可靠的句级定位。") }
                             ForEach(Array((report.page_context ?? []).enumerated()), id: \.offset) { _, context in
@@ -427,7 +443,7 @@ struct RollingProgress: View {
     @StateObject private var job = TranslationJob()
     init() {
         if CommandLine.arguments.contains("--version") {
-            print("PaperLocale macOS 0.8.0")
+            print("PaperLocale macOS 0.8.1")
             exit(0)
         }
     }

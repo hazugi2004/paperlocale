@@ -272,7 +272,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             save_json(refinement_path, refinements)
             errors = validate_translation(unit['source'], refined, domain) + restored_content_errors(unit['source'], refined, anchor_text.get(sid, {}))
         if errors:
-            raise LocatedError('自动版面精炼未通过科学内容校验：' + str(errors), [unit_location(unit)], 'translation')
+            raise LocatedError('自动版面精炼未通过科学内容校验：' + str(errors), [{**unit_location(unit), 'validation_source': unit['source'],
+                               'target': refined, 'errors': errors}], 'translation')
         for occurrence in units:
             if occurrence['id'] == sid:
                 fit_selected(occurrence, refined, full_font, min_font_size, bold_font)

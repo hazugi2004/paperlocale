@@ -1,11 +1,11 @@
 # PaperLocale for macOS（测试版）
 
-这是 PaperLocale 0.8.0 的原生窗口前端，支持选择 PDF、选择翻译服务、模型和适用的推理强度、开始/继续、显示日志和打开结果目录。支持 `codex-local`、`openai-compatible` 与 `qwen-mt`，目前使用英译中 atmospheric-science 领域包。
+这是 PaperLocale 0.8.1 的原生窗口前端，支持选择 PDF、选择翻译服务、模型和适用的推理强度、开始/继续、显示日志和打开结果目录。支持 `codex-local`、`openai-compatible` 与 `qwen-mt`，目前使用英译中 atmospheric-science 领域包。
 
 ## 安装
 
-1. 解压 `PaperLocale-0.8.0-macOS-universal2.zip`，将 `PaperLocale.app` 放入“应用程序”。需要 macOS 13 或更新版本。
-2. **它不是包含全部运行环境的独立安装包。** 先安装 Python 3.10–3.13、Poppler（`brew install poppler`）、所选服务的登录或 API 密钥，以及本版 CLI（执行 `python -m pip install "paperlocale[layout]==0.8.0"`）。例如在虚拟环境中安装后，在窗口的“本地安装与运行目录”选择该环境的 `bin/paperlocale`。默认读取 `~/.local/bin/paperlocale`。
+1. 解压 `PaperLocale-0.8.1-macOS-universal2.zip`，将 `PaperLocale.app` 放入“应用程序”。需要 macOS 13 或更新版本。
+2. **它不是包含全部运行环境的独立安装包。** 先安装 Python 3.10–3.13、Poppler（`brew install poppler`）、所选服务的登录或 API 密钥，以及本版 CLI（执行 `python -m pip install "paperlocale[layout]==0.8.1"`）。例如在虚拟环境中安装后，在窗口的“本地安装与运行目录”选择该环境的 `bin/paperlocale`。默认读取 `~/.local/bin/paperlocale`。
 3. 选择论文，确认模型与推理强度，点击“开始 / 继续”。账户不支持所选模型时，程序报错，不会自动改用另一模型。
 
 应用不读取或复制 Codex 登录材料，也不包含用户的论文、翻译缓存或 Python 环境。首次字体/版面模型下载由现有 CLI 负责，需要联网。
@@ -34,6 +34,10 @@
 - 关闭机器 QA 时仍可指定保存位置，结果始终是未检查候选，不能视为 QA 或人工验收通过。
 
 界面顺序为“大模型 → 具体模型 → 推理强度（若支持）”。GPT 读取本机 Codex 模型目录与支持档位；只显示 CLI 支持的档位。其他兼容 API 可填写自定义模型。
+
+## 0.8.1
+
+翻译失败弹窗和 CLI 直接显示片段编号、页码、逐条规则差异、原文及本次失败译文；详见 [更新说明](../docs/releases/v0.8.1.md)。
 
 ## 0.8.0 交互更新
 

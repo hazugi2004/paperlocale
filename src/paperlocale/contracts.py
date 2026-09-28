@@ -302,7 +302,7 @@ def validate_translation(
     available = Counter(q.signature for q in target_quantities)
     missing_quantities = required - available
     if missing_quantities:
-        errors.append(f"quantity 数值/单位配对缺失或改变：{dict(missing_quantities)!r}")
+        errors.append(f"quantity 数值/单位配对缺失或改变：{dict(missing_quantities)!r}；译文配对：{dict(available)!r}")
     source_free = hide_spans(quantity_source, [(q.start, q.end) for q in source_quantities])
     # 未匹配的目标物理量不能吞掉普通原文数字，例如15°N译成北纬15度。
     matched = required.copy()
@@ -320,10 +320,13 @@ def validate_translation(
     for category in ("number", "abbreviation", "unit"):
         missing = source_remaining[category] - target_remaining[category]
         if missing:
-            errors.append(f"{category} 标记缺失：{dict(missing)!r}")
+            # 用同一校验计数给出缺口证据；只列失败标记，不改变门禁判定。
+            expected = {token: source_remaining[category][token] for token in missing}
+            actual = {token: target_remaining[category][token] for token in missing}
+            errors.append(f"{category} 标记缺失：{dict(missing)!r}；原文要求 {expected!r}；译文实际 {actual!r}")
 
     if STYLE_RE.findall(source) != STYLE_RE.findall(target):
-        errors.append("style 标签顺序改变")
+        errors.append(f"style 标签顺序改变：原文 {STYLE_RE.findall(source)!r}；译文 {STYLE_RE.findall(target)!r}")
 
     if literal_spans == [(0, len(source))]:
         require_cjk = False
@@ -332,7 +335,7 @@ def validate_translation(
     bare_source = [m.group() for m in _VALIDATION_URL_RE.finditer(source) if m.group().lower().startswith("www.")]
     bare_target = [m.group() for m in _VALIDATION_URL_RE.finditer(target) if m.group().lower().startswith("www.")]
     if _clean_identifiers(bare_source) != _clean_identifiers(bare_target):
-        errors.append("url 网址标记不一致")
+        errors.append(f"url 网址标记不一致：原文 {_clean_identifiers(bare_source)!r}；译文 {_clean_identifiers(bare_target)!r}")
     prose = _VALIDATION_URL_RE.sub("", source)
     if require_cjk and len(ENGLISH_RE.findall(prose)) >= 40 and not CJK_RE.search(target):
         errors.append("长正文片段缺少中文译文")

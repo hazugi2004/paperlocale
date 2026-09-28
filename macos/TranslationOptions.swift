@@ -60,6 +60,11 @@ struct RepairAction: Decodable, Identifiable {
     var id: String { key }
 }
 struct SourceIssue: Decodable {
+    // 旧断点只有原文/页码。新诊断字段可选，确保更新后仍能打开旧错误报告。
+    let id: String?
+    let target: String?
+    let errors: [String]?
+    let validation_source: String?
     let source: String
     let pages: [Int]?
     var pageLabel: String { "PDF 第 " + (pages ?? []).map { String($0) }.joined(separator: ", ") + " 页" }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 — 2026-09-28
+
+- Show segment ID, PDF pages, validation rules, original text and the current rejected translation directly in macOS repair dialogs and CLI diagnostics.
+- Report expected/actual counts for missing scientific tokens and retain placeholder-form source text beside readable PDF text.
+- Include diagnostics for cached and layout-refined candidates; keep old report decoding compatible. Validation rules and repair actions remain enforced.
+- First public 0.8 series release, including the changes below. See [details](docs/releases/v0.8.1.md).
+
 ## 0.8.0 — 2026-09-28
 
 - Detect journals from PDF evidence and preserve publisher-specific auxiliary text, including ASCE rotated download sidebars.

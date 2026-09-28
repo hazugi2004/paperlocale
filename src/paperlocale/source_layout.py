@@ -1048,7 +1048,7 @@ def anchor_errors(unit: dict, target: str) -> list[str]:
     """
     markers = ['{v' + str(i) + '}' for i in range(len(unit['anchors']))]
     if FORMULA_RE.findall(target) != markers:
-        return ['固定公式/引用锚点的数量或顺序改变']
+        return [f'固定公式/引用锚点的数量或顺序改变：原文要求 {markers!r}；译文实际 {FORMULA_RE.findall(target)!r}']
     if 'source' not in unit:
         return []
     def profile(text):
@@ -1062,7 +1062,16 @@ def anchor_errors(unit: dict, target: str) -> list[str]:
                 lowest = min(lowest, depth)
             result.append((depth, lowest))
         return result
-    return [] if profile(unit['source']) == profile(target) else ['还原固定锚点后括号不配对：不得重复锚点已有括号']
+    if profile(unit['source']) == profile(target):
+        return []
+    # 只在已经判定失败后抽取可读证据，不改变允许中英文括号等价的规则。
+    bracket_sequences = []
+    for text in (unit['source'], target):
+        for marker, anchor in zip(markers, unit['anchors']):
+            text = text.replace(marker, anchor['text'])
+        bracket_sequences.append(''.join(c for c in text if c in '()（）[]［］'))
+    return [f'还原固定锚点后括号不配对：不得重复锚点已有括号；'
+            f'原文括号序列 {bracket_sequences[0]!r}；译文括号序列 {bracket_sequences[1]!r}']
 
 
 def _fit_slot(slot, tokens, unit, current, regular_font, bold_font, *, spread=False):

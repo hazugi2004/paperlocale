@@ -71,7 +71,7 @@ v0.4.0 网页桥接的操作与额度边界见
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install ".[layout]"  # 0.8.0 本地源码构建，尚未公开发布
+python -m pip install "paperlocale[layout]==0.8.0"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```

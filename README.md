@@ -106,7 +106,7 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install ".[layout]"  # 0.8.0 本地源码构建，尚未公开发布
+python -m pip install "paperlocale[layout]==0.8.0"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```

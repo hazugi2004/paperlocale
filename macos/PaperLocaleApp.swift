@@ -29,6 +29,16 @@ import UniformTypeIdentifiers
             .appendingPathExtension("paperlocale")
     }
 
+    var resultDirectory: URL {
+        // 续跑时窗口可以不重复填写保存位置，打开目录仍须跟随断点中的选择。
+        var path = outputPDF
+        if path.isEmpty, let data = try? Data(contentsOf: runDirectory.appendingPathComponent("run_manifest.json")),
+           let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            path = manifest["output_pdf"] as? String ?? ""
+        }
+        return URL(fileURLWithPath: path.isEmpty ? pdf : path).deletingLastPathComponent()
+    }
+
     func selectPDF() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.pdf]
@@ -257,7 +267,7 @@ struct ContentView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("打开结果目录") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: job.outputPDF.isEmpty ? job.pdf : job.outputPDF).deletingLastPathComponent())
+                    NSWorkspace.shared.open(job.resultDirectory)
                 }.disabled(job.pdf.isEmpty)
             }
         }.padding(24).frame(minWidth: 740, minHeight: 560)

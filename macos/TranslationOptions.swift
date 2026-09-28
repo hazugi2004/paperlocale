@@ -52,3 +52,34 @@ struct CodexModelChoice {
         return [CodexModelChoice(name: "gpt-6-sol", efforts: ["low", "medium", "high", "xhigh", "max"])]
     }
 }
+
+// 后端提供可选动作及诊断，前端不按错误字符串猜修复办法。
+struct RepairAction: Decodable, Identifiable {
+    let key: String
+    let label: String
+    var id: String { key }
+}
+struct SourceIssue: Decodable {
+    let source: String
+    let pages: [Int]?
+    var pageLabel: String { "PDF 第 " + (pages ?? []).map { String($0) }.joined(separator: ", ") + " 页" }
+}
+struct SourcePageContext: Decodable {
+    let page: Int
+    let source: String
+}
+struct RepairReport: Decodable, Identifiable {
+    let error_id: String
+    let message: String
+    let solution: String
+    let items: [SourceIssue]
+    let page_context: [SourcePageContext]?
+    let actions: [RepairAction]
+    var id: String { error_id }
+}
+struct JobProgress: Decodable {
+    let stage: String
+    let fraction: Double
+    let completed: Int
+    let total: Int
+}

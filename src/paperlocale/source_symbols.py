@@ -49,14 +49,118 @@ def restore_source_symbols(page, raw, cache):
         if not glyphs or len(glyphs) != len(candidates):
             continue
         for char, glyph in zip(candidates, glyphs):
+            # 已核验语义表只包含 CFF 的 1000 em 轮廓；新支持的 TrueType
+            # 可原样重放，但不能套用 CFF 的轮廓摘要来改变科学字符含义。
+            if glyph.get('truetype') or 'source_code' in glyph:
+                continue
+            _, outlines, em_scale, extension = cache[glyph['xref']]
+            # 原字形重放支持更广的字体，不意味着它们适用这张语义映射表。
+            # PFA 或不同单位的 CFF 仍只保留原字，不推断科学符号含义。
+            if extension != 'cff' or em_scale != .001:
+                continue
             key = ('semantic', glyph['xref'], glyph['name'])
             if key not in cache:
-                top = cache[glyph['xref']]
                 pen = RecordingPen()
-                top.CharStrings[glyph['name']].draw(pen)
+                outlines[glyph['name']].draw(pen)
                 signature = hashlib.sha256(repr(pen.value).encode()).hexdigest()
                 cache[key] = REVIEWED_OUTLINES.get(signature)
             semantic = cache[key]
             if semantic and semantic != char['c']:
                 char['native_text'] = char['c']
                 char['c'] = semantic
+
+
+# 2026-09 语料核验：Li 2021 补充、Sutanto 2024、Ridder 2020、
+# Wang 2025、Hao 2019、Feng 2026 等原页截图与字形逐项对照。
+# 键同时约束字体类型、em 单位和完整轮廓，原 PDF 字形从不替换。
+CORPUS_REVIEWED_OUTLINES = {
+    ('cff', 1000, '009bf73f6cd5e6a4b9fad7ea090f889190737b331baf18c1215701cb2860c3c7'): '∑',
+    ('cff', 1000, '41020f8e445e7438a3fcdcd376fa89b3a307a80736e95a6a3bf9a69d8ca855d2'): '=',
+    ('cff', 1000, 'e7e216f90c92f695051d79db83522daca5ecbcb0f36897fb95ee05d35023a3e2'): '(',
+    ('cff', 1000, 'e0c7c4fed2f8b18698c6fc2888a3a0f7097a73d7aeee4b802c2fd766b51d7b22'): ')',
+    ('cff', 1000, '5c08202b0d7e64fedc0af06e0b1c2f3f71a819ad94b78b10572f6a8843379648'): '⏐',
+    ('cff', 1000, 'f6f639476518630a7078db0865b979b359942beaa1b1b1ac5067dd71bf783744'): '(',
+    ('cff', 1000, '42ecb0a1e9684ca4c98309a3c472d3011f14e77cd5006a8c927be97e861ef95c'): ')',
+    ('cff', 1000, '14f9d6c42f2bbdfb7bb0014ec7a406bb36bd4e397943eedf89599b69dbbda2d2'): '√',
+    ('ttf', 2048, 'b1ccb11f49a958bfd98944b4cc18579b540533bcd0a1c425af5eef7e6cfe99d6'): '⎛',
+    ('ttf', 2048, '2ec2468ef8672179c298fc6eba9bd431f718e88cc3b658bc003fabb07d0a11f9'): '⎞',
+    ('ttf', 2048, '9957be9a68ea5c04d28918810e4feb6e20e06396b893c89352b09172864383dd'): '⎜',
+    ('ttf', 2048, '17253fb78d61e85bdd90ed4b0535c5719b7e9045027cad12807c421e261aae2f'): '⎟',
+    ('ttf', 2048, '0d0cd94e1e309ece8b2597f72fff7f9827c454ed7f060f2b0ae5c38f9e4b0ed3'): '⎝',
+    ('ttf', 2048, '19bd8302a7f21dac2996fb85f4e5e0ece7c8659c8e09b54b82f55523dd7b62df'): '⎠',
+    ('ttf', 2048, '6419051da0bf5b3908e408445069ed0098908b2dc0a4ec3fe81f6da650f552e3'): '∑',
+    ('ttf', 2048, '4298b98d839e3c6d7e744a2bcbadc61e23b190e8a123e1381194974037c10bfe'): '⎡',
+    ('ttf', 2048, 'df05d3fb628dcd2172883acc963d16aae0ec8d0784e0adc9537be994c0104c07'): '⎤',
+    ('ttf', 2048, '88e36f98dbcf44c1fd69f3c0da30994da16246e69f02359a592bf94821bc69cd'): '⎢',
+    ('ttf', 2048, 'c58985fa72a30c8fe981e5360b448287f78695bd79c78e1ee624ec5788f4fc16'): '⎥',
+    ('ttf', 2048, 'de457db4d17f6c484e186749493d16b0d58cf40c9869267e4b21068ff3370b35'): '⎣',
+    ('ttf', 2048, '8e48365095eef7da3567e0ef04f57a084a1676adb7c15a82802d07ba1da9dd27'): '⎦',
+    ('ttf', 2048, 'ed79de8cb014c1a6fd949e5b97a88881182ef2c78ab6af0f5f191b755343e2a6'): 'β',
+    ('ttf', 2048, '4bf27e22441afe2932ef67e238a1cf58668461e0e45c9acf256cf113511e2148'): 'γ',
+    ('ttf', 2048, '1c8cdb7b60d2b86c4f58bb7fdc1a4a147efaa98150e18f6d7f7b92ff6ac76dac'): 'α',
+    ('ttf', 2048, 'a94eaf6a451b87d431d932f76cc8e360e21baa0301927bf40fed4caa469f0aa1'): '>',
+    ('ttf', 2048, '0eb6fe07ebe2a079bb6657096f9503385fda16d0a9999277d6ff00f222d9d548'): '<',
+    ('ttf', 2048, 'd023bd7584da6cec2eef11a76ae1c560fa0b500cc2c1d0a0dd0579c9642129dd'): '∞',
+    ('cff', 1000, '3bb477f20dc8ce49361a67459e398e05a6da58759397ea066bb8367b467374a8'): '(',
+    ('cff', 1000, '9fde6a664c07ba740e8632bb9ef55448f8040d1f77e63d6351f01477fc7cfae6'): ')',
+    ('cff', 1000, '26035219e9c7b476cd8fdd68c3497505e4c81f89236e2a37dbdf98f46ee84d9c'): '−',
+    ('cff', 1000, '785495dc9159c51c7b09e44a5a8787547200682cc58f9cf89b4000505cd452c3'): '̅',
+    ('cff', 1000, 'd9bbc6408610b4288811bb06409fc82eab6e2a46311b868cb000a8f56ba47598'): '⏐',
+    ('cff', 1000, '0a58c765145750118973e057ca014926ee09262497d0496470e0330c32960ebe'): 'σ',
+    ('cff', 1000, '2b9cdb166f67a965e643d35ba2fc1d66ec5ca5a9cc69243f32c9245edce6a950'): ']',
+    ('cff', 1000, '3974bdd14d7fae1bf21b64af844f7abca6e491d2a6038606b082600524adf828'): '∑',
+    ('cff', 1000, '7e0be4a242d0da54c925b985e7e8c6459497d50f1b934cfac2d216d29176220e'): '{',
+    ('cff', 1000, '6244b2d90a2e420c1f89c280561e79bcbbd44d8ea62f834f8fba81f452a08455'): ']',
+    ('cff', 1000, '2d4214f05e2ac0bb6aca6a3fc7b5de33ccd975e05b2626eb1b9043d64f45efac'): '−',
+    ('cff', 1000, '8c8cb8c6b71b7e344ef7957b174a1f14992ab06de59a589d8d893670854e76a6'): 'Ω',
+    ('ttf', 1000, 'b5d5d0a5bc1430a373c84546ee8c672ed2e05a4d75cc192fc0d9bc8a7ebf2566'): '≤',
+    ('cff', 1000, '968f26ab2aa4d354431347746f782fbba3cdd92a5c3f369e719ea0f074b3b7f6'): '≤',
+    ('cff', 1000, 'c8859aef9c8ab66440994d068c13083bb66bf072b4ad7d5b3405a323cfed2c05'): '©',
+    ('cff', 1000, 'a2169bfd1845d87e4a9ceb5e7e2935025401a57f64c8049feca20813d331fdff'): '(',
+    ('cff', 1000, '6694f85c5299da7f47987ebb03c7aec5736c21c5d7c6539a2b097b6caeaa1b8b'): ')',
+    ('cff', 1000, '9fc24a0b25f2ab347d69709480c6a4bff2a35fb0c28cec0f6853db2ea1639a6f'): '∑',
+    ('cff', 1000, 'a15038662f48fa87e0655be0587d3d8d490056dbcab6ee8794b663a960b3720a'): '(',
+    ('cff', 1000, '84d8d3a1d0be8190947e5c1f465e8e6f3d60842bf3fb3bf7e59da33ca81db3ea'): ')',
+    ('cff', 1000, 'cb38dd84c3b564de0a3f750ad3ca068a43f77c722216e97ecc7f7556844d6501'): '*',
+}
+
+
+def restore_verified_symbols(page, raw, cache):
+    """新计划专用：已核验异常轮廓恢复语义；无墨迹字符恢复空白。
+
+    不推断未知控制码，也不向模型传入乱码。空白要由实际原字形的空
+    轮廓证明；非空字形的原字符、原坐标和程序仍用于后续删除与重放。
+    """
+    for block in raw:
+        for line in block.get('lines', []):
+            for span in line['spans']:
+                for char in span['chars']:
+                    if char['c'].isprintable() or char['c'].isspace() or char['c'] == '\u00ad':
+                        continue
+                    native = {'text': char['c'], 'rect': char['bbox'], 'origin': char['origin']}
+                    glyphs = _source_anchor_glyphs(page, [native], cache, include_empty=True)
+                    if not glyphs or len(glyphs) != 1:
+                        continue
+                    glyph = glyphs[0]
+                    if glyph.get('empty'):
+                        # 单独留存原编码证据；不能把空白提升为固定公式锚点。
+                        char['source_blank'] = char['c']
+                        char['c'] = ' '
+                        continue
+                    if 'source_code' in glyph:
+                        continue
+                    if glyph.get('truetype'):
+                        table = cache[('truetype', glyph['xref'])]
+                        kind, units, outlines = 'ttf', table['head'].unitsPerEm, table.getGlyphSet()
+                    else:
+                        _, outlines, scale, kind = cache[glyph['xref']]
+                        units = 1 / scale
+                    key = ('corpus-semantic', glyph['xref'], glyph['name'])
+                    if key not in cache:
+                        pen = RecordingPen()
+                        outlines[glyph['name']].draw(pen)
+                        signature = hashlib.sha256(repr(pen.value).encode()).hexdigest()
+                        cache[key] = CORPUS_REVIEWED_OUTLINES.get((kind, units, signature))
+                    semantic = cache[key]
+                    if semantic:
+                        char['native_text'], char['c'] = char['c'], semantic

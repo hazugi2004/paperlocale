@@ -1,4 +1,6 @@
 """将正文删除范围和排字范围分离，保留原始引用/公式字符。"""
+from .font_geometry import open_source_pdf
+
 import pymupdf as fitz
 import math
 from PIL import Image, ImageChops
@@ -18,7 +20,7 @@ def separate_caption_edges(source, protected, blocks):
     因此不能用该规则裁掉曲线、图内标签或任意正文来让检查通过。
     """
     result = []
-    with fitz.open(source) as document:
+    with open_source_pdf(source) as document:
         for region in protected:
             box = fitz.Rect(region['rect'])
             captions = [fitz.Rect(b['rect']) for b in blocks
@@ -74,7 +76,7 @@ def verify_fixed_ink(source, written, reference_bytes, protected, editable):
     fixed_masks, supported = source_anchor_masks(source, protected)
     body_masks, _ = source_anchor_masks(source, editable)
     evidence = []
-    with fitz.open(source) as original, fitz.open(written) as output, \
+    with open_source_pdf(source) as original, fitz.open(written) as output, \
             fitz.open(stream=reference_bytes, filetype='pdf') as reference:
         for number, mask in fixed_masks.items():
             def pixels(document):
@@ -105,7 +107,9 @@ def fixed_characters(part):
     """公式块与行内锚点使用同一批原字符；图表等整区保护不拆分。"""
     if 'chars' in part:
         return part['chars']
-    if part.get('kind') == 'formula':
+    if part.get('kind') == 'formula' or part.get('preserve_reason') == '用户选择跳过，保留原文':
+        # 明确跳过的原文块也按真实字符保护；其多行外接框可能罩住
+        # 同行的独立小标题，不能把框内空白一起当作不可触及的文字。
         return [char for child in part.get('parts', []) for char in child.get('chars', [])]
     return []
 
@@ -185,13 +189,35 @@ def safe_erase_rectangles(editable, protected, source=None):
     可以与正文重叠，只要正文还有不触碰引用的局部区域即可。无法证明安全
     时明确失败，不把未删除原文留在译文下面。这里不移动或重绘任何固定字符。
     """
-    result, ligatures = [], {}
+    result, ligatures, zero_ink = [], {}, {}
     if source is not None:
         from .font_geometry import open_source_for_editing
         document, _ = open_source_for_editing(source)
         metrics = {}
         with document:
             for number, page in enumerate(document, 1):
+                # 零 advance 的组合重音仍有墨迹，不能与合字续字符混同。
+                # 只有原字体绑定成功、确有非空轮廓时才建立可删除字框；
+                # 最终实际删除检查继续核验该字符确已消失。
+                from .font_geometry import _source_anchor_glyphs
+                glyph_cache = {}
+                for part in editable:
+                    if part['page'] != number:
+                        continue
+                    for c in part['chars']:
+                        if not fitz.Rect(c['rect']).is_empty:
+                            continue
+                        import unicodedata
+                        if not unicodedata.combining(c['text']):
+                            continue
+                        glyphs = _source_anchor_glyphs(page, [c], glyph_cache)
+                        if glyphs and len(glyphs) == 1 and not fitz.Rect(glyphs[0]['rect']).is_empty:
+                            ink = fitz.Rect(glyphs[0]['rect'])
+                            # MuPDF 删除测试还需覆盖零宽原点；与原墨迹一起
+                            # 构成范围，并照常扣除所有固定对象。
+                            ink |= fitz.Rect(c['origin'][0]-.02, c['rect'][1],
+                                             c['origin'][0]+.02, c['rect'][3])
+                            zero_ink[(number, c['text'], tuple(c['origin']))] = ink
                 for block in page.get_text('rawdict')['blocks']:
                     for line in block.get('lines', []):
                         for span in line['spans']:
@@ -203,32 +229,59 @@ def safe_erase_rectangles(editable, protected, source=None):
                     for item in span['chars']:
                         if item[1] >= 0:
                             leader = item
+                            # rawdict 会把 Unicode ﬁ/ﬂ 等拆成零宽续字符，
+                            # trace 却仍是单个合字（没有 gid=-1）。只采用
+                            # Unicode 标准合字分解且原主字符/原点唯一的证据。
+                            if 0xFB00 <= item[0] <= 0xFB06:
+                                import unicodedata
+                                text = unicodedata.normalize('NFKD', chr(item[0]))
+                                boxes = metrics.get((number, text[0], tuple(item[2])), [])
+                                if len(boxes) == 1:
+                                    parts.extend((c, boxes[0][2], item[2][1], boxes[0])
+                                                 for c in text[1:])
                         elif leader is not None:
                             # MuPDF 用 glyph_id=-1 明确表示合字的续字符。
                             # rawdict 的续字符位于主字形右边界，且没有独立宽度；
                             # 删除主字形即可删除整个合字，不能把零宽字当漏译跳过。
-                            parts.append((chr(item[0]), leader[3][2], item[2][1], leader[3]))
+                            # TrueType 的 PDF /Widths 可对字宽取整，trace 使用
+                            # 字体内部宽度，两者会相差约 0.002 pt。续字符原点
+                            # 来自 rawdict 的主字形右边界，因此用唯一对应的
+                            # 原主字框定位；不扩大容差，也不把邻字当作合字。
+                            boxes = metrics.get((number, chr(leader[0]), tuple(leader[2])), [])
+                            box = boxes[0] if len(boxes) == 1 else leader[3]
+                            parts.append((chr(item[0]), box[2], item[2][1], box))
                 ligatures[number] = parts
-        # 删除计划与实际删除必须使用同一临时字体指标。只采纳唯一匹配且
-        # 被原字框包含的新框；不修改持久化版面计划或最终保护校验坐标。
+        # 删除计划与实际删除必须使用同一临时字体指标。只采纳原字符和
+        # 原点唯一匹配的新框，包括扩大后的框：CFF 求和号的临时字框可
+        # 向下伸入下一行，仍用旧框会误删公式。此改动仅影响删除避让，
+        # 不修改持久化计划或最终字形/像素核验；字体归一化已验证画面不变。
         protected = [{**p, 'chars': [
             {**c, 'rect': list(matches[0])} if len(matches := metrics.get(
-                (p['page'], c['text'], tuple(c['origin'])), [])) == 1
-            and fitz.Rect(c['rect']).contains(fitz.Rect(matches[0])) else c
+                (p['page'], c['text'], tuple(c['origin'])), [])) == 1 else c
             for c in fixed_characters(p)]} if fixed_characters(p) else p for p in protected]
     for part in editable:
         obstacles = [rect for p in protected if p['page'] == part['page']
                      for rect in fixed_text_rectangles(p)]
-        pieces = subtract_rectangles(part['rect'], obstacles)
+        bounds = fitz.Rect(part['rect'])
+        for c in part['chars']:
+            ink = zero_ink.get((part['page'], c['text'], tuple(c['origin'])))
+            if ink is not None:
+                bounds |= ink
+        pieces = subtract_rectangles(bounds, obstacles)
         # 内缩只为避开 PDF 浮点边界；完整触字证明使用实际内缩结果。
         patches = [fitz.Rect(r.x0 + .01, r.y0 + .01, r.x1 - .01, r.y1 - .01)
                    for r in pieces if r.width > .02 and r.height > .02]
         for char in part['chars']:
-            footprint = fitz.Rect(char['rect'])
+            footprint = fitz.Rect(zero_ink.get(
+                (part['page'], char['text'], tuple(char['origin'])), char['rect']))
             if footprint.is_empty:
                 matches = [box for text, x, y, box in ligatures.get(part['page'], [])
                            if text == char['text'] and abs(x - char['origin'][0]) < .001
-                           and abs(y - char['origin'][1]) < .001]
+                           and abs(y - char['origin'][1]) < .001
+                           and any(abs(c['rect'][0]-box[0]) < .001
+                                   and abs(c['rect'][2]-x) < .001
+                                   and abs(c['origin'][1]-y) < .001
+                                   and c['rect'][2] > c['rect'][0] for c in part['chars'])]
                 if not matches:
                     # 与原字形绑定采用相同证据：不同 ToUnicode 可使续字符
                     # 文本不一致，但 gid=-1 的右边界和基线仍确定其主字形。
@@ -244,7 +297,11 @@ def safe_erase_rectangles(editable, protected, source=None):
                 if len(matches) == 1:
                     footprint = fitz.Rect(matches[0])
             if char['text'].strip() and not any(footprint.intersects(r) for r in patches):
-                raise ValueError(f'第{part["page"]}页正文字符没有安全删除范围：{char["text"]!r}')
+                from .diagnostics import LocatedError
+                raise LocatedError(f'第{part["page"]}页正文字符没有安全删除范围：{char["text"]!r}',
+                    [{'source': part.get('text', char['text']), 'pages': [part['page']],
+                      'character': char['text'], 'origin': char['origin'],
+                      'regions': [{'page': part['page'], 'rect': char['rect']}]}], 'preservation')
         result.extend({'page': part['page'], 'rect': list(r)} for r in patches)
     return result
 
@@ -255,15 +312,67 @@ def verify_text_erased(page, editable, protected):
     坐标容差仅覆盖 PDF 数值序列化误差；最终另有原保护区域严格像素核验。
     此检查也覆盖没有分配到中文的原文行，避免短译文掩盖残留英文。
     """
+    from .diagnostics import LocatedError
     chars = [c for block in page.get_text('rawdict')['blocks'] for line in block.get('lines', [])
              for span in line['spans'] for c in span['chars']]
+    # 毫磅网格只用于索引加速；边界相邻格也检索，最终仍用原来的
+    # <0.001 pt 精确容差。大页不再为每个字符遍历全页所有字符。
+    cells = {}
+    for c in chars:
+        x, y = (math.floor(v * 1000) for v in c['origin'])
+        cells.setdefault((c['c'], x, y), []).append(c)
     def present(char):
-        return any(c['c'] == char['text'] and
-                   max(abs(a - b) for a, b in zip(c['origin'], char['origin'])) < .001 for c in chars)
-    if any(present(c) for part in editable for c in part['chars'] if c['text'].strip()):
-        raise ValueError(f'第{page.number + 1}页仍有未删除的待译原文')
-    if any(not present(c) for part in protected for c in fixed_characters(part) if c['text'].strip()):
-        raise ValueError(f'第{page.number + 1}页固定字符缺失或位置改变')
+        x, y = (math.floor(v * 1000) for v in char['origin'])
+        return any(max(abs(a - b) for a, b in zip(c['origin'], char['origin'])) < .001
+                   for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                   for c in cells.get((char['text'], x + dx, y + dy), []))
+    def evidence(part, char):
+        return {'id': part.get('id'), 'source': part.get('text', char['text']),
+                'pages': [page.number + 1], 'character': char['text'],
+                'origin': char['origin'],
+                'regions': [{'page': page.number + 1, 'rect': char['rect']}]}
+    remaining = [evidence(p, c) for p in editable for c in p['chars']
+                 if c['text'].strip() and present(c)]
+    if remaining:
+        raise LocatedError(f'第{page.number + 1}页仍有未删除的待译原文', remaining, 'preservation')
+    missing = [evidence(p, c) for p in protected for c in fixed_characters(p)
+               if c['text'].strip() and not present(c)]
+    if missing:
+        raise LocatedError(f"第{page.number + 1}页固定字符缺失或位置改变：{missing[0]['character']!r}",
+                           missing, 'preservation')
+
+
+def prepare_source_layer(source, editable, protected, erase_regions):
+    """在模型调用前实际删除一次正文，验证固定字符，并返回可直接写入的源层。
+
+    只在内存副本操作；恢复原字体程序后返回 PDF 字节，不改原 PDF。
+    后续写入复用这一已验证源层，不重复删除，也不能把预检通过当成最终
+    像素核验或完整译文通过。任何异常都在调用翻译服务之前向上传播。
+    """
+    from .font_geometry import open_source_for_editing, restore_source_fonts
+    document, original_fonts = open_source_for_editing(source)
+    with document, open_source_pdf(source) as original:
+        from .source_watermarks import background_layers, set_page_stream, restore_background, verify_backgrounds
+        layers = background_layers(original)
+        for number, page in enumerate(document, 1):
+            edits = [p for p in editable if p['page'] == number]
+            if number in layers:
+                set_page_stream(page, layers[number]['foreground'])
+                page = document.reload_page(page)
+            if not edits and number not in layers:
+                continue
+            for part in (p for p in erase_regions if p['page'] == number):
+                page.add_redact_annot(fitz.Rect(part['rect']), fill=False, cross_out=False)
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
+                                  graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+                                  text=fitz.PDF_REDACT_TEXT_REMOVE)
+            verify_text_erased(page, edits, [p for p in protected if p['page'] == number])
+            restore_default_color_spaces(page, original[number - 1])
+            if number in layers:
+                restore_background(page, original[number-1], layers[number])
+        restore_source_fonts(document, original_fonts)
+        verify_backgrounds(original, document)
+        return document.tobytes(garbage=0, deflate=True)
 
 
 def restore_changed_isolated_regions(page, source_page, editable, protected):

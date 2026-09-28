@@ -168,6 +168,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--source-language", default="en")
     run.add_argument("--target-language", default="zh-CN")
     run.add_argument("--pages")
+    run.add_argument("--interactive-errors", action=argparse.BooleanOptionalAction, default=None,
+                     help="错误时显示字母修复菜单；默认仅交互终端启用，无人值守不启用")
     run.add_argument("--no-qa", action="store_true",
                      help="源版面模式：省略输出后机器 QA，保留 rendered 状态，PDF 留在运行目录")
     run.add_argument("--domain", default="atmospheric-science")
@@ -405,6 +407,12 @@ def build_parser() -> argparse.ArgumentParser:
     accept = subparsers.add_parser("accept", help="记录人工逐页视觉验收")
     accept.add_argument("--run-dir", type=Path, required=True)
     accept.add_argument("--reviewed-by", required=True)
+    repair = subparsers.add_parser("repair-choice", help="应用当前错误的修复选项或回退（不自动启动模型）")
+    repair.add_argument("--run-dir", type=Path, required=True)
+    repair.add_argument("--error-id", required=True)
+    repair.add_argument("--choice", choices=("r", "t", "f", "s", "b", "q"), required=True)
+    journal = subparsers.add_parser("journal-info", help="显示 PDF 期刊归属及识别证据")
+    journal.add_argument("source_pdf", type=Path)
     resume = subparsers.add_parser("resume-waiting", help="修正问题后通知等待进程继续")
     resume.add_argument("--run-dir", type=Path, required=True)
     return parser
@@ -454,12 +462,22 @@ def main() -> int:
     from .recovery import print_error, run_waiting
     try:
         if args.command == "run":
+            interactive = args.interactive_errors
+            if interactive is None:
+                interactive = sys.stdin.isatty() and not args.unattended and args.contract_repair
+            if interactive:
+                from .repair_choices import interactive_run
+                return interactive_run(lambda: _execute(args), args.run_dir)
             wait = args.contract_repair if args.wait_on_error is None else args.wait_on_error
             if wait:
                 return run_waiting(lambda: _execute(args), args.run_dir)
         return _execute(args)
     except Exception as error:
-        print_error(error, getattr(args, "run_dir", None))
+        root = getattr(args, "run_dir", None)
+        print_error(error, root)
+        if root is not None and args.command != "repair-choice":
+            from .diagnostics import record_error, print_context
+            print_context(record_error(error, root))
         return 1
 
 
@@ -475,6 +493,16 @@ def _apply_run_provider_defaults(args: argparse.Namespace, manifest: dict, is_ne
 
 
 def _execute(args: argparse.Namespace) -> int:
+    if args.command == "journal-info":
+        import json
+        from .journals import identify_journal
+        print(json.dumps(identify_journal(args.source_pdf.expanduser().resolve()), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "repair-choice":
+        from .repair_choices import apply_choice
+        apply_choice(args.run_dir, args.choice, args.error_id)
+        print("修复选项已应用；回退不会自动重启模型，其他选项可从原断点继续。")
+        return 0
     if args.command == "resume-waiting":
         from .recovery import resume_waiting
         resume_waiting(args.run_dir)
@@ -525,6 +553,8 @@ def _execute(args: argparse.Namespace) -> int:
         return 0
     if args.command == "run":
         root = args.run_dir.expanduser().resolve()
+        # 开始尝试时旧弹窗立即失效，避免另一个前端套用过期的失败片段。
+        (root / "error_report.json").unlink(missing_ok=True)
         is_new = not (root / "run_manifest.json").is_file()
         manifest = _initialize_or_load_run(
             source_pdf=args.source_pdf,
@@ -562,17 +592,26 @@ def _execute(args: argparse.Namespace) -> int:
                 dpi=args.dpi, pdftoppm_bin=args.pdftoppm_bin,
                 max_segments=args.max_segments, max_characters=args.max_characters,
                 generate_qa=not args.no_qa)
+            from .progress import emit_progress
+            if (root / 'translation_coverage.json').exists():
+                import json
+                coverage = json.loads((root / 'translation_coverage.json').read_text())
+                skipped = coverage.get('user_skipped_segments', []) + coverage.get('user_skipped_blocks', [])
+                if skipped:
+                    print(f"注意：用户选择保留原文的片段有 {len(skipped)} 个；这是部分翻译，详见 translation_coverage.json。")
             if result["status"] == "rendered" and args.no_qa:
                 from .workflow import _verify_rendered_pdf
                 rendered = (export_run_pdf(root, require_qa=False) if manifest.get("output_pdf")
                             else _verify_rendered_pdf(result))
                 print(f"候选 PDF：{rendered}；按明确选择未运行输出后机器 QA，尚未验收")
+                emit_progress("完成（未运行 QA）", 1)
                 return 0
             exported = export_run_pdf(root)
             if result["status"] == "accepted":
                 print(f"已验收 PDF 已保存到：{exported}")
             else:
                 print(f"候选 PDF 已保存到：{exported}；仍需逐页视觉验收")
+            emit_progress("完成（待人工验收）", 1)
             return 0
         if args.import_cache_from:
             raise ValueError("缓存导入只支持段落模式")

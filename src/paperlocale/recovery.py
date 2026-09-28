@@ -124,6 +124,8 @@ def run_waiting(operation: Callable[[], T], root: Path, *,
             status['location'], status['solution'] = error_details(error)
             _save(root / 'waiting.json', status)
             print_error(error, root)
+            from .diagnostics import record_error, print_context
+            print_context(record_error(error, root))
             if automatic:
                 retried = True
                 print(f'PaperLocale：已保存断点，{retry_delay:g} 秒后重试一次。', flush=True)

@@ -106,12 +106,12 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.8"
+python -m pip install "paperlocale[layout]==0.8.0"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start (0.7.8)
+## Quick start (0.8.0)
 
 New runs use paragraph frames (`--layout-mode paragraph`). The title, abstract,
 main text and figure/table captions are translated. Natural paragraph boundaries
@@ -440,6 +440,22 @@ The script intentionally stops before visual acceptance and prints the compariso
 The scheduled compatibility workflow repeats this real CLI check weekly against
 the newest `pdf2zh-next` release allowed by the declared dependency range.
 
+For a local collection of publisher PDFs, run the source-layer preflight without
+calling a translation model:
+
+```bash
+python scripts/preflight_corpus.py /path/to/source-pdfs \
+  --output /path/to/preflight-results --workers 2
+```
+
+Each PDF has a resumable result bound to its source hash, implementation, and
+MuPDF version. The check exercises layout classification, inline font binding,
+actual body-text deletion, and preservation of fixed characters. A nonzero exit
+means at least one document needs attention; see `summary.json` and the per-file
+evidence. This is not a translation, final pixel check, or visual acceptance.
+Normal paragraph translation now performs the same actual-deletion check before
+requesting any translation and reuses the validated source layer for rendering.
+
 ## Contributing
 
 Start with the scoped [good first issues](https://github.com/hazugi2004/paperlocale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22), or read [CONTRIBUTING.md](CONTRIBUTING.md). Current entry points cover an ecology domain pack, Ubuntu installation verification, and independent review of the atmospheric-science Provider evaluation.
@@ -475,6 +491,14 @@ See [changes, validation and limits](docs/releases/v0.7.5.md). Existing runs use
 Fixes split inline subscripts, a reviewed C0-encoded minus, duplicate confidence-band drawing, and caption detection edges. Adds explicit `--no-qa` without claiming acceptance. See the [release notes](docs/releases/v0.7.7.md).
 
 The experimental [macOS native frontend](macos/README.md) selects PDFs, models and reasoning effort. It requires an installed CLI and layout dependencies. Universal 2, macOS 13+; ad-hoc signed, not Apple notarized.
+
+## 0.8.0
+
+自动识别期刊、原句/页码错误诊断、可回退修复菜单，以及 macOS 奶龙图标、滚动奶蛋进度和 PDF 拖放。详见 [使用范围和修复选项](docs/releases/v0.8.0.md)。
+
+本地鲁棒性修复增加模型请求前的实际正文删除与固定字形检查，修正含填充空格的页眉及首页混合栏式排序。原字形重排支持经资源/GID核验的 Type 1/PFA、水平等比 CFF、CID-CFF 和 TrueType；部分未嵌入字体可沿用源 PDF 已使用的字体资源和经字宽消歧的原编码。未知绑定仍明确报错。
+
+新增原字形证据驱动的空白/数学编码处理、零宽合字与重音删除、旋转页可见坐标与链接保持、显式背景水印恢复，以及出版社错误 ActualText 公式占位标签处理。只恢复经过核验的语义，不猜测未知科学字形；原 PDF 不写回。批量预检支持 `--failed-from <summary.json>` 按失败清单续查，断点同时绑定代码和源文件哈希。预检通过仍不代表全文翻译、最终排版或人工验收通过。
 
 ## 0.7.8
 

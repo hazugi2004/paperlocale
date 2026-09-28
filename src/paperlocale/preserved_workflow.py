@@ -34,11 +34,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                   contract_repair: bool = True, dpi: int = 144,
                   pdftoppm_bin=None, max_segments: int = 200,
                   max_characters: int = 30000, paragraph: bool = False,
-                  import_cache_from: Path | None = None) -> dict:
+                  import_cache_from: Path | None = None, generate_qa: bool = True) -> dict:
     """逻辑段落翻译→全量预排版→源页写入→保护区域验证→机器 QA。
 
     一个逻辑段落允许跨任意多个页面/图片间隙。模型只收到带固定锚点的全文，
     固定锚点原文只作为上下文，不允许翻译或改写。无法容纳时不产出部分中文候选，交给外层等待。
+    generate_qa=False 仅省略输出后的机器QA，返回真实的 rendered 状态；
+    不跳过写入前完整性检查，也不伪造 qa_generated 或人工验收记录。
     """
     manifest = load_manifest(root)
     source = _verify_source_pdf(manifest)
@@ -48,7 +50,9 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         _verify_rendered_pdf(manifest)
         return manifest
     if manifest['status'] == 'rendered':
-        qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin, restore_vectors=False)
+        _verify_rendered_pdf(manifest)
+        if generate_qa:
+            qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin, restore_vectors=False)
         return load_manifest(root)
     if font_file is None:
         from babeldoc.assets.assets import get_font_and_metadata
@@ -78,6 +82,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     translated_kinds = {'body', 'caption'} if paragraph else {'body'}
     protected.extend(b for b in plan['blocks'] if b['kind'] not in translated_kinds)
     if paragraph:
+        from .safe_text import separate_caption_edges
+        protected = separate_caption_edges(source, protected, plan['blocks'])
         from .paragraph_layout import bind_inline_glyphs
         bind_inline_glyphs(source, units)
         editable.extend(part for unit in units for part in unit['anchors'])
@@ -382,5 +388,6 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         save_manifest(root, manifest)
     finally:
         temporary.unlink(missing_ok=True)
-    qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin, restore_vectors=False)
+    if generate_qa:
+        qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin, restore_vectors=False)
     return load_manifest(root)

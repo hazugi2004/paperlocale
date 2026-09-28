@@ -168,6 +168,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--source-language", default="en")
     run.add_argument("--target-language", default="zh-CN")
     run.add_argument("--pages")
+    run.add_argument("--no-qa", action="store_true",
+                     help="源版面模式：省略输出后机器 QA，保留 rendered 状态，PDF 留在运行目录")
     run.add_argument("--domain", default="atmospheric-science")
     run.add_argument("--layout-mode", choices=("paragraph", "preserved", "legacy"),
                      help="新运行默认段落框模式；既有运行保持原模式")
@@ -532,6 +534,8 @@ def _execute(args: argparse.Namespace) -> int:
         )
         _apply_run_provider_defaults(args, manifest, is_new)
         from .workflow import save_manifest
+        if args.no_qa and (args.layout_mode or manifest.get("layout_mode", "paragraph" if is_new else "legacy")) == "legacy":
+            raise ValueError("--no-qa 只支持 paragraph / preserved 模式")
         recorded_mode = manifest.get("layout_mode", "paragraph" if is_new else "legacy")
         mode = args.layout_mode or recorded_mode
         if mode != recorded_mode and manifest["status"] != "initialized":
@@ -549,7 +553,13 @@ def _execute(args: argparse.Namespace) -> int:
                 import_cache_from=args.import_cache_from,
                 min_font_size=args.min_font_size, contract_repair=args.contract_repair,
                 dpi=args.dpi, pdftoppm_bin=args.pdftoppm_bin,
-                max_segments=args.max_segments, max_characters=args.max_characters)
+                max_segments=args.max_segments, max_characters=args.max_characters,
+                generate_qa=not args.no_qa)
+            if result["status"] == "rendered" and args.no_qa:
+                from .workflow import _verify_rendered_pdf
+                rendered = _verify_rendered_pdf(result)
+                print(f"候选 PDF：{rendered}；按明确选择未运行输出后机器 QA，尚未验收")
+                return 0
             exported = export_run_pdf(root)
             if result["status"] == "accepted":
                 print(f"已验收 PDF 已保存到：{exported}")

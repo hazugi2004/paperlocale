@@ -106,12 +106,12 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.6"
+python -m pip install "paperlocale[layout]==0.7.7"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start (0.7.6)
+## Quick start (0.7.7)
 
 New runs use paragraph frames (`--layout-mode paragraph`). The title, abstract,
 main text and figure/table captions are translated. Natural paragraph boundaries
@@ -469,3 +469,9 @@ See [validation and limitations](docs/releases/v0.7.4.md).
 ### 0.7.5: headings, scientific symbols and numbered paragraphs
 
 See [changes, validation and limits](docs/releases/v0.7.5.md). Existing runs use a new directory with explicit cache import.
+
+## 0.7.7 and the macOS frontend
+
+Fixes split inline subscripts, a reviewed C0-encoded minus, duplicate confidence-band drawing, and caption detection edges. Adds explicit `--no-qa` without claiming acceptance. See the [release notes](docs/releases/v0.7.7.md).
+
+The experimental [macOS native frontend](macos/README.md) selects PDFs, models and reasoning effort. It requires an installed CLI and layout dependencies. Universal 2, macOS 13+; ad-hoc signed, not Apple notarized.

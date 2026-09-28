@@ -13,6 +13,10 @@ from .font_geometry import _source_anchor_glyphs
 # 来自已核验的出版社符号轮廓，含度、分角、比较、符号及乘号。
 # 摘要对应标准 0.001 FontMatrix 下未缩放的 RecordingPen 指令序列。
 REVIEWED_OUTLINES = {
+    # Nature Communications 2026, DOI 10.1038/s41467-026-75130-5，第4页图2图注：
+    # AdvMacMthSyN 的 01 -> C0 缺失 ToUnicode，rawdict 返回 U+0001。
+    # 已核对完整概率差公式及源轮廓；仅精确轮廓匹配才恢复减号，不按控制码猜测。
+    '26035219e9c7b476cd8fdd68c3497505e4c81f89236e2a37dbdf98f46ee84d9c': '−',
     'd0d47323e83727bb962f8383d9cdbbfa3cdde60d10a21533c23fd08935b5f596': '°',
     '5c24c11c5915d3aa2ee35890f86f6d47fef91e32b1029abd8a2aa489ac1867de': '′',
     '23fe3853f2e51be09c93eb4b683262f6414e864ffdcf03e7efd258f8ce1c6150': '<',
@@ -36,7 +40,7 @@ def restore_source_symbols(page, raw, cache):
         for line in block.get('lines', []):
             for span in line['spans']:
                 by_font.setdefault(span['font'], []).extend(
-                    c for c in span['chars'] if c['c'] in '8023$D.5j#,')
+                    c for c in span['chars'] if c['c'] in '8023$D.5j#,\x01')
     for candidates in by_font.values():
         if not candidates:
             continue

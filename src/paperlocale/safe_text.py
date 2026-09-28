@@ -10,6 +10,42 @@ def page_pixels(page):
     return Image.frombytes('RGB', (pixmap.width, pixmap.height), pixmap.samples)
 
 
+def separate_caption_edges(source, protected, blocks):
+    """收紧误罩住图注顶部的图表检测框，不更改源对象或持久版面计划。
+
+    只处理图表下边界与已识别图注的重叠；移出的条带必须没有图片、
+    矢量绘制或非图注字符。证据不充分时保留原框，让后续保护检查报错。
+    因此不能用该规则裁掉曲线、图内标签或任意正文来让检查通过。
+    """
+    result = []
+    with fitz.open(source) as document:
+        for region in protected:
+            box = fitz.Rect(region['rect'])
+            captions = [fitz.Rect(b['rect']) for b in blocks
+                        if b['page'] == region['page'] and b['kind'] == 'caption'
+                        and box.y0 < b['rect'][1] < box.y1 <= b['rect'][3]
+                        and box.x0 < b['rect'][2] and b['rect'][0] < box.x1]
+            if region.get('kind') not in {'figure', 'table'} or not captions:
+                result.append(region)
+                continue
+            edge = min(c.y0 for c in captions)
+            strip = fitz.Rect(box.x0, edge, box.x1, box.y1)
+            page = document[region['page'] - 1]
+            graphics = any(kind in {'fill-image', 'fill-path', 'stroke-path', 'fill-shade'}
+                           and fitz.Rect(rect).intersects(strip)
+                           for kind, rect in page.get_bboxlog())
+            chars = [c for b in page.get_text('rawdict', flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)['blocks']
+                     for line in b.get('lines', []) for span in line['spans'] for c in span['chars']]
+            other_text = any(fitz.Rect(c['bbox']).intersects(strip)
+                             and not any(caption.contains(fitz.Rect(c['bbox'])) for caption in captions)
+                             for c in chars)
+            if not graphics and not other_text:
+                region = {**region, 'rect': [box.x0, box.y0, box.x1, edge],
+                          'caption_edge_original_rect': list(box)}
+            result.append(region)
+    return result
+
+
 def restore_default_color_spaces(page, source_page):
     """删除引擎会清理隐式使用的默认色彩空间；恢复源定义而非重配颜色。
 

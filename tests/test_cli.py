@@ -14,8 +14,21 @@ from paperlocale.cli import _apply_run_provider_defaults, _initialize_or_load_ru
 
 
 class CliTest(unittest.TestCase):
+    def test_no_qa_preserves_rendered_status_and_does_not_export_as_passed(self):
+        args = build_parser().parse_args(["run", "source.pdf", "--run-dir", "run", "--no-qa"])
+        manifest = {"status": "rendered", "layout_mode": "paragraph"}
+        with patch("paperlocale.cli._initialize_or_load_run", return_value=manifest), \
+             patch("paperlocale.workflow.save_manifest"), \
+             patch("paperlocale.preserved_workflow.run_preserved", return_value=manifest) as render, \
+             patch("paperlocale.workflow._verify_rendered_pdf", return_value=Path("candidate.pdf")), \
+             patch("paperlocale.cli.export_run_pdf") as export, patch("builtins.print"):
+            self.assertEqual(cli._execute(args), 0)
+        self.assertFalse(render.call_args.kwargs["generate_qa"])
+        export.assert_not_called()
+        self.assertEqual(manifest["status"], "rendered")
+
     def test_package_version_matches_current_release(self) -> None:
-        self.assertEqual(__version__, "0.7.6")
+        self.assertEqual(__version__, "0.7.7")
 
     def test_qwen_csv_key_is_opaque_and_takes_explicit_precedence(self) -> None:
         """有标点的完整CSV字段传入Provider；环境变量不得替换显式选定的密钥。"""

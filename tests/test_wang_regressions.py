@@ -11,6 +11,31 @@ from paperlocale.quantities import find_quantities
 
 
 class WangRegressions(unittest.TestCase):
+    def test_control_code_requires_reviewed_minus_outline(self):
+        """控制码本身不代表减号；只恢复已核验轮廓，坐标及原字符保持可追溯。"""
+        from paperlocale.source_symbols import restore_source_symbols
+
+        class Shape:
+            def __init__(self, right):
+                self.right = right
+
+            def draw(self, pen):
+                pen.moveTo((self.right, 225)); pen.lineTo((self.right, 275))
+                pen.lineTo((84, 275)); pen.lineTo((84, 225)); pen.closePath()
+
+        for right, expected in [(696, '−'), (697, '\x01')]:
+            with self.subTest(right=right):
+                char = {'c': '\x01', 'origin': [20, 30], 'bbox': [20, 20, 25, 30]}
+                raw = [{'lines': [{'spans': [{'font': 'Math', 'chars': [char]}]}]}]
+                top = type('Top', (), {'CharStrings': {'C0': Shape(right)}})()
+                with patch('paperlocale.source_symbols._source_anchor_glyphs',
+                           return_value=[{'xref': 1, 'name': 'C0'}]):
+                    restore_source_symbols(None, raw, {1: top})
+                self.assertEqual(char['c'], expected)
+                self.assertEqual(char.get('native_text'), '\x01' if right == 696 else None)
+                self.assertEqual(char['origin'], [20, 30])
+                self.assertEqual(char['bbox'], [20, 20, 25, 30])
+
     def test_italic_heading_is_translatable_as_one_unit(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'heading.pdf'

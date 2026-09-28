@@ -23,7 +23,7 @@ jobs:
         run: |
           python scripts/build_macos_app.py
           dist/PaperLocale.app/Contents/MacOS/PaperLocale --version
-          lipo -verify_arch arm64 x86_64 dist/PaperLocale.app/Contents/MacOS/PaperLocale
+          lipo -info dist/PaperLocale.app/Contents/MacOS/PaperLocale
       - uses: actions/upload-artifact@v7
         with:
           name: paperlocale-macos-${{ github.ref_name }}

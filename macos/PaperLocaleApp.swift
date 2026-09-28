@@ -131,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct ContentView: View {
-    @StateObject private var job = TranslationJob()
+    @ObservedObject var job: TranslationJob
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -193,6 +193,8 @@ struct ContentView: View {
 
 @main struct PaperLocaleApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    // 任务由 app 持有，关闭/重开窗口不能丢失子进程、日志或运行中状态。
+    @StateObject private var job = TranslationJob()
     init() {
         if CommandLine.arguments.contains("--version") {
             print("PaperLocale macOS 0.7.7")
@@ -200,7 +202,7 @@ struct ContentView: View {
         }
     }
     var body: some Scene {
-        WindowGroup { ContentView() }
+        WindowGroup { ContentView(job: job) }
             .commands { CommandGroup(replacing: .newItem) {} }
     }
 }

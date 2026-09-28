@@ -32,6 +32,11 @@ def main():
                         str(root / "macos" / "PaperLocaleApp.swift"), "-o", str(binary)], check=True)
         binaries.append(str(binary))
     subprocess.run(["lipo", "-create", *binaries, "-output", str(binary_dir / "PaperLocale")], check=True)
+    # 直接核对实际 Mach-O 架构，避免不同 Xcode 的 -verify_arch 参数解析差异。
+    architectures = set(subprocess.check_output(
+        ["lipo", "-archs", str(binary_dir / "PaperLocale")], text=True).split())
+    if architectures != {"arm64", "x86_64"}:
+        raise RuntimeError(f"Universal 2 架构不完整：{architectures}")
     metadata = {"CFBundleName": "PaperLocale", "CFBundleDisplayName": "PaperLocale",
                 "CFBundleIdentifier": "io.github.hazugi2004.paperlocale",
                 "CFBundleExecutable": "PaperLocale", "CFBundlePackageType": "APPL",

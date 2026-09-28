@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.7 — 2026-09-26
+## 0.7.7 — 2026-09-28
 
 - Keep backtracking subscripts with their inline variables and complete paragraphs.
 - Recover a reviewed C0-encoded minus by exact glyph outline; retain unknown-code diagnostics.

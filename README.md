@@ -106,12 +106,12 @@ For v0.6.3, install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.7.8"
+python -m pip install ".[layout]"  # 0.8.0 本地源码构建，尚未公开发布
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start (0.7.8)
+## Quick start (0.8.0)
 
 New runs use paragraph frames (`--layout-mode paragraph`). The title, abstract,
 main text and figure/table captions are translated. Natural paragraph boundaries
@@ -475,6 +475,10 @@ See [changes, validation and limits](docs/releases/v0.7.5.md). Existing runs use
 Fixes split inline subscripts, a reviewed C0-encoded minus, duplicate confidence-band drawing, and caption detection edges. Adds explicit `--no-qa` without claiming acceptance. See the [release notes](docs/releases/v0.7.7.md).
 
 The experimental [macOS native frontend](macos/README.md) selects PDFs, models and reasoning effort. It requires an installed CLI and layout dependencies. Universal 2, macOS 13+; ad-hoc signed, not Apple notarized.
+
+## 0.8.0
+
+自动识别期刊、原句/页码错误诊断、可回退修复菜单，以及 macOS 奶龙图标、滚动奶蛋进度和 PDF 拖放。详见 [使用范围和修复选项](docs/releases/v0.8.0.md)。
 
 ## 0.7.8
 

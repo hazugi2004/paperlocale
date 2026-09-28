@@ -78,6 +78,7 @@ def translate_segment_file(
     passthrough_segment_ids: set[str] | frozenset[str] = frozenset(),
     contract_repair: bool = True,
     anchor_text: dict[str, dict[str, str]] | None = None,
+    progress=None,
 ) -> tuple[int, int]:
     """翻译尚未通过门禁的片段，并在每批成功后原子写入断点。
 
@@ -140,7 +141,8 @@ def translate_segment_file(
             if all(error.startswith(("quantity ", "scientific_literal ", "restored_content ")) for error in errors):
                 quantity_rejections.append({**row, "errors": errors, "origin": "cached_quantity_validation"})
                 continue
-            raise ValueError(f"既有译文未通过门禁：{sid}: {errors}")
+            from .diagnostics import LocatedError
+            raise LocatedError(f"既有译文未通过门禁：{sid}: {errors}", [row], 'translation')
         existing[sid] = row
 
     if quantity_rejections:
@@ -173,6 +175,8 @@ def translate_segment_file(
         write_jsonl_atomic(translations_path, ordered)
 
     pending = [segment for segment in segments if segment.id not in existing]
+    if progress:
+        progress(len(ordered), len(segments))
     context = TranslationContext(
         source_language=domain.source_language,
         target_language=domain.target_language,
@@ -193,7 +197,12 @@ def translate_segment_file(
         max_segments=effective_max_segments,
         max_characters=max_characters,
     ):
-        translated = provider.translate(batch, context)
+        from .diagnostics import LocatedError
+        try:
+            translated = provider.translate(batch, context)
+        except Exception as error:
+            # 服务失败可能涉及整个批次，明确标为批次上下文，不指控其中某句。
+            raise LocatedError(str(error), [{'id': x.id, 'source': x.source} for x in batch], 'provider') from error
         if [item.id for item in translated] != [item.id for item in batch]:
             raise ValueError("Provider 返回顺序或 ID 与输入批次不一致")
         accepted: list[dict[str, object]] = []
@@ -232,10 +241,10 @@ def translate_segment_file(
             # 先落盘成功片段与失败证据，再遵守调用方的“首错即停”要求。
             # 不改变 Provider、模型或推理强度，也不借重试绕过作者姓名透传确认。
             if not contract_repair:
-                raise ValueError(
+                raise LocatedError(
                     f"首轮内容校验失败，已禁用模型修复重试；详见 {rejected_path}。"
                     "若失败项是作者姓名等无需翻译内容，请核对源 PDF 后使用 "
-                    "confirm-passthrough，不要放宽正文中文门禁。"
+                    "confirm-passthrough，不要放宽正文中文门禁。", rejected, "translation"
                 )
             rejected_by_id = {str(row["id"]): row for row in rejected}
             repair_batch = [
@@ -251,7 +260,10 @@ def translate_segment_file(
                     for segment in repair_batch
                 },
             )
-            repaired = provider.translate(repair_batch, repair_context)
+            try:
+                repaired = provider.translate(repair_batch, repair_context)
+            except Exception as error:
+                raise LocatedError(str(error), [{'id': x.id, 'source': x.source} for x in repair_batch], 'provider') from error
             if [item.id for item in repaired] != [item.id for item in repair_batch]:
                 raise ValueError("Provider 修复重试返回顺序或 ID 与输入批次不一致")
 
@@ -294,11 +306,13 @@ def translate_segment_file(
                 write_jsonl_atomic(translations_path, ordered)
             if final_rejected:
                 write_jsonl_atomic(rejected_path, final_rejected)
-                raise ValueError(
+                raise LocatedError(
                     f"同一 Provider 定向重试后仍有 {len(final_rejected)} 条译文"
-                    f"未通过门禁；合格译文已保存，失败候选见 {rejected_path}"
+                    f"未通过门禁；合格译文已保存，失败候选见 {rejected_path}", final_rejected, "translation"
                 )
             rejected_path.unlink()
+        if progress:
+            progress(len(ordered), len(segments))
         if rejected_path.exists():
             # 成功重试后清除已经解决的诊断文件，避免把旧失败误认为当前状态。
             rejected_path.unlink()

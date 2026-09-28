@@ -81,6 +81,9 @@ def _superscript(span, line, *, paragraph=False):
         return bool(span['flags'] & 1)
     chars = [(s['size'], c['origin'][1]) for s in line['spans']
              for c in s['chars'] if not c['c'].isspace()]
+    # Springer PDF 可把纯空格单独标成上标；没有可见字时不能估计基线。
+    if not chars:
+        return bool(span['flags'] & 1)
     size = median(c[0] for c in chars)
     baseline = median(c[1] for c in chars if c[0] >= .95*size)
     return span['size'] < .95*size or span['origin'][1] < baseline-.2*size
@@ -112,6 +115,8 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
                                   re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
                               'bold': _bold(span, paragraph=paragraph),
                               'superscript': superscript})
+        if not chars:
+            continue
         text = ''.join(c['c'] for c in chars)
         # 行内变量未必使用数学字体：真实论文的 β 带帽、R_n、T_d 分布在
         # 普通斜体和小字号下标中。按完整变量词元保护基字及上下标，避免
@@ -424,7 +429,7 @@ def normalize_traced_spaces(raw, traces):
                         char['c'] = ' '
 
 
-def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None) -> dict:
+def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
@@ -435,12 +440,15 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     caption_pattern = CAPTION if paragraph else LEGACY_CAPTION
     _, _, _, references = _reference_geometry(source)
     blocks, protected, issues = [], [], []
+    from .journals import identify_journal, auxiliary_page, preserve_line
+    journal = identify_journal(source) if paragraph and journal_adapt else None
     symbol_cache = {}
     # 版面计划沿用源描述符坐标，保持已有段落身份与译文缓存；只有实际
     # 删除及安全删除范围计算使用修正后的临时描述符，不能混入持久计划。
     document, _ = open_source_for_editing(source, normalize_descriptors=False)
     with document:
         for number, page in enumerate(document, 1):
+            cover_reason = auxiliary_page(page.get_text(), number) if journal else None
             if page.rotation or list(page.annots(types=(fitz.PDF_ANNOT_REDACT,)) or []):
                 issues.append(f'第{number}页旋转或已有删除标注，尚不受自动源版面模式支持')
             images = visible_image_regions(page, detections or [])
@@ -577,6 +585,8 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     if index in markers and role == 'body':
                         role = 'preserve'
                     reason = _nonprinting_line(page, line, paint) if role == 'body' else None
+                    journal_reason = preserve_line(journal, page, line, cover_reason) if journal else None
+                    reason = journal_reason or reason
                     if reason:
                         role = 'preserve'
                     # 同一个 PDF 文本块可能先有两行大号粗体章节标题，再接
@@ -653,6 +663,13 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                             # 每块单独目录避免同页多块的局部截图互相覆盖。
                             diagnose_lines(page, anomalies, ocr_dir / f'block-{len(blocks):04d}')
                         issues.append(f'第{number}页待译区域有未解决的异常编码；需核对局部 OCR 与源字形')
+                # ASCE 下载水印的字体外框可伸出 CropBox 约 1 pt。它已由
+                # 刊名、边缘位置、出版关键词共同识别为原样保留对象；仅把
+                # 保护外框裁到可见页内，原生字形及 parts 坐标均不改写。
+                if journal and block['_reason'] and kind == 'preserve':
+                    visible = rect & page.rect
+                    if not visible.is_empty:
+                        rect = visible
                 identity = segment_id(json.dumps([number, list(rect), value], ensure_ascii=False))
                 blocks.append({'id': identity, 'page': number, 'rect': list(rect),
                                'text': value, 'parts': parts, 'kind': kind,
@@ -688,7 +705,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     _preserve_auxiliary_sections(blocks, paragraph=paragraph)
     if paragraph:
         from .paragraph_layout import paragraph_groups
-        return {'schema': 2, 'source_sha256': digest(source), 'blocks': blocks,
+        return {'schema': 2, **({'journal': journal} if journal else {}), 'source_sha256': digest(source), 'blocks': blocks,
                 'protected_regions': protected, 'groups': paragraph_groups(blocks), 'issues': issues}
     bodies = [b for b in blocks if b['kind'] == 'body']
     groups = []
@@ -712,17 +729,23 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
             'protected_regions': protected, 'groups': groups, 'issues': issues}
 
 
-def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *, paragraph: bool = False) -> tuple[dict, list[dict]]:
+def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *, paragraph: bool = False, skip_block_ids: set[str] | None = None) -> tuple[dict, list[dict]]:
     """核对源页与全覆盖分组；不接受伪造原文、坐标、重复翻译或遗漏正文。"""
     plan = json.loads(path.read_text(encoding='utf-8'))
     if plan.get('schema') != (2 if paragraph else 1) or plan.get('source_sha256') != digest(source):
         raise ValueError('版面计划不属于当前源 PDF 或 schema 不受支持')
-    actual = extract_layout(source, detections, paragraph=paragraph)
+    actual = extract_layout(source, detections, paragraph=paragraph, journal_adapt="journal" in plan)
     if plan != actual:
         raise ValueError('自动版面计划与源文件/检测结果不一致；拒绝人工改写或过期缓存')
+    skip_block_ids = skip_block_ids or set()
+    if skip_block_ids - {b['id'] for b in actual['blocks']}:
+        raise ValueError('保留原文选项包含源 PDF 没有的块')
     original = {b['id']: b for b in actual['blocks']}
     blocks = plan.get('blocks', [])
-    if len(blocks) != len(original) or {b['id'] for b in blocks} != set(original):
+    # 科研散点图可能在同一坐标重复绘制同一字符（如 Biogeosciences 的
+    # G / 下划线图元）。保护对象允许重复，仍逐对象对照 actual；不能把
+    # 字典去重后的长度当成源对象数量。正文重复分组仍由下方门禁拒绝。
+    if len(blocks) != len(actual['blocks']) or {b['id'] for b in blocks} != set(original):
         raise ValueError('版面计划必须逐一覆盖全部原文块')
     for block in blocks:
         expected = original[block['id']]
@@ -731,10 +754,24 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
         if block['kind'] not in {'body', 'figure', 'table', 'reference', 'caption',
                                  'formula', 'header-footer', 'preserve', 'review'}:
             raise ValueError('未知版面分类')
-        if block['kind'] == 'review':
-            raise ValueError('版面计划仍有待确认的阅读区域')
-    if plan.get('issues'):
-        raise ValueError('版面计划存在未解决诊断：' + '; '.join(plan['issues']))
+        if block['kind'] == 'review' and block['id'] not in skip_block_ids:
+            from .diagnostics import LocatedError
+            raise LocatedError('版面计划仍有待确认的阅读区域',
+                [{'id': block['id'], 'source': block['text'], 'pages': [block['page']],
+                  'regions': [{'page': block['page'], 'rect': block['rect']}]}], 'extraction')
+    # 编码诊断是块级问题；只允许用户明确保留全部相应异常块时继续。
+    # 旋转整页、图片覆盖等页级结构错误没有安全的句级跳过，不可一并清空。
+    from .diagnostics import LocatedError
+    anomalous = [b for b in blocks if b['kind'] in {'body', 'caption'} and any(
+        c == '\ufffd' or (not c.isprintable() and not c.isspace() and c != '\u00ad') for c in b['text'])]
+    remaining = [b for b in anomalous if b['id'] not in skip_block_ids]
+    unresolved = [issue for issue in plan.get('issues', []) if '待译区域有未解决的异常编码' not in issue]
+    if not anomalous:
+        unresolved.extend(i for i in plan.get('issues', []) if '待译区域有未解决的异常编码' in i)
+    if remaining or unresolved:
+        raise LocatedError('版面计划存在未解决诊断：' + '; '.join(unresolved or plan['issues']),
+            [{'id': b['id'], 'source': b['text'], 'pages': [b['page']],
+              'regions': [{'page': b['page'], 'rect': b['rect']}]} for b in remaining], 'extraction')
     # 自动发现的保护范围不可通过删除或改写 JSON 条目绕开。
     if any(p not in plan.get('protected_regions', []) for p in actual['protected_regions']):
         raise ValueError('计划遗漏源图、表格或参考文献的保护区域')
@@ -756,6 +793,15 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
             rect = fitz.Rect(values)
             if rect.is_empty or not document[number - 1].rect.contains(rect):
                 raise ValueError('保护区域为空或越界')
+    if skip_block_ids:
+        from copy import deepcopy
+        plan = deepcopy(plan)
+        for block in plan['blocks']:
+            if block['id'] in skip_block_ids:
+                block['kind'] = 'preserve'
+                block['preserve_reason'] = '用户选择跳过，保留原文'
+        plan['groups'] = [[sid for sid in group if sid not in skip_block_ids] for group in plan['groups']]
+        plan['groups'] = [group for group in plan['groups'] if group]
     return plan, units_from_plan(plan, paragraph=paragraph)
 
 

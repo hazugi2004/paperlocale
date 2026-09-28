@@ -47,7 +47,8 @@ jobs:
           python-version: "3.12"
       - name: Build native launcher and check signed bundle
         run: |
-          python -m unittest discover -s tests -p test_macos_options.py -v
+          python -m unittest discover -s tests -p "test_macos*.py" -v
+          python -m pip install "Pillow>=10"
           python scripts/build_macos_app.py
           dist/PaperLocale.app/Contents/MacOS/PaperLocale --version
           lipo -info dist/PaperLocale.app/Contents/MacOS/PaperLocale

@@ -42,6 +42,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     generate_qa=False 仅省略输出后的机器QA，返回真实的 rendered 状态；
     不跳过写入前完整性检查，也不伪造 qa_generated 或人工验收记录。
     """
+    from .progress import emit_progress
+    from .diagnostics import LocatedError, unit_location
+    from .repair_choices import read_choices
+    emit_progress("读取断点与资源", .02)
     manifest = load_manifest(root)
     source = _verify_source_pdf(manifest)
     if manifest.get('pages'):
@@ -68,10 +72,30 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         raise FileNotFoundError('缺少中文字体，请通过 --font-file 指定具有所需字形的字体')
     plan_path = (plan_path or root / 'layout_plan.json').expanduser().resolve()
     from .layout_detection import detect_regions
+    emit_progress("识别期刊与页面版式", .06)
     detections = detect_regions(source, root / 'layout_detection.json')
     if not plan_path.exists():
         save_json(plan_path, extract_layout(source, detections, paragraph=paragraph, ocr_dir=root / "local_ocr"))
-    plan, units = load_plan(source, plan_path, detections, paragraph=paragraph)
+    choices = read_choices(root, manifest['source_sha256'])
+    plan, units = load_plan(source, plan_path, detections, paragraph=paragraph,
+                           skip_block_ids=set(choices.get('skip_blocks', [])))
+    if plan.get('journal'):
+        print('期刊：'+plan['journal']['name']+'；识别依据：'+plan['journal']['evidence'], flush=True)
+    for unit in units:
+        default_floor = min_font_size if min_font_size is not None else unit_location(unit)['font_size']
+        unit['_repair_font_floor'] = choices['font_sizes'].get(unit['id'], default_floor)
+    save_json(root / 'source_locations.json', [unit_location(unit) for unit in units])
+    skipped_units = [unit for unit in units if unit['id'] in choices['skip']]
+    skipped_ids = {u['id'] for u in skipped_units}
+    all_ids = {u['id'] for u in units}
+    if set(choices['skip']) - all_ids or set(choices['font_sizes']) - all_ids:
+        raise ValueError('修复选择包含当前版面没有的片段')
+    units = [unit for unit in units if unit['id'] not in skipped_ids]
+    def fit_selected(unit, target, font, minimum, bold):
+        try:
+            return fit_unit(unit, target, font, choices['font_sizes'].get(unit['id'], minimum), bold)
+        except ValueError as error:
+            raise LocatedError(str(error), [unit_location(unit)], 'layout') from error
     if import_cache_from is not None:
         if not paragraph:
             raise ValueError('缓存导入只支持段落模式')
@@ -79,6 +103,9 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         import_cache(import_cache_from, root, plan, units, domain)
     editable = [part for unit in units for slot in unit['slots'] for part in slot]
     protected = list(plan['protected_regions'])
+    # 显式跳过保留原字符及原坐标，不用中文字体重新排英文，也不留下空洞。
+    protected.extend(p for u in skipped_units for slot in u['slots'] for p in slot)
+    protected.extend(p for u in skipped_units for p in u['anchors'])
     translated_kinds = {'body', 'caption'} if paragraph else {'body'}
     protected.extend(b for b in plan['blocks'] if b['kind'] not in translated_kinds)
     if paragraph:
@@ -125,12 +152,15 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     unique = {unit['id']: {'id': unit['id'], 'source': unit['source']} for unit in units}
     segments, translations = root / 'segments.jsonl', root / 'translations.jsonl'
     write_jsonl_atomic(segments, list(unique.values()))
+    if translations.exists() and skipped_ids:
+        write_jsonl_atomic(translations, [r for r in read_jsonl(translations) if r['id'] not in skipped_ids])
     anchor_text = {u['id']: {'{v' + str(i) + '}': a['text'] for i, a in enumerate(u['anchors'])}
                    for u in units if u['anchors']}
     translate_segment_file(segments_path=segments, translations_path=translations,
                            provider=provider, domain=domain, contract_repair=contract_repair,
-                           max_segments=max_segments, max_characters=max_characters, anchor_text=anchor_text)
-    targets = {row['id']: row['target'] for row in read_jsonl(translations)}
+                           max_segments=max_segments, max_characters=max_characters, anchor_text=anchor_text,
+                           progress=lambda done, total: emit_progress("翻译片段", .15+.55*done/max(1,total), done, total))
+    targets = {row['id']: row['target'] for row in read_jsonl(translations)} if translations.exists() else {}
     if set(targets) != set(unique):
         raise ValueError('正文译文仍有缺口，不能创建候选 PDF')
     # 普通翻译可能在固定公式/引用之间过长。仅对溢出的逻辑段落自动请求
@@ -145,17 +175,19 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         except SystemExit as error:
             raise RuntimeError('自动获取中文粗体字体失败，等待资源恢复') from error
         bold_font = fitz.Font(fontfile=str(bold_file))
+    emit_progress("验证译文与预排版", .72)
     failed = {}
     for unit in units:
         try:
-            fit_unit(unit, targets[unit['id']], full_font, min_font_size, bold_font)
+            fit_selected(unit, targets[unit['id']], full_font, min_font_size, bold_font)
         except ValueError as error:
             failed[unit['id']] = (unit, str(error))
     if failed and not contract_repair:
         # fit_unit 同时检查锚点合同和排版，不能把所有校验错误都称为溢出。
         save_json(root / 'layout_failures.json', {sid: reason for sid, (_, reason) in failed.items()})
-        raise ValueError('译文预排版或锚点校验失败，已禁用自动修复：' +
-                         '; '.join(f'{sid[:12]}: {reason}' for sid, (_, reason) in failed.items()))
+        raise LocatedError('译文预排版或锚点校验失败，已禁用自动修复：' +
+                         '; '.join(f'{sid[:12]}: {reason}' for sid, (_, reason) in failed.items()),
+                           [unit_location(u) for u, _ in failed.values()], 'layout')
     refinement_path = root / 'layout_refinements.json'
     refinements = json.loads(refinement_path.read_text(encoding='utf-8')) if refinement_path.exists() else {}
     for sid, (unit, reason) in failed.items():
@@ -181,7 +213,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                 raise ValueError('版面精炼断点与当前译文不一致')
             refined = repaired_target if repaired_target is not None else previous['after']
         else:
-            results = provider.translate([Segment(sid, unit['source'])], context)
+            try:
+                results = provider.translate([Segment(sid, unit['source'])], context)
+            except Exception as error:
+                raise LocatedError(str(error), [unit_location(unit)], 'provider') from error
             if len(results) != 1 or results[0].id != sid:
                 raise ValueError('版面精炼返回了错误的段落 ID')
             refined = results[0].target
@@ -194,7 +229,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             # 门禁错误反馈给同一 Provider 一次。原答复和纠正答复分别落盘；
             # 第二次仍失败就等待，恢复不会不断请求或丢弃失败证据。
             repair_context = replace(context, repair_feedback={sid: (refined, tuple(errors) + feedback)})
-            results = provider.translate([Segment(sid, unit['source'])], repair_context)
+            try:
+                results = provider.translate([Segment(sid, unit['source'])], repair_context)
+            except Exception as error:
+                raise LocatedError(str(error), [unit_location(unit)], 'provider') from error
             if len(results) != 1 or results[0].id != sid:
                 raise ValueError('版面精炼纠正返回了错误的段落 ID')
             refinements[sid]['repair'] = {'before': refined, 'after': results[0].target, 'errors': errors}
@@ -202,33 +240,37 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             save_json(refinement_path, refinements)
             errors = validate_translation(unit['source'], refined, domain) + restored_content_errors(unit['source'], refined, anchor_text.get(sid, {}))
         if errors:
-            raise ValueError('自动版面精炼未通过科学内容校验：' + str(errors))
+            raise LocatedError('自动版面精炼未通过科学内容校验：' + str(errors), [unit_location(unit)], 'translation')
         for occurrence in units:
             if occurrence['id'] == sid:
-                fit_unit(occurrence, refined, full_font, min_font_size, bold_font)
+                fit_selected(occurrence, refined, full_font, min_font_size, bold_font)
         targets[sid] = refined
         write_jsonl_atomic(translations, [{**row, 'target': targets[row['id']],
             **({'provider': provider.provenance(), 'previous_translation': row} if row['id'] == sid else {})}
             for row in read_jsonl(translations)])
     # 覆盖报告说明自动翻译范围；机器合同不能证明语义忠实或视觉可接受。
     save_json(root / 'translation_coverage.json', {
-        'translated_blocks': [b['id'] for b in plan['blocks'] if b['kind'] in translated_kinds],
+        'user_skipped_segments': [unit_location(u) for u in skipped_units],
+        'user_skipped_blocks': [b['id'] for b in plan['blocks'] if b['id'] in choices.get('skip_blocks', [])],
+        'translation_complete': not skipped_units and not choices.get('skip_blocks'),
+        'translated_blocks': sorted({p['source_block'] for u in units for slot in u['slots'] for p in slot if 'source_block' in p}),
         'preserved_blocks': [{'id': b['id'], 'page': b['page'], 'kind': b['kind'],
                               'text': b['text'], 'reason': b.get('preserve_reason') or b['kind']}
                              for b in plan['blocks'] if b['kind'] not in translated_kinds],
         'validated_segments': len(targets), 'semantic_review': 'pending', 'visual_review': 'pending'})
     # 预排版使用最终嵌入字体的同一个子集，避免测量原字体、写入子集产生差异。
-    font_bytes, font_evidence = _subset_repair_font(font_file, ''.join(targets.values()))
+    font_bytes, font_evidence = _subset_repair_font(font_file, (''.join(targets.values()) or ' '))
     font = fitz.Font(fontbuffer=font_bytes)
     bold_bytes = None
     if bold_file is not None:
         # 粗体也使用最终嵌入的字形子集测量，不能用细体宽度预检后再加粗。
-        bold_bytes, bold_evidence = _subset_repair_font(Path(bold_file), ''.join(targets.values()))
+        bold_bytes, bold_evidence = _subset_repair_font(Path(bold_file), (''.join(targets.values()) or ' '))
         bold_font = fitz.Font(fontbuffer=bold_bytes)
         font_evidence = {'regular': font_evidence, 'bold': bold_evidence}
     placements = [placement for unit in units
-                  for placement in fit_unit(unit, targets[unit['id']], font, min_font_size, bold_font)]
+                  for placement in fit_selected(unit, targets[unit['id']], font, min_font_size, bold_font)]
     # 写入和完整检查只针对临时文件。任何异常均不触碰已有候选，也不改变验收。
+    emit_progress('写入完整候选并核对保护区', .82)
     temporary = root / '.preserved.tmp.pdf'
     try:
         document, original_fonts = open_source_for_editing(source)
@@ -378,7 +420,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                         annotation_restorations=annotation_restorations,
                         color_space_restorations=color_space_restorations,
                         fixed_ink_checks=ink_evidence,
-                        all_translations_present=True)
+                        all_translations_present=not skipped_units and not choices.get('skip_blocks'),
+                        user_skipped_segments=sorted(skipped_ids), user_skipped_blocks=choices.get('skip_blocks', []))
         candidate = root / 'render_output' / 'translated.pdf'
         candidate.parent.mkdir(exist_ok=True)
         temporary.replace(candidate)
@@ -389,5 +432,6 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     finally:
         temporary.unlink(missing_ok=True)
     if generate_qa:
+        emit_progress("机器 QA", .94)
         qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin, restore_vectors=False)
     return load_manifest(root)

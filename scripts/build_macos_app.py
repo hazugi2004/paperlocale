@@ -6,9 +6,11 @@
 """
 from pathlib import Path
 import plistlib
+import argparse
 import subprocess
 import sys
 import tomllib
+from PIL import Image
 
 
 def main():
@@ -16,7 +18,12 @@ def main():
     if sys.platform != "darwin":
         raise SystemExit("macOS app 构建需要 macOS 与 Xcode Command Line Tools")
     version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
-    app = root / "dist" / "PaperLocale.app"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=root / "dist",
+                        help="构建产物目录；File Provider 自动附加 FinderInfo 时请选择本机非同步目录")
+    destination = parser.parse_args().output_dir.expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    app = destination / "PaperLocale.app"
     binary_dir = app / "Contents" / "MacOS"
     resources = app / "Contents" / "Resources"
     binary_dir.mkdir(parents=True, exist_ok=True)
@@ -38,9 +45,21 @@ def main():
         ["lipo", "-archs", str(binary_dir / "PaperLocale")], text=True).split())
     if architectures != {"arm64", "x86_64"}:
         raise RuntimeError(f"Universal 2 架构不完整：{architectures}")
+    # 从同一高分辨率图源生成 macOS 的标准 1x/2x 图标集合；保留透明通道。
+    iconset = build / "AppIcon.iconset"
+    iconset.mkdir(exist_ok=True)
+    with Image.open(root / "macos/Assets/AppIcon.png") as icon:
+        for size in (16, 32, 128, 256, 512):
+            for scale in (1, 2):
+                suffix = "@2x" if scale == 2 else ""
+                icon.resize((size*scale, size*scale), Image.Resampling.LANCZOS).save(
+                    iconset / f"icon_{size}x{size}{suffix}.png")
+    subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(resources / "AppIcon.icns")], check=True)
+    for name in ("AppIcon.png", "ProgressEgg.png"):
+        (resources / name).write_bytes((root / "macos/Assets" / name).read_bytes())
     metadata = {"CFBundleName": "PaperLocale", "CFBundleDisplayName": "PaperLocale",
                 "CFBundleIdentifier": "io.github.hazugi2004.paperlocale",
-                "CFBundleExecutable": "PaperLocale", "CFBundlePackageType": "APPL",
+                "CFBundleExecutable": "PaperLocale", "CFBundleIconFile": "AppIcon.icns", "CFBundlePackageType": "APPL",
                 "CFBundleShortVersionString": version, "CFBundleVersion": version,
                 "LSMinimumSystemVersion": "13.0", "NSHighResolutionCapable": True,
                 "NSHumanReadableCopyright": "PaperLocale contributors · AGPL-3.0-only"}
@@ -53,7 +72,7 @@ def main():
     subprocess.run(["xattr", "-cr", str(app)], check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
-    archive = root / "dist" / f"PaperLocale-{version}-macOS-universal2.zip"
+    archive = destination / f"PaperLocale-{version}-macOS-universal2.zip"
     subprocess.run(["ditto", "-c", "-k", "--keepParent", str(app), str(archive)], check=True)
     print(archive)
 

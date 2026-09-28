@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0 — local build
+
+- Detect journals from PDF evidence and preserve publisher-specific auxiliary text, including ASCE rotated download sidebars.
+- Add page/source diagnostics and shared CLI/App repair, skip, and verified checkpoint rollback actions.
+- Add supplied mascot assets, rolling stage progress, and native PDF drag-and-drop to macOS.
+- See [scope, supported journals, and repair choices](docs/releases/v0.8.0.md).
+
 ## 0.7.8 — 2026-09-28
 
 - Rejoin discretionary soft-hyphen line wraps without changing hard hyphens, scientific minus signs, or unknown-code diagnostics.

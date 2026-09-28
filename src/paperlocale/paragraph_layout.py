@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from .font_geometry import open_source_pdf
+
 import math
 import re
 from statistics import median
@@ -66,7 +68,7 @@ def starts_paragraph(native_lines, preceding, line):
             baseline - previous_y > 1.65 * size)
 
 
-def paragraph_groups(blocks, *, section_boundaries=True):
+def paragraph_groups(blocks, *, section_boundaries=True, mixed_first_page=True):
     """正文与图注分别建立阅读链；缩进段首和标题是不可跨越的段落边界。"""
     groups = []
     # AGU 首页为窄侧栏加宽正文，按页面中线分类会把侧栏续行与摘要交错。
@@ -79,9 +81,23 @@ def paragraph_groups(blocks, *, section_boundaries=True):
     sidebar = gutter is not None and any(b['rect'][2] < gutter and
                   b['rect'][2]-b['rect'][0] < .3*b['page_width'] for b in first)
     if sidebar:
-        blocks = sorted(blocks, key=lambda b: (b['page'],
-            int(b['rect'][2] >= gutter) if b['page'] == 1 else int(b['rect'][0] >= b['page_width']/2),
-            b['rect'][1]))
+        top, bottom = min(b['rect'][1] for b in wide), max(b['rect'][3] for b in wide)
+        lower = [b for b in first if b['rect'][1] >= bottom and
+                 .3*b['page_width'] < b['rect'][2]-b['rect'][0] < .5*b['page_width']]
+        # 必须在摘要下方同时看到正常宽度的左右两栏，才认定版式已切换。
+        # AGU 窄侧栏可能比主栏更长，仅因超过主栏底部不能截断侧栏阅读链。
+        mixed_first_page = mixed_first_page and any(b['rect'][0] < .25*b['page_width'] for b in lower) \
+                           and any(b['rect'][0] >= .5*b['page_width'] for b in lower)
+        def reading_key(block):
+            # Elsevier 首页上半是关键词侧栏+宽摘要，下半已恢复标准双栏。
+            # 不能把摘要的分栏线沿用到整页，否则下半左/右正文会按 y
+            # 交错。只有侧栏高度范围内使用侧栏分栏线，其余按正常栏序。
+            band = (0 if block['rect'][3] <= top else 1 if block['rect'][1] < bottom else 2) \
+                   if mixed_first_page and block['page'] == 1 else 0
+            sidebar_column = block['page'] == 1 and (not mixed_first_page or band == 1)
+            column = int(block['rect'][2] >= gutter) if sidebar_column else int(block['rect'][0] >= block['page_width']/2)
+            return block['page'], band, column, block['rect'][1]
+        blocks = sorted(blocks, key=reading_key)
     for kind in ('body', 'caption'):
         previous = None
         for block in [b for b in blocks if b['kind'] == kind]:
@@ -206,7 +222,7 @@ def bind_inline_glyphs(source, units):
     不把数学字符交给中文字体，不把行内公式栅格化。
     """
     cache = {}
-    with fitz.open(source) as document:
+    with open_source_pdf(source) as document:
         for unit in units:
             for anchor in unit['anchors']:
                 page = document[anchor['page'] - 1]
@@ -443,13 +459,18 @@ def write_inline(page, item, font_refs):
             cmap = document.get_new_xref()
             document.update_object(cmap, '<<>>')
             unicode = g['text'].encode('utf-16-be').hex()
-            code, limit = ('0000', 'ffff') if g.get('truetype') else ('00', 'ff')
+            code = g.get('source_code', '0000' if g.get('truetype') else '00')
+            limit = 'f' * len(code)
             document.update_stream(cmap, ('/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n'
                 '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n'
                 f'/CMapName /PLInline def /CMapType 2 def\n1 begincodespacerange <{code}> <{limit}> endcodespacerange\n'
                 f'1 beginbfchar <{code}> <{unicode}> endbfchar\nendcmap CMapName currentdict /CMap defineresource pop end end').encode())
             ref = document.get_new_xref()
-            if g.get('truetype'):
+            if 'source_code' in g:
+                # 编码和原字体字典原样复用；只更新检索文本的 ToUnicode。
+                document.update_object(ref, document.xref_object(original))
+                document.xref_set_key(ref, 'ToUnicode', f'{cmap} 0 R')
+            elif g.get('truetype'):
                 # CID 0 显式映射到原 GID，直接引用原 FontFile2 描述符；
                 # 不转曲、不按 Unicode 猜字体，也不改变数值或字符基线。
                 mapping = document.get_new_xref()
@@ -481,7 +502,7 @@ def write_inline(page, item, font_refs):
         document.xref_set_key(owner, prefix+alias, f'{ref} 0 R')
         paint = ' '.join(str(v) for v in color) + (' g' if len(color)==1 else ' rg' if len(color)==3 else ' k')
         commands.append(f'q {paint} BT /{alias} {g["size"]:.10f} Tf 1 0 0 1 '
-                        f'{x:.10f} {page.rect.height-y:.10f} Tm <{"0000" if g.get("truetype") else "00"}> Tj ET Q')
+                        f'{x:.10f} {page.rect.height-y:.10f} Tm <{g.get("source_code", "0000" if g.get("truetype") else "00")}> Tj ET Q')
     if commands:
         ref = document.get_new_xref()
         document.update_object(ref, '<<>>')

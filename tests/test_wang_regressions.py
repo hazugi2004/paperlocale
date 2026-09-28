@@ -30,7 +30,7 @@ class WangRegressions(unittest.TestCase):
                 top = type('Top', (), {'CharStrings': {'C0': Shape(right)}})()
                 with patch('paperlocale.source_symbols._source_anchor_glyphs',
                            return_value=[{'xref': 1, 'name': 'C0'}]):
-                    restore_source_symbols(None, raw, {1: top})
+                    restore_source_symbols(None, raw, {1: (['C0'], top.CharStrings, .001, 'cff')})
                 self.assertEqual(char['c'], expected)
                 self.assertEqual(char.get('native_text'), '\x01' if right == 696 else None)
                 self.assertEqual(char['origin'], [20, 30])
@@ -94,13 +94,20 @@ class WangRegressions(unittest.TestCase):
                 'c':'2','origin':[20,30],'bbox':[20,20,25,30]}]}]}]}]
         glyphs=[{'xref':1,'name':'two'}]
         with patch('paperlocale.source_symbols._source_anchor_glyphs',return_value=glyphs):
-            unknown=raw();restore_source_symbols(None,unknown,{1:Top()})
+            unknown=raw();restore_source_symbols(None,unknown,{1:(['two'],Top.CharStrings,.001,'cff')})
             self.assertEqual(unknown[0]['lines'][0]['spans'][0]['chars'][0]['c'],'2')
             with patch('paperlocale.source_symbols.REVIEWED_OUTLINES',{key:'−'}):
-                known=raw();restore_source_symbols(None,known,{1:Top()})
+                known=raw();restore_source_symbols(None,known,{1:(['two'],Top.CharStrings,.001,'cff')})
                 char=known[0]['lines'][0]['spans'][0]['chars'][0]
                 self.assertEqual((char['c'],char['native_text']),('−','2'))
                 self.assertEqual(char['bbox'],[20,20,25,30])
+                # 即使未缩放轮廓摘要相同，PFA 或不同单位的 CFF 也不属于
+                # 已人工核对的语义表；原样重放不能顺带改变科学符号含义。
+                for scale, extension in [(.001, 'pfa'), (1/2048, 'cff')]:
+                    unsupported = raw()
+                    restore_source_symbols(None, unsupported,
+                        {1: (['two'], Top.CharStrings, scale, extension)})
+                    self.assertEqual(unsupported[0]['lines'][0]['spans'][0]['chars'][0]['c'], '2')
 
     def test_repaired_relations_do_not_swallow_prose(self):
         from paperlocale.source_layout import _parts

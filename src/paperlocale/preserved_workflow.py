@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from .font_geometry import open_source_pdf
+
 import json
 import math
 from dataclasses import replace
@@ -13,12 +15,11 @@ from pathlib import Path
 
 import pymupdf as fitz
 
-from .font_geometry import open_source_for_editing, restore_source_fonts
 
 from .contracts import read_jsonl, write_jsonl_atomic, validate_translation
 from .providers import Segment, TranslationContext
 from .pipeline import translate_segment_file, restored_content_errors
-from .safe_text import (safe_erase_rectangles, verify_text_erased, restore_changed_isolated_regions,
+from .safe_text import (safe_erase_rectangles, prepare_source_layer, restore_changed_isolated_regions,
                         page_pixels, region_pixels, fixed_text_rectangles, fixed_characters,
                         restore_default_color_spaces, verify_fixed_ink)
 from .source_layout import (digest, extract_layout, fit_unit, load_plan, save_json,
@@ -34,11 +35,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                   contract_repair: bool = True, dpi: int = 144,
                   pdftoppm_bin=None, max_segments: int = 200,
                   max_characters: int = 30000, paragraph: bool = False,
-                  import_cache_from: Path | None = None, generate_qa: bool = True) -> dict:
+                  import_cache_from: Path | None = None, generate_qa: bool = True,
+                  preflight_only: bool = False) -> dict:
     """逻辑段落翻译→全量预排版→源页写入→保护区域验证→机器 QA。
 
     一个逻辑段落允许跨任意多个页面/图片间隙。模型只收到带固定锚点的全文，
     固定锚点原文只作为上下文，不允许翻译或改写。无法容纳时不产出部分中文候选，交给外层等待。
+    preflight_only=True 只验证源版面和真实删除，不请求模型、不产生译文候选。
     generate_qa=False 仅省略输出后的机器QA，返回真实的 rendered 状态；
     不跳过写入前完整性检查，也不伪造 qa_generated 或人工验收记录。
     """
@@ -50,10 +53,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     source = _verify_source_pdf(manifest)
     if manifest.get('pages'):
         raise ValueError('源版面模式要求完整文档；页码筛选请使用 legacy 模式')
-    if manifest['status'] in {'qa_generated', 'accepted'}:
+    if not preflight_only and manifest['status'] in {'qa_generated', 'accepted'}:
         _verify_rendered_pdf(manifest)
         return manifest
-    if manifest['status'] == 'rendered':
+    if not preflight_only and manifest['status'] == 'rendered':
         _verify_rendered_pdf(manifest)
         if generate_qa:
             qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin, restore_vectors=False)
@@ -72,6 +75,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         raise FileNotFoundError('缺少中文字体，请通过 --font-file 指定具有所需字形的字体')
     plan_path = (plan_path or root / 'layout_plan.json').expanduser().resolve()
     from .layout_detection import detect_regions
+    # 新尝试开始即撤销旧预检结果；失败不能留下看似仍通过的报告。
+    (root / 'preflight_report.json').unlink(missing_ok=True)
+    # 新段落计划使用归一化的源页。先对照未经处理的原文件，防止
+    # 提取、删除两道检查共用有缺陷的中间层而同时漏掉正文丢失。
+    if paragraph:
+        from .font_geometry import verify_canonical_source_pixels
+        verify_canonical_source_pixels(source)
     emit_progress("识别期刊与页面版式", .06)
     detections = detect_regions(source, root / 'layout_detection.json')
     if not plan_path.exists():
@@ -107,7 +117,16 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     protected.extend(p for u in skipped_units for slot in u['slots'] for p in slot)
     protected.extend(p for u in skipped_units for p in u['anchors'])
     translated_kinds = {'body', 'caption'} if paragraph else {'body'}
-    protected.extend(b for b in plan['blocks'] if b['kind'] not in translated_kinds)
+    for block in plan['blocks']:
+        if block['kind'] in translated_kinds:
+            continue
+        if block.get('preserve_reason') == '用户选择跳过，保留原文':
+            # 按既有文本 run 分别保护：URL 内未知字符不得使同块普通正文
+            # 丧失原字形核验。未知 run 仍按完整字框逐像素比较，不丢弃字符。
+            protected.extend({**part, 'id': block['id'], 'kind': 'preserve',
+                              'preserve_reason': block['preserve_reason']} for part in block['parts'])
+        else:
+            protected.append(block)
     if paragraph:
         from .safe_text import separate_caption_edges
         protected = separate_caption_edges(source, protected, plan['blocks'])
@@ -118,7 +137,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         # 墨迹。只增加运行时障碍，不改变源计划、分段ID或已有译文缓存。
         from .font_geometry import source_anchor_ink_rectangles
         obstacles, font_cache = {}, {}
-        with fitz.open(source) as original:
+        with open_source_pdf(source) as original:
             for region in protected:
                 chars = fixed_characters(region)
                 boxes = source_anchor_ink_rectangles(original[region['page']-1], chars, font_cache) if chars else None
@@ -137,13 +156,26 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     plan_hash = digest(plan_path)
     if manifest.get('layout_plan_sha256') not in (None, plan_hash):
         raise ValueError('翻译开始后的版面计划已改变，请使用新的运行目录避免混用缓存')
-    if provider is None:
-        raise ValueError('源版面翻译需要提供原 Provider、模型和推理档位')
-    identity = _provider_resume_identity(provider.provenance())
-    if manifest.get('translation_provider') is not None and _provider_resume_identity(manifest['translation_provider']) != identity:
-        raise ValueError('恢复不能更换 Provider、模型或推理档位')
-    if manifest.get('domain_sha256') not in (None, domain.content_sha256):
-        raise ValueError('恢复时领域包发生变化')
+    if not preflight_only:
+        if provider is None:
+            raise ValueError('源版面翻译需要提供原 Provider、模型和推理档位')
+        identity = _provider_resume_identity(provider.provenance())
+        if manifest.get('translation_provider') is not None and _provider_resume_identity(manifest['translation_provider']) != identity:
+            raise ValueError('恢复不能更换 Provider、模型或推理档位')
+        if manifest.get('domain_sha256') not in (None, domain.content_sha256):
+            raise ValueError('恢复时领域包发生变化')
+    emit_progress("预检正文删除与公式保留", .10)
+    reference_bytes = prepare_source_layer(source, editable, protected, erase_regions)
+    preflight = {'status': 'preflight_passed', 'source_sha256': manifest['source_sha256'],
+                 'layout_plan_sha256': plan_hash, 'logical_group_count': len(units),
+                 'checks': ['source_identity', 'layout_identity', 'inline_font_binding',
+                            'safe_erase_geometry', 'actual_erasure_and_fixed_characters'],
+                 'translation_checked': False, 'final_pixels_checked': False}
+    if paragraph:
+        preflight['checks'].append('canonical_source_pixels')
+    save_json(root / 'preflight_report.json', preflight)
+    if preflight_only:
+        return preflight
     manifest.update(layout_mode='paragraph' if paragraph else 'preserved', layout_plan=str(plan_path),
                     layout_plan_sha256=plan_hash, translation_provider=provider.provenance(),
                     domain_sha256=domain.content_sha256, status='collected')
@@ -273,23 +305,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     emit_progress('写入完整候选并核对保护区', .82)
     temporary = root / '.preserved.tmp.pdf'
     try:
-        document, original_fonts = open_source_for_editing(source)
-        with document, fitz.open(source) as original:
-            for number, page in enumerate(document, 1):
-                edits = [p for p in editable if p['page'] == number]
-                if not edits:
-                    continue
-                for part in [r for r in erase_regions if r['page'] == number]:
-                    page.add_redact_annot(fitz.Rect(part['rect']), fill=False, cross_out=False)
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
-                                      graphics=fitz.PDF_REDACT_LINE_ART_NONE,
-                                      text=fitz.PDF_REDACT_TEXT_REMOVE)
-                verify_text_erased(page, edits, [p for p in protected if p['page'] == number])
-                restore_default_color_spaces(page, original[number - 1])
-            restore_source_fonts(document, original_fonts)
-            # 固定字形与待译正文可能在抗锯齿像素上叠合。保留仅删除正文
-            # 的原字形层作为这些混合像素的参考；此时尚未插入任何中文。
-            reference_bytes = document.tobytes(garbage=0, deflate=True)
+        with fitz.open(stream=reference_bytes, filetype='pdf') as document:
             inline_fonts = {}
             for number, page in enumerate(document, 1):
                 if not any(p['page'] == number for p in editable):
@@ -310,7 +326,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             document.save(temporary, garbage=0, deflate=True)
         # 以序列化后重新打开的 PDF 为核验对象。MuPDF 编辑中间态与落盘后
         # 的图片插值可能不同，不能对中间态的差异过早重放整张图。
-        with fitz.open(temporary) as document, fitz.open(source) as original:
+        with fitz.open(temporary) as document, open_source_pdf(source) as original:
             restored = False
             vector_restorations = []
             annotation_restorations = []
@@ -346,17 +362,20 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         expected_links = None
         if paragraph:
             from .paragraph_layout import relocate_links
-            with fitz.open(source) as original, fitz.open(temporary) as written:
+            with open_source_pdf(source) as original, fitz.open(temporary) as written:
                 expected_links = relocate_links(written, original, placements)
                 linked = written.tobytes(garbage=0, deflate=True)
             temporary.write_bytes(linked)
         writing_regions = editable + ([frame for u in units for frame in u['frames']] if paragraph else [])
         evidence = verify_unchanged(source, temporary, writing_regions, expected_links=expected_links)
+        from .source_watermarks import verify_backgrounds
+        with open_source_pdf(source) as original, fitz.open(temporary) as written:
+            evidence['watermarks'] = verify_backgrounds(original, written)
         if paragraph:
             from .paragraph_layout import verify_inline
             evidence['inline_checks'] = verify_inline(temporary, placements)
         checked_ink, ink_evidence = verify_fixed_ink(source, temporary, reference_bytes, protected, editable)
-        with fitz.open(source) as original, fitz.open(temporary) as written:
+        with open_source_pdf(source) as original, fitz.open(temporary) as written:
             # 保护区域不享有正文掩膜边缘的抗锯齿容差，包括上标、公式与表格文字。
             pixels = {}
             for region_number, region in enumerate(protected):
@@ -367,8 +386,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     pixels[index] = page_pixels(original[index]), page_pixels(written[index])
                 a, b = pixels[index]
                 equal = region_pixels(a, region['rect']) == region_pixels(b, region['rect'])
-                if region.get('fixed') or region.get('kind') == 'formula' and fixed_characters(region):
-                    # 字符锚点使用精确浮点裁剪后再光栅化：向外取整的截图可能
+                if region.get('fixed') or fixed_characters(region):
+                    # 字符锚点及用户明确保留的文本块都按原字符并集核验；
+                    # 保留块的整段外框可能罩住同一行的独立小标题。
+                    # 使用精确浮点裁剪后再光栅化：向外取整的截图可能
                     # 混入框外正文的抗锯齿像素（实测末尾 g 的三个边缘像素），
                     # 它们不是引用本身。图像区域仍使用整页取样以固定插值相位。
                     equal = True
@@ -377,7 +398,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                         y = written[index].get_pixmap(clip=clip, matrix=fitz.Matrix(4, 4), alpha=False)
                         equal &= (x.width, x.height, x.samples) == (y.width, y.height, y.samples)
                 if not equal:
-                    raise ValueError(f'第{index + 1}页保护区域像素发生变化：{region["rect"]}, {region.get("text", region.get("kind", ""))!r}')
+                    # 原文与坐标放入结构化证据，供 CLI/App 单独展示，避免整段
+                    # repr（含软连字符转义）挤进错误标题。此类检查不提供跳过门禁。
+                    raise LocatedError(f'第{index + 1}页保护区域像素发生变化', [{
+                        'id': region.get('id'), 'source': region.get('text', ''),
+                        'pages': [index + 1], 'kind': region.get('kind', ''),
+                        'regions': [{'page': index + 1, 'rect': region['rect']}],
+                    }], 'preservation')
             page_chars = {}
             for item in placements:
                 if 'inline_anchor' in item:

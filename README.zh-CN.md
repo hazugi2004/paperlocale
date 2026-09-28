@@ -438,3 +438,7 @@ python scripts/layout_smoke.py \
 本版修复上下标拆散、异常减号、置信带重复叠画和图注边界误判。新增显式 `--no-qa`，不会把未检查 PDF 标记为通过。详见 [0.7.7 发布说明](docs/releases/v0.7.7.md)。
 
 [macOS 原生前端测试版](macos/README.md) 支持选择 PDF、模型和推理强度，需要本机 CLI 及翻译依赖。Universal 2、macOS 13+；只有 ad-hoc 签名，没有 Apple 公证。
+
+## 0.7.8
+
+修复软连字符、同名字体子集和事件单位误判；App 新增服务选择与 PDF 保存位置。命令行可使用 `--output-pdf /路径/译文.pdf`。详见 [发布说明](docs/releases/v0.7.8.md)。

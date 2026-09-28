@@ -1,6 +1,6 @@
 # PaperLocale for macOS（测试版）
 
-这是 PaperLocale 0.7.8 的原生窗口前端，支持选择 PDF、明确选择 Codex 模型与推理强度、开始/继续、显示日志和打开结果目录。首次仅支持 `codex-local` 和英译中 atmospheric-science 领域包。
+这是 PaperLocale 0.7.8 的原生窗口前端，支持选择 PDF、选择翻译服务、模型和适用的推理强度、开始/继续、显示日志和打开结果目录。支持 `codex-local`、`openai-compatible` 与 `qwen-mt`，目前使用英译中 atmospheric-science 领域包。
 
 ## 安装
 
@@ -23,3 +23,14 @@
 ## 构建
 
 在 macOS 安装 Xcode Command Line Tools，用 Python 3.11+ 执行 `python3 scripts/build_macos_app.py`。脚本从当前源码编译 arm64 和 x86_64，使用 ad-hoc 签名，并生成可下载 ZIP。许可证见仓库 AGPL-3.0-only。
+
+## 模型与保存位置
+
+- Codex 使用本机登录，可选择推理强度。其他两种 API 服务不显示或传递此参数。
+- 兼容 API 填写服务地址（含版本前缀、不含 `/chat/completions`）、模型名和密钥。模型必须支持当前 CLI 的聊天翻译合同；不自动切换服务或模型。
+- Qwen-MT 提供百炼中国区地址与 `qwen-mt-plus` / `qwen-mt-flash` 选项，其他地区请使用账户对应地址与模型。
+- API 密钥仅保留在窗口内存并传入翻译子进程环境，不写日志或断点；留空时读取 app 启动环境的 `PAPERLOCALE_API_KEY`。
+- “保存到…”可指定完整 PDF 文件名。默认保存到原 PDF 目录；续跑沿用已记录选择。原论文、符号链接和无关现有文件不能覆盖。
+- 关闭机器 QA 时仍可指定保存位置，结果始终是未检查候选，不能视为 QA 或人工验收通过。
+
+界面顺序为“大模型 → 具体模型 → 推理强度（若支持）”。GPT 读取本机 Codex 模型目录与支持档位；只显示 CLI 支持的档位。其他兼容 API 可填写自定义模型。

@@ -5,7 +5,8 @@
 - Rejoin discretionary soft-hyphen line wraps without changing hard hyphens, scientific minus signs, or unknown-code diagnostics.
 - Resolve same-name embedded CFF subsets only when the full trace span uniquely matches their Unicode/glyph-ID mapping.
 - Distinguish calendar-year and ordinal event phrases from physical units while retaining number, event-count, and rate checks.
-- Update the macOS frontend to use the 0.7.8 CLI.
+- Add macOS provider selection for Codex, OpenAI-compatible APIs and Qwen-MT; show reasoning effort only for Codex.
+- Add a PDF save picker and CLI `--output-pdf`, retaining checkpoint paths and overwrite protection. Explicit no-QA exports remain unchecked candidates.
 - See [validation and limitations](docs/releases/v0.7.8.md).
 
 ## 0.7.7 — 2026-09-28

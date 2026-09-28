@@ -218,6 +218,46 @@ class WorkflowTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 export_run_pdf(run_dir)
 
+    def test_custom_output_is_preserved_and_protects_source(self):
+        """自定义目录可创建，续跑沿用路径；源文件、链接和无关文件不能覆盖。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, translated = self._make_qa_ready_run(root)
+            target = root / "中文 结果" / "译文.pdf"
+            manifest = load_manifest(run_dir)
+            manifest["output_pdf"] = str(target)
+            save_manifest(run_dir, manifest)
+            self.assertEqual(export_run_pdf(run_dir), target)
+            self.assertEqual(target.read_bytes(), translated.read_bytes())
+            self.assertEqual(export_run_pdf(run_dir), target)
+            target.write_bytes(b"unrelated")
+            with self.assertRaises(FileExistsError):
+                export_run_pdf(run_dir)
+            manifest["output_pdf"] = str(root / "source.pdf")
+            save_manifest(run_dir, manifest)
+            with self.assertRaisesRegex(ValueError, "源 PDF"):
+                export_run_pdf(run_dir)
+            link = root / "link.pdf"
+            link.symlink_to(target)
+            manifest["output_pdf"] = str(link)
+            save_manifest(run_dir, manifest)
+            with self.assertRaisesRegex(FileExistsError, "符号链接"):
+                export_run_pdf(run_dir)
+
+    def test_explicit_unchecked_export_does_not_claim_qa(self):
+        """显式跳过 QA 只复制未检查候选，正常导出仍必须拒绝该状态。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, translated = self._make_qa_ready_run(root)
+            manifest = load_manifest(run_dir)
+            manifest.update(status="rendered", output_pdf=str(root / "unchecked.pdf"))
+            save_manifest(run_dir, manifest)
+            with self.assertRaises(ValueError):
+                export_run_pdf(run_dir)
+            target = export_run_pdf(run_dir, require_qa=False)
+            self.assertEqual(target.read_bytes(), translated.read_bytes())
+            self.assertEqual(load_manifest(run_dir)["status"], "rendered")
+
     def _make_source_vector_repair_run(
         self,
         root: Path,

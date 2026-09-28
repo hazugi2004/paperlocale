@@ -149,23 +149,33 @@ def _verify_rendered_pdf(
     return path
 
 
-def export_run_pdf(run_dir: Path) -> Path:
-    """机器 QA 通过后，将完整候选按源文件名安全复制到源 PDF 所在目录。
+def export_run_pdf(run_dir: Path, *, require_qa: bool = True) -> Path:
+    """将完整候选安全复制到用户指定位置，默认放在源 PDF 所在目录。
 
     运行目录里的 PDF 仍是 QA 和修复的唯一依据。目标若属于本运行的旧导出，
     可在重新 QA 后更新；未知文件一律拒绝覆盖，以免误删用户已有译文。
     """
     root = run_dir.expanduser().resolve()
     manifest = load_manifest(root)
-    if manifest["status"] not in {"qa_generated", "accepted"}:
-        raise ValueError("只有完成机器 QA 的译文才能导出到原文件目录")
+    allowed = {"qa_generated", "accepted"} if require_qa else {"rendered", "qa_generated", "accepted"}
+    if manifest["status"] not in allowed:
+        raise ValueError("当前阶段不允许导出译文；默认要求完成机器 QA")
     source = _verify_source_pdf(manifest)
     rendered = _verify_rendered_pdf(manifest)
-    report = json.loads(Path(str(manifest["qa_report"])).read_text(encoding="utf-8"))
-    if (report.get("errors") or report.get("translated_sha256") != manifest["rendered_sha256"]
-            or report.get("source_sha256") != manifest["source_sha256"]):
-        raise ValueError("机器 QA 与当前源文或译文不一致，不能导出")
-    destination = source.with_name(f"{source.stem}_translated_by_paperlocale.pdf")
+    # 只有 run --no-qa 明确调用时允许未检查候选，状态始终保持 rendered；
+    # 普通导出和人工验收仍要求当前源文、译文与 QA 报告哈希完全一致。
+    if require_qa:
+        report = json.loads(Path(str(manifest["qa_report"])).read_text(encoding="utf-8"))
+        if (report.get("errors") or report.get("translated_sha256") != manifest["rendered_sha256"]
+                or report.get("source_sha256") != manifest["source_sha256"]):
+            raise ValueError("机器 QA 与当前源文或译文不一致，不能导出")
+    destination = Path(str(manifest["output_pdf"])) if manifest.get("output_pdf") else source.with_name(
+        f"{source.stem}_translated_by_paperlocale.pdf")
+    if destination.resolve() in {source.resolve(), rendered.resolve()}:
+        raise ValueError("输出位置不能覆盖源 PDF 或运行目录中的候选 PDF")
+    if destination.suffix.lower() != ".pdf":
+        raise ValueError("输出文件必须使用 .pdf 扩展名")
+    destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink():
         raise FileExistsError(f"目标是符号链接，拒绝覆盖：{destination}")
     if destination.exists():

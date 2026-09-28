@@ -189,6 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--provider", choices=("codex-local", "openai-compatible", "qwen-mt")
     )
+    run.add_argument("--output-pdf", type=Path, help="译文 PDF 保存位置；续跑默认沿用已记录位置，不覆盖无关文件")
     run.add_argument("--model", help="codex-local 新运行默认 gpt-6-sol；续跑沿用原模型")
     run.add_argument("--reasoning-effort", choices=REASONING_EFFORTS,
                      help="codex-local 新运行默认 medium；续跑沿用原档位")
@@ -540,6 +541,12 @@ def _execute(args: argparse.Namespace) -> int:
         mode = args.layout_mode or recorded_mode
         if mode != recorded_mode and manifest["status"] != "initialized":
             raise ValueError("不能在已开始的运行中切换版面模式")
+        # 路径单独记录，恢复时无需重复填写；不会改变翻译模型或缓存身份。
+        if args.output_pdf is not None:
+            output = args.output_pdf.expanduser().absolute()
+            if output.suffix.lower() != ".pdf" or output.resolve() == args.source_pdf.expanduser().resolve():
+                raise ValueError("输出位置必须为另一个 .pdf 文件，不能覆盖源 PDF")
+            manifest["output_pdf"] = str(output)
         manifest["layout_mode"] = mode
         save_manifest(root, manifest)
         if mode in {"paragraph", "preserved"}:
@@ -557,7 +564,8 @@ def _execute(args: argparse.Namespace) -> int:
                 generate_qa=not args.no_qa)
             if result["status"] == "rendered" and args.no_qa:
                 from .workflow import _verify_rendered_pdf
-                rendered = _verify_rendered_pdf(result)
+                rendered = (export_run_pdf(root, require_qa=False) if manifest.get("output_pdf")
+                            else _verify_rendered_pdf(result))
                 print(f"候选 PDF：{rendered}；按明确选择未运行输出后机器 QA，尚未验收")
                 return 0
             exported = export_run_pdf(root)

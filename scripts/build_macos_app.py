@@ -29,7 +29,8 @@ def main():
         binary = build / f"PaperLocale-{arch}"
         subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-parse-as-library",
                         "-O", "-target", f"{arch}-apple-macosx13.0",
-                        str(root / "macos" / "PaperLocaleApp.swift"), "-o", str(binary)], check=True)
+                        str(root / "macos" / "PaperLocaleApp.swift"),
+                        str(root / "macos" / "TranslationOptions.swift"), "-o", str(binary)], check=True)
         binaries.append(str(binary))
     subprocess.run(["lipo", "-create", *binaries, "-output", str(binary_dir / "PaperLocale")], check=True)
     # 直接核对实际 Mach-O 架构，避免不同 Xcode 的 -verify_arch 参数解析差异。

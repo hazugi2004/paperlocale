@@ -8,11 +8,17 @@ import UniformTypeIdentifiers
     @Published var pdf = ""
     @Published var cli = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".local/bin/paperlocale").path
+    @Published var provider = "codex-local"
+    let codexModels = CodexModelChoice.load()
+    @Published var selectedModel = "gpt-6-sol"
+    @Published var baseURL = ""
+    @Published var apiKey = ""
+    @Published var outputPDF = ""
     @Published var model = "gpt-6-sol"
     @Published var effort = "medium"
     @Published var runQA = true
     @Published var running = false
-    @Published var log = "选择论文 PDF，确认模型和推理强度后开始。\n需要本机已安装 PaperLocale 0.7.8 的 layout 依赖与已登录的 Codex CLI。"
+    @Published var log = "选择论文 PDF，确认翻译服务与模型后开始。\n需要本机已安装 PaperLocale 0.7.8 的 layout 依赖；Codex 服务需要已登录的 Codex CLI，API 服务需要对应密钥。"
     private var process: Process?
     private var pipe: Pipe?
     // 保存尾部不完整的 UTF-8 序列，防止管道恰好在汉字中间分块而显示乱码。
@@ -28,7 +34,46 @@ import UniformTypeIdentifiers
         panel.allowedContentTypes = [.pdf]
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url { pdf = url.path }
+        if panel.runModal() == .OK, let url = panel.url {
+            pdf = url.path
+            outputPDF = ""
+        }
+    }
+
+    func selectOutput() {
+        let panel = NSSavePanel()
+        panel.title = "保存翻译 PDF"
+        panel.allowedContentTypes = [.pdf]
+        panel.nameFieldStringValue = URL(fileURLWithPath: pdf).deletingPathExtension()
+            .lastPathComponent + "_translated_by_paperlocale.pdf"
+        panel.directoryURL = URL(fileURLWithPath: outputPDF.isEmpty ? pdf : outputPDF)
+            .deletingLastPathComponent()
+        if panel.runModal() == .OK, let url = panel.url { outputPDF = url.path }
+    }
+
+    var modelChoices: [String] {
+        if provider == "codex-local" { return codexModels.map { $0.name } }
+        if provider == "qwen-mt" { return ["qwen-mt-plus", "qwen-mt-flash", "自定义"] }
+        return ["自定义"]
+    }
+
+    var effortChoices: [String] {
+        codexModels.first { $0.name == selectedModel }?.efforts ?? []
+    }
+
+    func changeModel() {
+        model = selectedModel == "自定义" ? "" : selectedModel
+        if !effortChoices.contains(effort) {
+            effort = effortChoices.contains("medium") ? "medium" : (effortChoices.first ?? "medium")
+        }
+    }
+
+    func changeProvider() {
+        // 用户明确切换服务后重置模型示例；旧断点的身份仍由 CLI 校验，不能混用缓存。
+        selectedModel = provider == "codex-local" && modelChoices.contains("gpt-6-sol") ? "gpt-6-sol" : modelChoices[0]
+        changeModel()
+        baseURL = provider == "qwen-mt" ? "https://dashscope.aliyuncs.com/compatible-mode/v1" : ""
+        apiKey = ""
     }
 
     func selectCLI() {
@@ -67,25 +112,31 @@ import UniformTypeIdentifiers
         guard FileManager.default.fileExists(atPath: pdf), !model.trimmingCharacters(in: .whitespaces).isEmpty else {
             log = "请选择存在的 PDF，并填写模型。"; return
         }
+        if provider != "codex-local" && baseURL.trimmingCharacters(in: .whitespaces).isEmpty {
+            log = "请填写所选翻译服务的 API 地址（不含 /chat/completions）。"; return
+        }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: cli)
         // 不使用等待循环：错误退出后让用户查看原因，再点击同一按钮恢复原断点。
         // CLI 的身份校验负责拒绝在旧断点上静默改变模型或源文件。
-        task.arguments = ["run", pdf, "--run-dir", runDirectory.path,
-                          "--provider", "codex-local", "--model", model,
-                          "--reasoning-effort", effort, "--layout-mode", "paragraph",
-                          "--target-language", "zh-CN", "--domain", "atmospheric-science",
-                          "--unattended", "--no-wait-on-error"] + (runQA ? [] : ["--no-qa"])
+        task.arguments = TranslationOptions(pdf: pdf, runDirectory: runDirectory.path,
+            provider: provider, model: model, effort: effort, baseURL: baseURL,
+            outputPDF: outputPDF, runQA: runQA).arguments
         var env = ProcessInfo.processInfo.environment
         // Finder 启动的 app 没有终端 PATH；显式补入正常用户安装目录和 Homebrew。
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
         env["PYTHONUNBUFFERED"] = "1"
+        // 密钥只传给本次子进程环境，不进入命令行、日志、配置文件或断点。
+        // 留空时沿用启动 app 的环境变量；Finder 通常没有该变量，需在窗口填写。
+        if provider != "codex-local" && !apiKey.isEmpty { env["PAPERLOCALE_API_KEY"] = apiKey }
         task.environment = env
         let output = Pipe()
         task.standardOutput = output
         task.standardError = output
-        log = "模型：\(model) · 推理强度：\(effort)\n运行目录：\(runDirectory.path)\n"
+        log = "服务：\(provider) · 模型：\(model)" +
+            (provider == "codex-local" ? " · 推理强度：\(effort)" : "") +
+            "\n运行目录：\(runDirectory.path)\n"
         pending.removeAll()
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -148,12 +199,35 @@ struct ContentView: View {
                 Button("选择 PDF…", action: job.selectPDF).disabled(job.running)
             }
             HStack {
-                Text("模型")
-                TextField("模型名称", text: $job.model).frame(minWidth: 170)
-                Picker("推理强度", selection: $job.effort) {
-                    ForEach(["none", "low", "medium", "high", "xhigh", "max"], id: \.self) { Text($0) }
-                }.frame(width: 210)
+                Picker("大模型", selection: $job.provider) {
+                    Text("GPT（Codex）").tag("codex-local")
+                    Text("其他（兼容 API）").tag("openai-compatible")
+                    Text("Qwen（翻译模型）").tag("qwen-mt")
+                }.onChange(of: job.provider) { _ in job.changeProvider() }
+                Picker("具体模型", selection: $job.selectedModel) {
+                    ForEach(job.modelChoices, id: \.self) { Text($0) }
+                }.onChange(of: job.selectedModel) { _ in job.changeModel() }
+                if job.selectedModel == "自定义" {
+                    TextField("模型名称", text: $job.model).frame(minWidth: 140)
+                }
+                if job.provider == "codex-local" {
+                    Picker("推理强度", selection: $job.effort) {
+                        ForEach(job.effortChoices, id: \.self) { Text($0) }
+                    }.frame(width: 190)
+                }
             }.disabled(job.running)
+            if job.provider != "codex-local" {
+                HStack {
+                    TextField("API 地址（含版本前缀，不含 /chat/completions）", text: $job.baseURL)
+                    SecureField("API 密钥（仅本次使用）", text: $job.apiKey)
+                }.disabled(job.running)
+            }
+            HStack {
+                Text(job.outputPDF.isEmpty ? "保存位置：源 PDF 所在目录（续跑沿用原选择）" : job.outputPDF)
+                    .lineLimit(2).textSelection(.enabled)
+                Spacer()
+                Button("保存到…", action: job.selectOutput).disabled(job.running || job.pdf.isEmpty)
+            }
             HStack {
                 Toggle("生成后运行机器 QA", isOn: $job.runQA).disabled(job.running)
                 Spacer()
@@ -167,7 +241,7 @@ struct ContentView: View {
                         TextField("PaperLocale 路径", text: $job.cli)
                         Button("选择…", action: job.selectCLI)
                     }.disabled(job.running)
-                    Text("此应用调用本机 CLI；需要 PaperLocale 0.7.8、layout 依赖、Poppler，以及已登录的 Codex。模型是否可用由你的账户决定。")
+                    Text("此应用调用本机 CLI；需要 PaperLocale 0.7.8、layout 依赖、Poppler，以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译；模型是否可用由你的账户决定。")
                         .font(.caption).foregroundStyle(.secondary)
                     if !job.pdf.isEmpty {
                         Text(job.runDirectory.path).font(.caption).textSelection(.enabled)
@@ -183,11 +257,14 @@ struct ContentView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("打开结果目录") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: job.pdf).deletingLastPathComponent())
+                    NSWorkspace.shared.open(URL(fileURLWithPath: job.outputPDF.isEmpty ? job.pdf : job.outputPDF).deletingLastPathComponent())
                 }.disabled(job.pdf.isEmpty)
             }
         }.padding(24).frame(minWidth: 740, minHeight: 560)
-            .onAppear { AppDelegate.job = job }
+            .onAppear {
+                AppDelegate.job = job
+                if !job.modelChoices.contains(job.selectedModel) { job.changeProvider() }
+            }
     }
 }
 

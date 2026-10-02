@@ -53,6 +53,25 @@ import AppKit
         precondition(current.items[0].target == "强度{v0}。")
         precondition(current.items[0].errors == ["abbreviation 标记缺失：CDHE"])
         precondition(current.items[0].validation_source == "CDHE {v0}.")
+
+        // 打开自定义服务的旧断点必须保留精确模型，不能被 picker 的默认选择重置。
+        let run = directory.appendingPathComponent("旧运行")
+        try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        let manifest: [String: Any] = ["source_pdf": pdf.path, "translation_provider":
+            ["provider": "openai-compatible", "model": "research-custom", "base_url": "https://example.invalid/v1"]]
+        try JSONSerialization.data(withJSONObject: manifest).write(to: run.appendingPathComponent("run_manifest.json"))
+        job.loadRun(run)
+        precondition(job.model == "research-custom" && job.selectedModel == "自定义")
+        precondition(job.provider == "openai-compatible" && job.baseURL == "https://example.invalid/v1")
+        precondition(job.runDirectory.path == run.path)
+        job.acceptPDF(pdf)
+        precondition(job.existingRun.isEmpty, "选择另一份 PDF 必须解除旧运行绑定")
+        // 模拟磁盘写入失败时的结构化错误流；无需依赖 error_report.json 存在。
+        for byte in ("PAPERLOCALE_ERROR " + detailed + "\n").utf8 { job.append(Data([byte])) }
+        job.showCurrentError()
+        precondition(job.repairReport?.error_id == "new")
+        let cross = WorkspacePaths.runDirectory(pdf: "/Users/Shared/论文 source.pdf", root: "/Users/Shared/paperlocale")
+        print("workspace=" + cross.path)
         print("drop, progress, UTF-8, report decoding passed")
     }
 }
@@ -62,3 +81,5 @@ import AppKit
                             str(root/'macos/TranslationOptions.swift'),str(main),'-o',str(binary)],check=True,capture_output=True)
             output=subprocess.run([str(binary)],check=True,capture_output=True,text=True,timeout=20)
             self.assertIn('passed',output.stdout)
+            from paperlocale.workspaces import run_directory
+            self.assertIn('workspace=' + str(run_directory(Path('/Users/Shared/论文 source.pdf'), Path('/Users/Shared/paperlocale'))), output.stdout)

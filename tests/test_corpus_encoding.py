@@ -51,6 +51,60 @@ def fixture(path, *, empty=False, ligature=False, zero_ink=False):
 
 
 class CorpusEncodingTests(unittest.TestCase):
+    def test_printable_math_requires_reviewed_outline_and_new_revision(self):
+        import hashlib
+        from unittest.mock import patch
+        from fontTools.pens.recordingPen import RecordingPen
+        from paperlocale.font_geometry import _source_anchor_glyphs
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'source.pdf';fixture(path)
+            with fitz.open(path) as doc:
+                ref=doc[0].get_fonts()[0][0]
+                cmap=int(doc.xref_get_key(ref,'ToUnicode')[1].split()[0])
+                doc.update_stream(cmap,doc.xref_stream(cmap).replace(b'E001',b'00F0'))
+                data=doc.tobytes()
+            with fitz.open(stream=data,filetype='pdf') as doc:
+                page=doc[0];raw=page.get_text('rawdict')['blocks'];c=raw[0]['lines'][0]['spans'][0]['chars'][0]
+                cache={};g=_source_anchor_glyphs(page,[{'text':c['c'],'rect':c['bbox'],'origin':c['origin']}],cache)[0]
+                pen=RecordingPen();cache[g['xref']][1][g['name']].draw(pen)
+                key=('cff',1000,hashlib.sha256(repr(pen.value).encode()).hexdigest())
+                with patch('paperlocale.source_symbols.CORPUS_REVIEWED_OUTLINES',{key:'('}):
+                    restore_verified_symbols(page,raw,{})
+                    self.assertEqual(c['c'],'ð')
+                    restore_verified_symbols(page,raw,{},printable_math=True)
+                    self.assertEqual((c['c'],c['native_text']),('(','ð'))
+                unknown=page.get_text('rawdict')['blocks']
+                with patch('paperlocale.source_symbols.CORPUS_REVIEWED_OUTLINES',{}):
+                    restore_verified_symbols(page,unknown,{},printable_math=True)
+                self.assertEqual(unknown[0]['lines'][0]['spans'][0]['chars'][0]['c'],'ð')
+
+    def test_latin_math_requires_exact_reviewed_outline_and_new_revision(self):
+        import hashlib
+        from unittest.mock import patch
+        from fontTools.pens.recordingPen import RecordingPen
+        from paperlocale.font_geometry import _source_anchor_glyphs
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'source.pdf';fixture(path)
+            with fitz.open(path) as doc:
+                ref=doc[0].get_fonts()[0][0]
+                cmap=int(doc.xref_get_key(ref,'ToUnicode')[1].split()[0])
+                doc.update_stream(cmap,doc.xref_stream(cmap).replace(b'E001',b'0071'))
+                data=doc.tobytes()
+            with fitz.open(stream=data,filetype='pdf') as doc:
+                page=doc[0];raw=page.get_text('rawdict')['blocks'];c=raw[0]['lines'][0]['spans'][0]['chars'][0]
+                cache={};g=_source_anchor_glyphs(page,[{'text':c['c'],'rect':c['bbox'],'origin':c['origin']}],cache)[0]
+                pen=RecordingPen();cache[g['xref']][1][g['name']].draw(pen)
+                key=('cff',1000,hashlib.sha256(repr(pen.value).encode()).hexdigest())
+                with patch('paperlocale.source_symbols.CORPUS_REVIEWED_OUTLINES',{key:'θ'}):
+                    restore_verified_symbols(page,raw,{})
+                    self.assertEqual(c['c'],'q')
+                    restore_verified_symbols(page,raw,{},printable_math=True,latin_math=True)
+                    self.assertEqual((c['c'],c['native_text']),('θ','q'))
+                unknown=page.get_text('rawdict')['blocks']
+                with patch('paperlocale.source_symbols.CORPUS_REVIEWED_OUTLINES',{}):
+                    restore_verified_symbols(page,unknown,{},printable_math=True,latin_math=True)
+                self.assertEqual(unknown[0]['lines'][0]['spans'][0]['chars'][0]['c'],'q')
+
     def test_empty_outline_is_space_but_unknown_ink_is_not_guessed(self):
         for empty in [False,True]:
             with self.subTest(empty=empty),tempfile.TemporaryDirectory() as folder:

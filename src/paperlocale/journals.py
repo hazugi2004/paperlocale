@@ -88,7 +88,7 @@ def auxiliary_page(text: str, number: int) -> str | None:
     return None
 
 
-def preserve_line(profile: dict, page, line: dict, cover_reason: str | None) -> str | None:
+def preserve_line(profile: dict, page, line: dict, cover_reason: str | None, *, publication_labels=False) -> str | None:
     """期刊专属规则只作用于明确辅助信息；轴标签/正文旋转文字不因旋转被跳过。"""
     if cover_reason:
         return cover_reason
@@ -100,6 +100,9 @@ def preserve_line(profile: dict, page, line: dict, cover_reason: str | None) -> 
     if family in {'asce', 'agu', 'wiley', 'pnas', 'science', 'ams'} and (edge or marginal):
         if re.search(r'downloaded|terms (?:and|&) conditions|rights reserved|personal use|unauthenticated', text, re.I):
             return f'{family} 下载/版权边栏原样保留'
+    if (publication_labels and family == 'science' and page.number == 0 and box.y1 < .2*page.rect.height
+            and re.fullmatch(r'(?:[A-Z] ){4,}[A-Z]{1,3}', text)):
+        return 'Science 字距展开的学科分类原样保留'
     if family == 'pnas' and edge and re.fullmatch(r'EARTH, ATMOSPHERIC,|AND PLANETARY SCIENCES', text):
         return 'PNAS 学科分类边栏原样保留'
     if family == 'science' and edge and re.match(r'^on [A-Z][a-z]+ \d{1,2}, \d{4}$', text):
@@ -115,3 +118,11 @@ def preserve_line(profile: dict, page, line: dict, cover_reason: str | None) -> 
     if family == 'frontiers' and re.match(r'^(?:TYPE |PUBLISHED |DOI 10\.3389/)', text):
         return 'Frontiers 稿件元数据原样保留'
     return None
+
+
+def publisher_style_flags(family: str, font: str, flags: int, *, science_styles=False) -> int:
+    """恢复 ASCE AdvOT 和启用的新 Science AdvTT 明示样式，不猜测无后缀字体。"""
+    match = re.fullmatch(r'AdvOT[^.]+\.(BI|B|I)', font) if family == 'asce' else None
+    if science_styles and family == 'science':
+        match = re.fullmatch(r'AdvTT[^.]+\.(BI|B|I)', font)
+    return flags | ((16 if 'B' in match[1] else 0) | (2 if 'I' in match[1] else 0)) if match else flags

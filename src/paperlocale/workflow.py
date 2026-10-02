@@ -1136,6 +1136,7 @@ def qa_run(
         output_dir=Path(str(manifest["qa_output_dir"])),
         dpi=dpi,
         pdftoppm_bin=pdftoppm_bin,
+        canonical_source_geometry=manifest.get('layout_mode') == 'paragraph',
     )
     if report.get("source_sha256") != manifest["source_sha256"]:
         raise RuntimeError("源 PDF 在 QA 读取期间发生变化")

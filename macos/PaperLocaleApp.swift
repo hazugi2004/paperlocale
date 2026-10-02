@@ -1,11 +1,22 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import PDFKit
 
 // 轻量原生前端：唯一翻译实现仍是已安装的 PaperLocale CLI。
 // 不内置登录材料、不代理订阅、不自动更换模型；参数以数组传入，路径不会成为 shell 代码。
 @MainActor final class TranslationJob: ObservableObject {
     @Published var pdf = ""
+    @Published var workspaceRoot = UserDefaults.standard.string(forKey: "workspaceRoot") ?? WorkspacePaths.defaultRoot
+    @Published var existingRun = ""
+    @Published var fontFile = ""
+    @Published var maxCharacters = 30000
+    @Published var repairFeedback = ""
+    @Published var repairDrafts: [String: String] = [:]
+    @Published var repairPage = 1
+    var editingErrorID = ""
+    private var receivedReport: RepairReport?
+    private var importCacheFrom = ""
     @Published var cli = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".local/bin/paperlocale").path
     @Published var provider = "codex-local"
@@ -18,7 +29,7 @@ import UniformTypeIdentifiers
     @Published var effort = "medium"
     @Published var runQA = true
     @Published var running = false
-    @Published var log = "选择论文 PDF，确认翻译服务与模型后开始。\n需要本机已安装 PaperLocale 0.8.1 的 layout 依赖；Codex 服务需要已登录的 Codex CLI，API 服务需要对应密钥。"
+    @Published var log = "选择论文 PDF，确认翻译服务与模型后开始。\n需要本机已安装 PaperLocale 0.8.2 的 layout 依赖；Codex 服务需要已登录的 Codex CLI，API 服务需要对应密钥。"
     @Published var dropTarget = false
     @Published var fraction = 0.0
     @Published var stage = "等待开始"
@@ -30,8 +41,104 @@ import UniformTypeIdentifiers
     private var pending = Data()
 
     var runDirectory: URL {
-        URL(fileURLWithPath: pdf).deletingPathExtension()
-            .appendingPathExtension("paperlocale")
+        existingRun.isEmpty ? WorkspacePaths.runDirectory(pdf: pdf, root: workspaceRoot) : URL(fileURLWithPath: existingRun)
+    }
+
+    func selectWorkspace() {
+        let panel = NSOpenPanel()
+        panel.title = "选择统一工作区根目录"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            workspaceRoot = url.path; existingRun = ""; importCacheFrom = ""
+            UserDefaults.standard.set(workspaceRoot, forKey: "workspaceRoot")
+        }
+    }
+
+    func openRun() {
+        let panel = NSOpenPanel()
+        panel.title = "打开已有运行目录（包含 run_manifest.json）"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        loadRun(url)
+    }
+
+    // 文件选择与测试共用加载入口；程序赋值不触发用户切换服务的重置逻辑。
+    func loadRun(_ url: URL) {
+        guard !running else { return }
+        do {
+            let data = try Data(contentsOf: url.appendingPathComponent("run_manifest.json"))
+            guard let manifest = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let source = manifest["source_pdf"] as? String else { throw CocoaError(.fileReadCorruptFile) }
+            acceptPDF(URL(fileURLWithPath: source))
+            guard pdf == URL(fileURLWithPath: source).standardizedFileURL.path else { return }
+            existingRun = url.path
+            outputPDF = manifest["output_pdf"] as? String ?? ""
+            if let recorded = manifest["translation_provider"] as? [String: Any] {
+                provider = recorded["provider"] as? String ?? provider
+                model = recorded["model"] as? String ?? model
+                selectedModel = modelChoices.contains(model) ? model : "自定义"
+                effort = recorded["reasoning_effort"] as? String ?? effort
+                baseURL = recorded["base_url"] as? String ?? baseURL
+            }
+            showCurrentError()
+        } catch { log = "无法打开运行目录：\(error.localizedDescription)" }
+    }
+
+    func showCurrentError() {
+        if let data = try? Data(contentsOf: runDirectory.appendingPathComponent("error_report.json")) {
+            repairReport = try? JSONDecoder().decode(RepairReport.self, from: data)
+        } else { repairReport = receivedReport }
+    }
+
+    func reanalyze(importCache: Bool) {
+        guard !running else { return }
+        let old = runDirectory
+        importCacheFrom = importCache ? old.path : ""
+        existingRun = old.deletingLastPathComponent().appendingPathComponent(
+            old.lastPathComponent + "-" + String(UUID().uuidString.prefix(8))).path
+        repairReport = nil
+        start()
+    }
+
+    func selectFont() {
+        let panel = NSOpenPanel(); panel.title = "选择支持中文的字体（TTF / OTF）"
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, let url = panel.url { fontFile = url.path }
+    }
+
+    func submitEdits(report: RepairReport, edits: [String: String], checkOnly: Bool) {
+        guard !running else { return }
+        do {
+            let draft = runDirectory.appendingPathComponent("repair_draft.json")
+            try JSONSerialization.data(withJSONObject: edits, options: [.prettyPrinted, .sortedKeys]).write(to: draft, options: .atomic)
+            let task = Process(); let output = Pipe()
+            task.executableURL = URL(fileURLWithPath: cli)
+            task.arguments = ["repair-choice", "--run-dir", runDirectory.path, "--error-id", report.error_id,
+                              "--choice", "e", "--edits-file", draft.path] + (checkOnly ? ["--check-only"] : [])
+            task.standardOutput = output; task.standardError = output
+            // 后台读管道，长段落错误不会因管道写满卡住；结果留在当前修复窗口。
+            repairFeedback = "正在校验…"; running = true
+            try task.run(); process = task
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                task.waitUntilExit()
+                let text = String(decoding: data, as: UTF8.self)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.running = false; self.process = nil
+                    if checkOnly, let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let items = result["items"] as? [[String: Any]] {
+                        self.repairFeedback = items.flatMap { row -> [String] in
+                            let id = String((row["id"] as? String ?? "").prefix(12))
+                            return (row["errors"] as? [String] ?? []).map { id + "：" + $0 }
+                        }.joined(separator: "\n")
+                        if self.repairFeedback.isEmpty { self.repairFeedback = "内容校验通过。保存后仍会检查排版与 PDF 完整性。" }
+                    } else if task.terminationStatus == 0 && !checkOnly {
+                        self.repairReport = nil; self.start()
+                    } else { self.repairFeedback = text }
+                }
+            }
+        } catch { running = false; repairFeedback = "修订未保存：\(error.localizedDescription)" }
     }
 
     var resultDirectory: URL {
@@ -63,6 +170,7 @@ import UniformTypeIdentifiers
             log = "请选择可读取的本地 PDF 文件。"; return
         }
         pdf = url.standardizedFileURL.path
+        existingRun = ""; importCacheFrom = ""; receivedReport = nil
         outputPDF = ""
         repairReport = nil
         fraction = 0
@@ -93,13 +201,13 @@ import UniformTypeIdentifiers
     }
 
     var modelChoices: [String] {
-        if provider == "codex-local" { return codexModels.map { $0.name } }
+        if provider == "codex-local" { return codexModels.map { $0.name } + ["自定义"] }
         if provider == "qwen-mt" { return ["qwen-mt-plus", "qwen-mt-flash", "自定义"] }
         return ["自定义"]
     }
 
     var effortChoices: [String] {
-        codexModels.first { $0.name == selectedModel }?.efforts ?? []
+        codexModels.first { $0.name == selectedModel }?.efforts ?? ["low", "medium", "high", "xhigh", "max"]
     }
 
     func changeModel() {
@@ -137,6 +245,10 @@ import UniformTypeIdentifiers
                 while let end = progressPending.firstIndex(of: "\n") {
                     let line = String(progressPending[..<end])
                     progressPending.removeSubrange(...end)
+                    if line.hasPrefix("PAPERLOCALE_ERROR "),
+                       let data = String(line.dropFirst("PAPERLOCALE_ERROR ".count)).data(using: .utf8) {
+                        receivedReport = try? JSONDecoder().decode(RepairReport.self, from: data)
+                    }
                     if line.hasPrefix("PAPERLOCALE_PROGRESS "),
                        let data = String(line.dropFirst("PAPERLOCALE_PROGRESS ".count)).data(using: .utf8),
                        let progress = try? JSONDecoder().decode(JobProgress.self, from: data) {
@@ -159,7 +271,7 @@ import UniformTypeIdentifiers
     func start(repair: RepairAction? = nil, report: RepairReport? = nil) {
         guard !running else { return }
         guard FileManager.default.isExecutableFile(atPath: cli) else {
-            log = "找不到可执行的 PaperLocale：\(cli)\n请按发行说明安装 paperlocale[layout]==0.8.1，或选择已安装的命令。"
+            log = "找不到可执行的 PaperLocale：\(cli)\n请按本地构建说明安装 PaperLocale 0.8.2，或选择已安装的命令。"
             return
         }
         guard FileManager.default.fileExists(atPath: pdf), !model.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -168,13 +280,17 @@ import UniformTypeIdentifiers
         if provider != "codex-local" && baseURL.trimmingCharacters(in: .whitespaces).isEmpty {
             log = "请填写所选翻译服务的 API 地址（不含 /chat/completions）。"; return
         }
+        guard maxCharacters > 0 else { log = "请求字符上限必须为正整数。"; return }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: cli)
         // 不使用等待循环：错误退出后让用户查看原因，再点击同一按钮恢复原断点。
         // CLI 的身份校验负责拒绝在旧断点上静默改变模型或源文件。
-        let translationArguments = TranslationOptions(pdf: pdf, runDirectory: runDirectory.path,
+        var translationArguments = TranslationOptions(pdf: pdf, runDirectory: runDirectory.path,
             provider: provider, model: model, effort: effort, baseURL: baseURL,
             outputPDF: outputPDF, runQA: runQA).arguments
+        translationArguments += ["--max-characters", String(maxCharacters)]
+        if !fontFile.isEmpty { translationArguments += ["--font-file", fontFile] }
+        if !importCacheFrom.isEmpty { translationArguments += ["--import-cache-from", importCacheFrom] }
         if let repair, let report {
             task.arguments = ["repair-choice", "--run-dir", runDirectory.path,
                               "--error-id", report.error_id, "--choice", repair.key]
@@ -183,7 +299,7 @@ import UniformTypeIdentifiers
         let previousReport = (try? Data(contentsOf: reportURL)).flatMap { try? JSONDecoder().decode(RepairReport.self, from: $0) }
         repairReport = nil
         if repair == nil { fraction = 0; stage = "启动并读取断点" }
-        progressPending = ""
+        progressPending = ""; receivedReport = nil
         var env = ProcessInfo.processInfo.environment
         // Finder 启动的 app 没有终端 PATH；显式补入正常用户安装目录和 Homebrew。
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -231,6 +347,8 @@ import UniformTypeIdentifiers
                        let report = try? JSONDecoder().decode(RepairReport.self, from: data),
                        report.error_id != previousReport?.error_id {
                         self.repairReport = report
+                    } else if let streamed = self.receivedReport {
+                        self.repairReport = streamed
                     }
                 }
             }
@@ -269,7 +387,7 @@ struct ContentView: View {
                 MascotImage(name: "AppIcon").frame(width: 52, height: 52)
                 VStack(alignment: .leading) {
                     Text("PaperLocale").font(.title.bold())
-                    Text("0.8.1 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
+                    Text("0.8.2 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -283,14 +401,20 @@ struct ContentView: View {
             .cornerRadius(10)
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: $job.dropTarget, perform: job.receiveDrop)
             HStack {
-                Picker("大模型", selection: $job.provider) {
+                Text("工作区：" + (job.existingRun.isEmpty ? job.workspaceRoot : job.existingRun)).lineLimit(2).textSelection(.enabled)
+                Spacer()
+                Button("选择工作区…", action: job.selectWorkspace)
+                Button("打开已有运行…", action: job.openRun)
+            }.disabled(job.running)
+            HStack {
+                Picker("大模型", selection: Binding(get: { job.provider }, set: { job.provider = $0; job.changeProvider() })) {
                     Text("GPT（Codex）").tag("codex-local")
                     Text("其他（兼容 API）").tag("openai-compatible")
                     Text("Qwen（翻译模型）").tag("qwen-mt")
-                }.onChange(of: job.provider) { _ in job.changeProvider() }
-                Picker("具体模型", selection: $job.selectedModel) {
+                }
+                Picker("具体模型", selection: Binding(get: { job.selectedModel }, set: { job.selectedModel = $0; job.changeModel() })) {
                     ForEach(job.modelChoices, id: \.self) { Text($0) }
-                }.onChange(of: job.selectedModel) { _ in job.changeModel() }
+                }
                 if job.selectedModel == "自定义" {
                     TextField("模型名称", text: $job.model).frame(minWidth: 140)
                 }
@@ -326,8 +450,17 @@ struct ContentView: View {
                         TextField("PaperLocale 路径", text: $job.cli)
                         Button("选择…", action: job.selectCLI)
                     }.disabled(job.running)
-                    Text("此应用调用本机 CLI；需要 PaperLocale 0.8.1、layout 依赖、Poppler，以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译；模型是否可用由你的账户决定。")
+                    Text("此应用调用本机 CLI；需要 PaperLocale 0.8.2、layout 依赖、Poppler，以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译；模型是否可用由你的账户决定。")
                         .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Text(job.fontFile.isEmpty ? "中文字体：自动获取" : job.fontFile).lineLimit(1)
+                        Button("选择字体…", action: job.selectFont).disabled(job.running)
+                    }
+                    HStack {
+                        Text("每次模型请求的字符上限")
+                        TextField("字符数", value: $job.maxCharacters, format: .number).frame(width: 100)
+                        Text("响应截断时可降低；单个长段落仍保持完整。").font(.caption).foregroundStyle(.secondary)
+                    }.disabled(job.running)
                     if !job.pdf.isEmpty {
                         Text(job.runDirectory.path).font(.caption).textSelection(.enabled)
                     }
@@ -341,6 +474,7 @@ struct ContentView: View {
                 Text("错误会保留断点；机器 QA 完成不代表人工验收。")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                Button("查看本次诊断", action: job.showCurrentError).disabled(job.running || job.pdf.isEmpty)
                 Button("打开结果目录") {
                     NSWorkspace.shared.open(job.resultDirectory)
                 }.disabled(job.pdf.isEmpty)
@@ -348,54 +482,143 @@ struct ContentView: View {
         }.padding(24).frame(minWidth: 740, minHeight: 680)
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: job.receiveDrop)
             .sheet(item: $job.repairReport) { report in
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("翻译已暂停").font(.title2.bold())
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(report.message).font(.headline)
-                            ForEach(Array(report.items.enumerated()), id: \.offset) { _, item in
-                                Text(item.pageLabel)
-                                    .font(.headline)
-                                if let id = item.id {
-                                    Text("片段：\(id)").font(.caption).textSelection(.enabled)
+                RepairWorkbench(job: job, report: report)
+            }
+            .onAppear {
+                AppDelegate.job = job
+                if !job.modelChoices.contains(job.selectedModel) { job.changeProvider() }
+            }
+    }
+}
+
+// 修复台直接展示源 PDF，不要求用户退出应用查找 jsonl 或修改源代码。
+struct SourcePDFPreview: NSViewRepresentable {
+    let path: String
+    let page: Int
+    let regions: [SourceRegion]
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView(); view.autoScales = true; view.displayMode = .singlePageContinuous
+        return view
+    }
+    func updateNSView(_ view: PDFView, context: Context) {
+        let url = URL(fileURLWithPath: path)
+        if view.document?.documentURL != url { view.document = PDFDocument(url: url) }
+        if let document = view.document, let selected = document.page(at: max(0, page - 1)) {
+            if view.currentPage != selected { view.go(to: selected) }
+            // 后端坐标原点在页左上，PDFKit 在左下。旋转页仅定位页码，避免错误高亮。
+            let bounds = selected.bounds(for: .cropBox)
+            view.highlightedSelections = selected.rotation == 0 ? regions.filter { $0.page == page && $0.rect.count == 4 }.compactMap { region in
+                let r = region.rect
+                let box = CGRect(x: bounds.minX + r[0], y: bounds.maxY - r[3], width: r[2] - r[0], height: r[3] - r[1])
+                let selection = selected.selection(for: box)
+                selection?.color = NSColor.systemOrange.withAlphaComponent(0.35)
+                return selection
+            } : []
+        }
+    }
+}
+
+struct RepairWorkbench: View {
+    @ObservedObject var job: TranslationJob
+    let report: RepairReport
+    private var canEdit: Bool { report.actions.contains { $0.key == "e" } }
+    private var submitted: [String: String] {
+        var result: [String: String] = [:]
+        for item in report.items {
+            if let id = item.id, let target = item.target { result[id] = job.repairDrafts[id] ?? target }
+        }
+        return result
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("修复与继续").font(.title2.bold())
+                if let kind = report.classification { Text(kind.title).font(.headline) }
+                Spacer()
+                Button("返回设置（保留断点）") { job.repairReport = nil }.disabled(job.running)
+            }
+            HSplitView {
+                VStack(alignment: .leading) {
+                    Stepper("源 PDF 第 \(job.repairPage) 页", value: $job.repairPage, in: 1...10000)
+                    SourcePDFPreview(path: report.source_pdf ?? job.pdf, page: job.repairPage, regions: report.items.flatMap { $0.regions ?? [] })
+                }.frame(minWidth: 350, idealWidth: 420)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(report.message).font(.headline).textSelection(.enabled)
+                        Text(report.classification?.guidance ?? report.solution).foregroundStyle(.secondary)
+                        ForEach(Array(report.items.enumerated()), id: \.offset) { _, item in
+                            HStack {
+                                Text(item.pageLabel).font(.headline)
+                                if let first = item.pages?.first { Button("定位原页") { job.repairPage = first } }
+                            }
+                            if let id = item.id { Text("片段：\(id)").font(.caption).textSelection(.enabled) }
+                            if let details = item.rule_details, !details.isEmpty {
+                                ForEach(Array(details.enumerated()), id: \.offset) { _, detail in
+                                    Text(detail.title + "：" + detail.message).foregroundStyle(.red).textSelection(.enabled)
+                                    Text(detail.guidance).font(.callout).foregroundStyle(.secondary)
                                 }
+                            } else {
                                 ForEach(Array((item.errors ?? []).enumerated()), id: \.offset) { _, reason in
-                                    Text("违反规则与差异：\(reason)").foregroundStyle(.red).textSelection(.enabled)
+                                    Text("违反规则与差异：" + reason).foregroundStyle(.red).textSelection(.enabled)
                                 }
-                                Text("原文").font(.subheadline.bold())
-                                Text(item.source).textSelection(.enabled)
-                                if let source = item.validation_source {
-                                    Text("校验原文（{vN} 为固定公式/引用占位符）").font(.subheadline.bold())
-                                    Text(source).textSelection(.enabled)
-                                }
-                                if let target = item.target {
-                                    Text("失败译文（本次候选，未通过校验）").font(.subheadline.bold())
-                                    Text(target.isEmpty ? "（空译文）" : target).textSelection(.enabled)
-                                }
-                                Divider()
                             }
-                            if report.items.isEmpty { Text("此错误没有可靠的句级定位。") }
-                            ForEach(Array((report.page_context ?? []).enumerated()), id: \.offset) { _, context in
-                                Text("PDF 第 \(context.page) 页上下文（尚未定位到句）").font(.headline)
-                                Text(context.source).textSelection(.enabled)
+                            Text("原文").font(.subheadline.bold())
+                            Text(item.source).textSelection(.enabled)
+                            if let source = item.validation_source {
+                                Text("校验原文（保留全部 {vN} 固定公式／引用标记）").font(.subheadline.bold())
+                                Text(source).textSelection(.enabled)
                             }
-                            Text(report.solution).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    Text("跳过会保留原文并记录未翻译项；修复失败可以回退。重试可能调用模型并计费。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(report.actions) { action in
+                            if let anchors = item.anchors, !anchors.isEmpty {
+                                Text("固定标记对应原文（只读）").font(.subheadline.bold())
+                                ForEach(anchors.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { key in
+                                    Text(key + " → " + (anchors[key] ?? "")).font(.callout).textSelection(.enabled)
+                                }
+                            }
+                            if let target = item.target {
+                                Text(canEdit ? "修订译文（不删减科学信息）" : "本次失败译文").font(.subheadline.bold())
+                                if canEdit, let id = item.id {
+                                    TextEditor(text: Binding(get: { job.repairDrafts[id] ?? target }, set: { job.repairDrafts[id] = $0 }))
+                                        .font(.body).frame(minHeight: 150).border(Color.secondary.opacity(0.4))
+                                        .disabled(job.running)
+                                } else { Text(target).textSelection(.enabled) }
+                            }
+                            Divider()
+                        }
+                        ForEach(Array((report.page_context ?? []).enumerated()), id: \.offset) { _, context in
+                            Button("查看第 \(context.page) 页上下文") { job.repairPage = context.page }
+                            Text(context.source).textSelection(.enabled)
+                        }
+                        if !job.repairFeedback.isEmpty { Text(job.repairFeedback).textSelection(.enabled).padding(8).background(Color.orange.opacity(0.1)) }
+                    }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(minWidth: 500)
+            }
+            if canEdit {
+                HStack {
+                    Button("校验内容（不保存）") { job.submitEdits(report: report, edits: submitted, checkOnly: true) }
+                    Button("保存修订并继续") { job.submitEdits(report: report, edits: submitted, checkOnly: false) }
+                        .buttonStyle(.borderedProminent)
+                    Text("保存前再次校验；失败不改缓存。可回退。").font(.caption)
+                }.disabled(job.running)
+            }
+            HStack {
+                Button("重新分析版面并复用合格缓存") { job.reanalyze(importCache: true) }
+                Button("新建运行，不导入缓存（可能重新计费）") { job.reanalyze(importCache: false) }
+            }.disabled(job.running)
+            ScrollView(.horizontal) {
+                HStack {
+                    ForEach(report.actions.filter { $0.key != "e" }) { action in
                         Button(action.label) {
                             if action.key == "q" { job.repairReport = nil }
                             else { job.start(repair: action, report: report) }
                         }
                     }
-                    Button("打开源 PDF 核对") { NSWorkspace.shared.open(URL(fileURLWithPath: job.pdf)) }
-                }.padding(24).frame(width: 650, height: 580)
-            }
-            .onAppear {
-                AppDelegate.job = job
-                if !job.modelChoices.contains(job.selectedModel) { job.changeProvider() }
+                }
+            }.disabled(job.running)
+            Text("重试可能调用模型并计费；保留原文属于部分翻译，仍需检查最终 PDF。外部服务或未知结构问题不能靠忽略校验安全解决。")
+                .font(.caption).foregroundStyle(.secondary)
+        }.padding(20).frame(minWidth: 1040, idealWidth: 1140, minHeight: 680, idealHeight: 780)
+            .onAppear { job.repairPage = report.items.first?.pages?.first ?? report.page_context?.first?.page ?? 1; job.repairFeedback = ""
+                if job.editingErrorID != report.error_id { job.repairDrafts = [:]; job.editingErrorID = report.error_id }
             }
     }
 }
@@ -443,7 +666,7 @@ struct RollingProgress: View {
     @StateObject private var job = TranslationJob()
     init() {
         if CommandLine.arguments.contains("--version") {
-            print("PaperLocale macOS 0.8.1")
+            print("PaperLocale macOS 0.8.2")
             exit(0)
         }
     }

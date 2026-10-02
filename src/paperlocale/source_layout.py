@@ -32,6 +32,9 @@ CITATION = re.compile(r'\[\s*\d+(?:\s*[,;–−-]\s*\d+)*\s*\]|'
                       r'August\b|September\b|October\b|November\b|December\b)'
                       r"[A-Z][A-Za-z'’−–-]+(?:\s+(?:[A-Z][A-Za-z'’−–-]+|et|al\.?|and|&))*"
                       r',?\s+(?:18|19|20)\d{2}[a-z]?(?:[,;][^()]*)?\)')
+# 拉丁扩展姓名仍是源引文，保留原字形而不猜测重音拼写或依赖中文字体。
+LEGACY_CITATION = CITATION
+CITATION = re.compile(CITATION.pattern.replace('[A-Z]', '[A-ZÀ-ÖØ-ÞĀ-ž]').replace('[A-Za-z', '[A-Za-zÀ-ÖØ-öø-ž'))
 MATH_FONT = re.compile(r'math|mth|symbol|cmsy|cmmi|cmex|msam|msbm', re.I)
 # 图注编号后须有标点，或以大写词开启图注正文；正文中的“Figure 5
 # displays”和“Figure 2a”不是图注。罗马数字表号同样构成独立标题，
@@ -41,6 +44,7 @@ LEGACY_CAPTION = re.compile(r'^(?:(?:Extended Data|Supplementary)\s+)?(?:Fig(?:u
 CAPTION = re.compile(
     r'^(?i:(?:(?:Extended Data|Supplementary)\s+)?(?:Fig(?:ure)?\.?|Table))'
     r'\s*(?:\d+|[IVXLCDM]+)(?:\s*[.|:]|\s+(?=[A-Z]))')
+APPENDIX_CAPTION = re.compile(CAPTION.pattern.replace(r'\d+|', r'[A-Z]?\d+|'))
 METADATA = re.compile(r'^(?:Received:|Accepted:|Published online:|Check for updates$)', re.I)
 NO_LINE_START = set('，。、；：？！）》」』】％‰,.;:!?%)]}')
 NO_LINE_END = set('（《「『【([{')
@@ -91,12 +95,30 @@ def _superscript(span, line, *, paragraph=False):
     return span['size'] < .95*size or span['origin'][1] < baseline-.2*size
 
 
-def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> list[dict]:
+def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek_variants=True, extended_citations=True, italic_words=False, short_prose=False, script_geometry=False) -> list[dict]:
     """按字符坐标分开普通文字和固定锚点，不用白块覆盖公式/引用。
 
     上标、数学字体及明确引文模式保持原对象。普通斜体不能一律当公式，
     否则会把物种名或强调正文误排除；独立数学区域另外由自动检测保护。
     """
+    if paragraph and script_geometry >= 2:
+        # 正体文字等式也有数学含义，例如 Risk = Hazard × Vulnerability ×
+        # Exposure，且可跨视觉行。只识别由明确操作数/运算符组成的等式；
+        # 在源字符上做标记，按原物理行保留字形，不让模型重写字体或符号。
+        flat = []
+        for source_line in block.get('lines', []):
+            flat.extend(c for s in source_line['spans'] for c in s['chars'])
+            flat.append({'c': '\n'})
+        value = ''.join(c['c'] for c in flat)
+        operand = r'(?:[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9]*|\d+(?:\.\d+)?)'
+        operator = r'\s*[+−*/×÷-]\s*'
+        parenthesized = r'\(\s*' + operand + r'(?:' + operator + operand + r')+\s*\)'
+        atom = r'(?:' + parenthesized + '|' + operand + ')'
+        side = atom + r'(?:' + operator + atom + r')*'
+        for equation in re.finditer(r'(?<![\w])' + side + r'\s*=\s*' + side, value):
+            if re.search(r'[+−*/×÷-]', equation.group()):
+                for char in flat[equation.start():equation.end()]:
+                    char['_plain_math'] = True
     result = []
     # 全行斜体自然语言（常见小节标题）中的短词不是变量。变量混排、
     # 数学字体、真实上下标和希腊字母仍走原保护规则。
@@ -110,7 +132,7 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
                 # 无法重建其字形；保留源字形，不能把控制码当正文传给模型。
                 # 普通正文 U+00AD 是可选断词符，须随正文删除而非重放为
                 # 公式锚点；chars 仍完整保存原字符/坐标，旧模式保持原行为。
-                chars.append({**char, 'fixed': bool(superscript or math_font
+                chars.append({**char, 'fixed': bool(superscript or math_font or char.get('_plain_math')
                                                   or 'native_text' in char or (not char['c'].isprintable()
                                                       and not (paragraph and char['c'] == '\u00ad'))),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
@@ -127,12 +149,21 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
         words = re.findall(r'[A-Za-z]+', text)
         italic_prose = (paragraph and sum(len(w) > 3 for w in words) >= 2 and
                         all(c['italic'] for c in chars if c['c'].isalpha()))
-        for token in re.finditer(r'(?<![A-Za-z])[A-Za-zα-ωΑ-Ω][A-Za-zα-ωΑ-Ω0-9∧]*', text):
+        # ϕ/ϑ/ϖ 等数学变体不在 α–ω 范围内；原字形保护不能依赖中文字体覆盖。
+        # 旧计划按记录的符号规则复核，新提取显式记录修订号，避免暗改缓存身份。
+        greek = 'α-ωΑ-Ω' + ('ϐϑϒϕϖϰϱϲϴϵ϶' if greek_variants and paragraph else '')
+        # 普通斜体连接词/拉丁缩写不构成数学变量。只豁免明确词元；
+        # 数学字体、原生符号、希腊字母与真实上下标仍保留原字形。
+        prose_spans = [m.span() for m in re.finditer(r'\b(?:i\.e\.|e\.g\.)', text)] if italic_words else []
+        for token in re.finditer(r'(?<![A-Za-z])[A-Za-z'+greek+'][A-Za-z'+greek+'0-9∧]*', text):
             run = chars[token.start():token.end()]
-            variable = (bool(re.search('[α-ωΑ-Ω]', token.group())) or
+            prose_word = italic_words and (token.group().lower() in {'the', 'and', 'or', 'for'} or
+                                            short_prose and token.group() in {'to', 'as'} or
+                                            any(a <= token.start() and token.end() <= b for a,b in prose_spans))
+            variable = (bool(re.search('['+greek+']', token.group())) or
                         (paragraph and all(c['italic'] for c in run) and
                          min(c['size'] for c in run) < .85*max(c['size'] for c in run)) or
-                        (not italic_prose and len(token.group()) <= 3 and (run[0]['italic'] or
+                        (not italic_prose and not prose_word and len(token.group()) <= 3 and (run[0]['italic'] or
                          run[0]['fixed'] and any(c['italic'] for c in run)) and
                          not (len(token.group()) > 1 and re.fullmatch(r'-\s*', text[token.end():]))) or
                         (token.group().isupper() and len(token.group()) <= 6 and
@@ -143,6 +174,19 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
         # 带幂的单位可能横跨普通字体与数学上标。已有单位解析器提供明确
         # 量值/复合单位边界；只要其中有数学字形，就整体保留，不能只留 -2
         # 却重写 m。普通正文里的无数学标记量值仍由翻译内容合同校验。
+        if paragraph and script_geometry:
+            # Copernicus 正体 PEI₃₀、二进制 0001₂ 可没有任何上下标 flag。
+            # 同一紧邻词元内同时存在常规字符和缩小且偏离基线的字符才
+            # 保护整个词元；不能只重放下标而重排它的基字，也不靠数字值猜。
+            for token in re.finditer(r'[A-Za-z0-9α-ωΑ-Ω]+', text):
+                run = chars[token.start():token.end()]
+                largest = max(c['size'] for c in run)
+                bases = [c for c in run if c['size'] >= .95*largest]
+                baseline = median(c['origin'][1] for c in bases)
+                if any(c['size'] < .85*largest and abs(c['origin'][1]-baseline) > .08*largest
+                       for c in run):
+                    for char in run:
+                        char['fixed'] = True
         quantities = [(q.start, q.end) for q in find_quantities(text)]
         quantities += [(a, b) for a, b, _ in standalone_units(text)]
         for start, end in quantities:
@@ -158,7 +202,7 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
                 for match in re.finditer(pattern, text):
                     for char in chars[match.start():match.end()]:
                         char['fixed'] = True
-        ranges = [m.span() for pattern in (CITATION, URL_RE) for m in pattern.finditer(text)] + scientific_literal_spans(text)
+        ranges = [m.span() for pattern in (CITATION if extended_citations else LEGACY_CITATION, URL_RE) for m in pattern.finditer(text)] + scientific_literal_spans(text)
         # 实测 (r: 0.79–0.99; p < 0.01) 曾只保留斜体 r/p，数字和
         # 运算符却被重新排字。括号内完全由短变量、数字和数学分隔符构成
         # 且含关系运算符时，保护整个表达式。含自然语言说明的括号不适用。
@@ -269,6 +313,59 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False) -> li
     return result
 
 
+def _protect_group_citations(blocks, groups):
+    """Match complete citations in established reading order, retaining glyph runs."""
+    by_id = {b['id']: b for b in blocks}
+    for group in groups:
+        text, locations, previous = '', [], None
+        for sid in group:
+            for index, part in enumerate(by_id[sid]['parts']):
+                if previous and (part['page'] != previous['page'] or
+                        abs(part['baseline']-previous['baseline']) >= .2*part['size'] or
+                        part['rect'][0]-previous['rect'][2] > .15*part['size']):
+                    text += ' '
+                    locations.append(None)
+                for offset, char in enumerate(part['chars']):
+                    value = char.get('semantic_text', char['text'])
+                    text += value
+                    locations.extend([(sid, index, offset)] * len(value))
+                previous = part
+        fixed = {location for match in CITATION.finditer(text)
+                 for location in locations[match.start():match.end()] if location is not None}
+        for sid in group:
+            parts = []
+            for index, part in enumerate(by_id[sid]['parts']):
+                if part['fixed'] or not any((sid, index, i) in fixed for i in range(len(part['chars']))):
+                    parts.append(part)
+                    continue
+                runs = []
+                for offset, char in enumerate(part['chars']):
+                    protected = (sid, index, offset) in fixed
+                    if not runs or runs[-1][0] != protected:
+                        runs.append((protected, []))
+                    runs[-1][1].append(char)
+                for protected, chars in runs:
+                    value = ''.join(c.get('semantic_text', c['text']) for c in chars)
+                    if not value.strip():
+                        continue
+                    bounds = fitz.Rect(chars[0]['rect'])
+                    for char in chars[1:]:
+                        bounds |= fitz.Rect(char['rect'])
+                    parts.append({**part, 'fixed': protected, 'text': value,
+                                  'rect': list(bounds), 'chars': chars})
+            by_id[sid]['parts'] = parts
+    # A standalone wrapped citation has no prose to translate. Mixed groups
+    # retain their citation-only continuation frames for native glyph placement.
+    retained = []
+    for group in groups:
+        if any(not p['fixed'] for sid in group for p in by_id[sid]['parts']):
+            retained.append(group)
+        else:
+            for sid in group:
+                by_id[sid]['kind'] = 'formula'
+    return retained
+
+
 # 辅助章节按阅读顺序持续保护，直到再次遇到明确的正文一级标题。
 # 有些期刊把 Methods 放在 References 之后，不能把参考文献之后一律排除。
 AUXILIARY_HEADING = re.compile(
@@ -288,14 +385,14 @@ MAIN_HEADING = re.compile(
     r"[.:]?$", re.I)
 
 
-def _preserve_front_matter(blocks: list[dict], *, paragraph=False) -> None:
+def _preserve_front_matter(blocks: list[dict], *, paragraph=False, first_page=1, middle_dot_names=False, asce_credentials=False, spaced_names=False, pipe_names=False) -> None:
     """保护显著大号主标题下、摘要/长正文之前的作者与机构。
 
     短作者名单不一定带多个逗号，不能仅依赖人数。这里联合字号、页面位置
     以及姓名/机构文字证据；不把所有短行都当成作者，也不翻译姓名推测汉字。
     没有可辨识标题层次时不据此扩大保护范围，交由其他分类证据处理。
     """
-    first = [b for b in blocks if b['page'] == 1 and b['kind'] == 'body' and b['parts']]
+    first = [b for b in blocks if b['page'] == first_page and b['kind'] == 'body' and b['parts']]
     if len(first) < 2:
         return
     size = lambda b: median(p['size'] for p in b['parts'])
@@ -317,10 +414,18 @@ def _preserve_front_matter(blocks: list[dict], *, paragraph=False) -> None:
             # 字母机构上标可能紧贴姓氏（例如Singh后接d,e），不能用
             # 普通字符串删除a–f猜姓名。只在原字号明显较小的上标处
             # 加分隔符供姓名结构识别；最终整个作者块仍保留原PDF。
+            # parts 已去除各片段边缘空格；新计划在识别副本中恢复词界，
+            # 防止 Qimin + Deng 被拼成 QiminDeng。旧计划保留原识别路径。
             normal = max(p['size'] for p in block['parts'])
-            name_text = ''.join(p['text'] if p['size'] >= .85*normal else ',' for p in block['parts'])
+            name_text = (' ' if spaced_names else '').join(p['text'] if p['size'] >= .85*normal else ',' for p in block['parts'])
+        # ASCE 姓名后带会员资格，如 Aff.M.ASCE / M.ASCE；它不是作者
+        # 姓名的一部分，只在该刊首页作者识别的临时副本中移除。
+        if asce_credentials:
+            name_text = re.sub(r'\s*,?\s*(?:Aff\.)?M\.ASCE\b', '', name_text)
+        if pipe_names:
+            name_text = name_text.replace("|", ";")
         names = re.sub(r"[\d*†‡]+", "", name_text).strip()
-        names = re.split(r"\s*(?:,|;|&|\band\b)\s*", names)
+        names = re.split(r"\s*(?:,|;|&|·|\band\b)\s*" if middle_dot_names else r"\s*(?:,|;|&|\band\b)\s*", names)
         name_pattern = r"(?:[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*\s+){1,5}[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*"
         is_name = (all(re.fullmatch(name_pattern, name.strip()) for name in names if name.strip())
                    if paragraph else all(re.fullmatch(name_pattern, name) for name in names))
@@ -334,7 +439,8 @@ def _preserve_front_matter(blocks: list[dict], *, paragraph=False) -> None:
             block['kind'] = 'preserve'
 
 
-def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False) -> None:
+def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False,
+                                 visual_boundaries=False, frontiers_sidebar_page=None) -> None:
     """原位设置辅助文本分类；小标题与跨页后续内容都不发给翻译器。
 
     输入为已按阅读顺序排列的源块。依赖明确章节名称，不根据一般正文中
@@ -342,6 +448,18 @@ def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False) -> None
     这是自动识别规则而非任意文档的语义证明，未知版式仍受后续质量门禁约束。
     """
     auxiliary = False
+    sidebar_right = None
+    if frontiers_sidebar_page is not None:
+        first = [b for b in blocks if b['page'] == frontiers_sidebar_page and b['parts']]
+        titles = [b for b in first if b['kind'] == 'body']
+        if titles:
+            size = lambda b: median(p['size'] for p in b['parts'])
+            title = max(titles, key=size)
+            if (size(title) >= median(size(b) for b in first) + 1
+                    and title['rect'][2]-title['rect'][0] > .35*title['page_width']
+                    and any(b['text'].strip().upper() == 'OPEN ACCESS'
+                            and b['rect'][2] < title['rect'][0] for b in first)):
+                sidebar_right = title['rect'][0]
     # 新段落模式翻译摘要、致谢、数据/代码声明、贡献和利益声明等阅读内容。
     # 仅出版服务信息、作者机构和书目继续保护；旧模式保持既有缓存含义。
     preserved_heading = re.compile(
@@ -349,6 +467,17 @@ def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False) -> None
         r"affiliations?|publisher[’']s note|open access|correspondence|peer review information|"
         r"reprints and permissions)(?:[.:]?(?:\s|$))", re.I)
     for block in blocks:
+        if (sidebar_right is not None and block['page'] == frontiers_sidebar_page
+                and block['rect'][2] <= sidebar_right):
+            # Frontiers' narrow publication sidebar is geometrically separate
+            # from its unlabelled abstract. Its OPEN ACCESS state cannot leak
+            # into the main column, or carry onto the next article page.
+            if block['kind'] == 'body':
+                block['kind'] = 'preserve'
+                block['preserve_reason'] = 'Frontiers 首页出版信息侧栏原样保留'
+            continue
+        if visual_boundaries and block['kind'] in {'table','figure','formula','caption','header-footer'}:
+            continue
         value = block['text']
         match = AUXILIARY_HEADING.match(value)
         # 附录可能放在致谢后、书目前，仍含需要翻译的科学论证。仅接受
@@ -447,7 +576,207 @@ def normalize_traced_spaces(raw, traces, *, repeated_spaces=False):
                         char['c'] = ' '
 
 
-def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True) -> dict:
+def normalize_nonadvancing_spaces(raw):
+    """去掉实际占位为零的空格；不按词典猜词，不移除有可见字距的单位间隔。
+
+    出版辅助 U+200B 在内存解包后可能成为 space 字形，但其下一字母
+    与空格同原点。该空格不产生视觉间隔，却会把 mainland 拆成 m a i n…。
+    仅用同一水平行内的同原点证据；普通空格和跨行间隔均保持。
+    """
+    for block in raw:
+        for line in block.get('lines', []):
+            if tuple(line['dir']) != (1, 0):
+                continue
+            chars = [c for span in line['spans'] for c in span['chars']]
+            discard = {id(a) for a, b in zip(chars, chars[1:])
+                       if a['c'] == ' ' and not b['c'].isspace()
+                       and all(abs(x-y) < .01 for x, y in zip(a['origin'], b['origin']))}
+            for span in line['spans']:
+                span['chars'] = [c for c in span['chars'] if id(c) not in discard]
+
+
+def _preserve_vector_fractions(source, blocks, *, include_label=False, glyph_structure=False):
+    """有原生横线的短行内分式整体原位保留，不能只让字形随中文流动。
+
+    输入是已分类的标准文本块。要求细短水平矢量线、紧贴线两侧的数学
+    字形、相同横向范围共同提供证据；普通下划线和表格线不满足此条件。
+    不猜测分式含义，不重画横线，分子分母和源路径继续接受保护区核验。
+    """
+    def slice_part(part, start, end):
+        chars = part['chars'][start:end]
+        bounds = fitz.Rect(chars[0]['rect'])
+        for char in chars[1:]:
+            bounds |= fitz.Rect(char['rect'])
+        return {**part, 'chars': chars, 'text': ''.join(c['text'] for c in chars),
+                'rect': list(bounds)}
+
+    detached = []
+    with open_source_pdf(source) as document:
+        for number, page in enumerate(document, 1):
+            candidates = [(b, p) for b in blocks if b['page'] == number
+                          and b['kind'] in {'body', 'caption'} for p in b['parts'] if p['fixed']]
+            for drawing in page.get_drawings():
+                r = fitz.Rect(drawing['rect'])
+                if (drawing['type'] != 's' or len(drawing['items']) != 1
+                        or drawing['items'][0][0] != 'l' or r.height > .01
+                        or not 5 < r.width < 100 or drawing['width'] > 1):
+                    continue
+                slices = []
+                if glyph_structure:
+                    # 分子可与 LMF = 或其他文字合成宽锚点；按横线内的真实
+                    # 字形截取，不能放宽整个锚点左界而把邻近正文一并保护。
+                    selected = []
+                    for block, part in candidates:
+                        if part not in block['parts']:
+                            continue
+                        chars = part['chars']
+                        indices = [i for i, c in enumerate(chars) if c['text'].strip()
+                                   and r.x0-1 <= c['rect'][0] and c['rect'][2] <= r.x1+1]
+                        # 距横线近的基字只负责确认此数学 run 属于分式。
+                        # _parts 已把同一物理行的相连数学字形绑定为 run；
+                        # 一旦确认就保留横线范围内的整个 run，包括低位尾下标，
+                        # 不能按每个字符到横线的距离再次截断分子或分母。
+                        if not any(abs(chars[i]['origin'][1]-r.y0) <
+                                   max(part['size'],chars[i]['rect'][3]-chars[i]['rect'][1])
+                                   for i in indices):
+                            continue
+                        start, end = min(indices), max(indices)+1
+                        prefix = ''.join(c['text'] for c in chars[:start])
+                        label = re.search(r'(?<!\w)(?:[A-Z]{2,8}\s*)?=\s*$', prefix)
+                        if include_label and label:
+                            offsets = [0]
+                            for char in chars[:start]:
+                                offsets.append(offsets[-1]+len(char['text']))
+                            if label.start() in offsets:
+                                first = offsets.index(label.start())
+                                label_chars = [c for c in chars[first:start] if c['text'].strip()]
+                                if max(c['origin'][1] for c in label_chars)-min(c['origin'][1] for c in label_chars) < 1:
+                                    start = first
+                        anchor = slice_part(part, start, end)
+                        selected.append((block, anchor))
+                        slices.append((block, part, start, end, anchor))
+                else:
+                    selected = [(b, p) for b, p in candidates
+                                if p in b['parts'] and p['rect'][0] >= r.x0-3*p['size']
+                                and p['rect'][2] <= r.x1+1
+                                and p['rect'][2] > r.x0
+                                and abs(p['baseline']-r.y0) < 1.2*p['size']]
+                # 必须实际有字形基线位于横线上下，且不是两条普通正文行。
+                above = [p for _, p in selected if any(
+                    r.x0-1 <= c['origin'][0] <= r.x1 and 0 < r.y0-c['origin'][1] < p['size']
+                    for c in p['chars'] if c['text'].strip())]
+                below = [p for _, p in selected if any(
+                    r.x0-1 <= c['origin'][0] <= r.x1 and 0 < c['origin'][1]-r.y0 < p['size']
+                    for c in p['chars'] if c['text'].strip())]
+                if not above or not below or (not glyph_structure and len(selected) < 2):
+                    continue
+                if glyph_structure:
+                    def embedded_in_prose(part):
+                        block = next(b for b, p in selected if p is part)
+                        neighbors = [p for p in block['parts'] if not p['fixed']
+                                     and re.search(r'[A-Za-z]{2,}', p['text'])
+                                     and abs(p['baseline']-part['baseline']) < .15*part['size']
+                                     and abs(p['size']-part['size']) < .1*part['size']]
+                        return (any(p['rect'][0] < part['rect'][0]
+                                    and abs(part['rect'][0]-p['rect'][2]) < part['size'] for p in neighbors)
+                                and any(p['rect'][2] > part['rect'][2]
+                                        and abs(p['rect'][0]-part['rect'][2]) < part['size'] for p in neighbors))
+                    # Two variables embedded in ordinary prose on both baselines
+                    # are not a numerator/denominator. Keep their movable anchors;
+                    # an underline between the lines must not remove either variable
+                    # from the sentences sent for translation.
+                    if all(embedded_in_prose(p) for p in above+below):
+                        continue
+                for block, part, start, end, anchor in slices:
+                    index = block['parts'].index(part)
+                    before = [slice_part(part, 0, start)] if start else []
+                    after = [slice_part(part, end, len(part['chars']))] if end < len(part['chars']) else []
+                    block['parts'][index:index+1] = before + [anchor] + after
+                    candidates.extend((block, p) for p in before+after)
+                if include_label:
+                    # 紧邻等号的 LMF 等拉丁标识与分式一起保留，避免中文
+                    # 段落变短后“LMF”和等号相隔数行。仅拆出同基线的
+                    # 全大写词尾，前面的自然语言仍交给翻译，不猜变量名。
+                    for block, anchor in list(selected):
+                        if not anchor['text'].lstrip().startswith('='):
+                            continue
+                        index = block['parts'].index(anchor)
+                        if index == 0:
+                            continue
+                        previous = block['parts'][index-1]
+                        raw = ''.join(c['text'] for c in previous['chars'])
+                        match = re.search(r'\b[A-Z]{2,8}$', raw)
+                        equals = next((c for c in anchor['chars'] if c['text'] == '='), None)
+                        if (previous['fixed'] or not match or not equals
+                                or abs(previous['baseline']-equals['origin'][1]) > 1
+                                or abs(previous['rect'][2]-anchor['rect'][0]) > 1):
+                            continue
+                        if match.start() == 0:
+                            previous['fixed'] = True
+                            selected.insert(0, (block, previous))
+                            continue
+                        label = {**previous, 'fixed': True, 'text': match.group(),
+                                 'chars': previous['chars'][match.start():]}
+                        box = fitz.Rect(label['chars'][0]['rect'])
+                        for char in label['chars'][1:]:
+                            box |= fitz.Rect(char['rect'])
+                        label['rect'] = list(box)
+                        previous['chars'] = previous['chars'][:match.start()]
+                        previous['text'] = raw[:match.start()]
+                        box = fitz.Rect(previous['chars'][0]['rect'])
+                        for char in previous['chars'][1:]:
+                            box |= fitz.Rect(char['rect'])
+                        previous['rect'] = list(box)
+                        block['parts'].insert(index, label)
+                        selected.insert(0, (block, label))
+                parts = [p for _, p in selected]
+                bounds = fitz.Rect(parts[0]['rect'])
+                for part in parts[1:]:
+                    bounds |= fitz.Rect(part['rect'])
+                if glyph_structure:
+                    bounds |= fitz.Rect(r.x0, r.y0-max(.01, drawing['width']/2),
+                                        r.x1, r.y1+max(.01, drawing['width']/2))
+                value = ' '.join(p['text'] for p in parts)
+                template = selected[0][0]
+                detached.append({**template, 'id': segment_id(json.dumps([number, list(bounds), value])),
+                                 'kind': 'formula', 'rect': list(bounds), 'text': value, 'parts': parts})
+                for block, part in selected:
+                    block['parts'].remove(part)
+                    block['text'] = _plain(' '.join(p['text'] for p in block['parts']))
+    blocks[:] = [b for b in blocks if b['parts']] + detached
+
+
+def _detach_formula_openers(blocks):
+    """把误挂在正文末尾的独立开括号归回相邻公式；原字符和坐标保持不变。"""
+    # 原生块可把下一行公式的左括号挂到上一段末尾。若该独立左括号
+    # 紧接同页的固定公式，原位保留它，不能把它移到中文段落末端。
+    # 只接纳纯开括号和横向相邻证据，不扩大到普通文字或完整行内式。
+    formulas = [b for b in blocks if b['kind'] == 'formula']
+    detached = []
+    for body in blocks:
+        if body['kind'] != 'body' or len(body['parts']) < 2:
+            continue
+        part = body['parts'][-1]
+        if not part['fixed'] or not re.fullmatch(r'[({\[]', part['text'].strip()):
+            continue
+        a = fitz.Rect(part['rect'])
+        if not any(f['page'] == body['page'] and 0 <= f['rect'][0]-a.x1 < .5*part['size']
+                   and min(a.y1,f['rect'][3]) > max(a.y0,f['rect'][1]) for f in formulas):
+            continue
+        body['parts'] = body['parts'][:-1]
+        # parts 已是标准化文本 run，坐标键为 rect；原始 chars 才使用 bbox。
+        # 去掉独立括号后用剩余 run 的边界重算正文框，不能沿用含公式的旧框。
+        bounds = fitz.Rect(body['parts'][0]['rect'])
+        for remaining_part in body['parts'][1:]:
+            bounds |= fitz.Rect(remaining_part['rect'])
+        body['rect'] = list(bounds)
+        body['text'] = _plain(' '.join(p['text'] for p in body['parts']))
+        detached.append({**body, 'id': segment_id(json.dumps([part['page'], part['rect'], part['text']])),
+                         'kind': 'formula', 'parts': [part], 'rect': part['rect'], 'text': part['text']})
+    blocks.extend(detached)
+
+
+def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 4, frontmatter_after_cover: bool = True, publisher_font_styles: bool = True, nonadvancing_spaces: bool = True, extended_citations: int = 2, middle_dot_names: bool = True, publisher_layout: bool = True, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, reading_structure: int = 5, script_geometry: int = 2) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
@@ -456,10 +785,14 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     # preserved 旧断点逐字核对旧自动计划；修复只用于新的段落模式，
     # 避免改变已发布旧引擎的保护区域和缓存身份。
     corpus_evidence = corpus_evidence and paragraph
-    caption_pattern = CAPTION if paragraph else LEGACY_CAPTION
-    _, _, _, references = _reference_geometry(source)
+    greek_variants = paragraph and symbol_revision >= 1
+    caption_pattern = (APPENDIX_CAPTION if reading_structure >= 3 else CAPTION) if paragraph else LEGACY_CAPTION
+    _, _, _, references = _reference_geometry(source, supplementary_boundary=paragraph and reading_structure,
+                                               styled_boundaries=paragraph and reading_structure >= 2,
+                                               visual_exclusions=[r for r in (detections or []) if r['kind'] in {'table','figure'}]
+                                               if paragraph and reading_structure >= 5 else None)
     blocks, protected, issues = [], [], []
-    from .journals import identify_journal, auxiliary_page, preserve_line
+    from .journals import identify_journal, auxiliary_page, preserve_line, publisher_style_flags
     journal = identify_journal(source) if paragraph and journal_adapt else None
     symbol_cache = {}
     # 版面计划沿用源描述符坐标，保持已有段落身份与译文缓存；只有实际
@@ -531,6 +864,25 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     boxes = [piece for box in boxes for piece in (
                         [{**box, 'rect': list(r)} for r in writing_rectangles(box['rect'], holes)]
                         if box['kind'] == 'reference' else [box])]
+            if paragraph and reading_structure >= 2:
+                auxiliary_reading = []
+                for native in page.get_text('dict')['blocks']:
+                    lines = native.get('lines', [])
+                    if not lines or not lines[0]['spans']:
+                        continue
+                    first_span = lines[0]['spans'][0]
+                    label = first_span['text'].strip().rstrip(':.' if reading_structure >= 3 else ':')
+                    if (_bold(first_span, paragraph=True) and re.fullmatch(
+                            r'Acknowledg(?:e)?ments|Author contributions|Competing interests|'
+                            r'Data availability|Code availability', label, re.I) or
+                            reading_structure >= 3 and _bold(first_span, paragraph=True) and
+                            len(label.split()) <= 18 and re.fullmatch(r'Appendix\s+[A-Z0-9]+[:.]\s+.+', label)):
+                        auxiliary_reading.append(fitz.Rect(native['bbox']))
+                if auxiliary_reading:
+                    holes = [fitz.Rect(r.x0-.5, r.y0-.5, r.x1+.5, r.y1+.5) for r in auxiliary_reading]
+                    boxes = [piece for box in boxes for piece in (
+                        [{**box, 'rect': list(r)} for r in writing_rectangles(box['rect'], holes)]
+                        if box['kind'] == 'header-footer' else [box])]
             protected.extend(b for b in boxes if not paragraph or b['kind'] != 'caption')
             # 同一坐标可能有不可见OCR层与可见文字重叠：只有全部绘制记录
             # 都不着色才认定为非打印对象，不能因一份隐藏副本而排除可见正文。
@@ -540,6 +892,17 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 for code, _, origin, _ in span['chars']:
                     paint.setdefault((code, round(origin[0], 3), round(origin[1], 3)), []).append(hidden)
             raw = page.get_text('rawdict')['blocks']
+            if publisher_font_styles and paragraph and journal and (journal['family'] == 'asce' or
+                    reading_structure >= 2 and journal['family'] == 'science'):
+                # ASCE 的 AdvOT 子集字体 .BI / .B / .I 明示字重，但 PDF flags
+                # 可能只写 serif。恢复该刊明确命名的样式，防止 RF 等小标题
+                # 与下方正文连成一段、把中文正文塞进仅两字宽的标题框。
+                # 只改内存中的分类证据；源文件和字形对象保持不变。
+                for native in raw:
+                    for line in native.get('lines', []):
+                        for span in line['spans']:
+                            span['flags'] = publisher_style_flags(journal['family'], span['font'], span['flags'],
+                                                                       science_styles=reading_structure >= 2)
             if number in watermarks:
                 # 显式 /Artifact /Watermark 背景单独保留原绘制层；仅移出
                 # 与隔离层字符逐项一致的原生行，不能用字符串忽略正文。
@@ -549,12 +912,14 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                for span in line['spans'] for c in span['chars'])]}
                        if 'lines' in b else b for b in raw]
             normalize_traced_spaces(raw, page.get_texttrace(), repeated_spaces=corpus_evidence)
+            if paragraph and nonadvancing_spaces:
+                normalize_nonadvancing_spaces(raw)
             if paragraph:
                 from .source_symbols import restore_source_symbols
                 restore_source_symbols(page, raw, symbol_cache)
                 if corpus_evidence:
                     from .source_symbols import restore_verified_symbols
-                    restore_verified_symbols(page, raw, symbol_cache)
+                    restore_verified_symbols(page, raw, symbol_cache, printable_math=symbol_revision >= 3, latin_math=symbol_revision >= 4)
             text_blocks = []
             for native in raw:
                 if not native.get('lines'):
@@ -650,7 +1015,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     if index in markers and role == 'body':
                         role = 'preserve'
                     reason = _nonprinting_line(page, line, paint) if role == 'body' else None
-                    journal_reason = preserve_line(journal, page, line, cover_reason) if journal else None
+                    journal_reason = preserve_line(journal, page, line, cover_reason, publication_labels=reading_structure >= 2) if journal else None
                     reason = journal_reason or reason
                     if reason:
                         role = 'preserve'
@@ -662,12 +1027,15 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                    for c in s['chars'] if not c['c'].isspace()]
                     style = (median(s[0] for s in style_chars),
                              sum(s[1] for s in style_chars) > len(style_chars) / 2) if style_chars else (0, False)
+                    if reading_structure >= 4:
+                        style += (all(s['flags'] & 2 for s in line['spans']),)
                     changed = (split and role == 'body' and not caption_pattern.match(native_text) and
-                               (abs(split[-1]['_style'][0] - style[0]) > .6 or split[-1]['_style'][1] != style[1]))
+                               (abs(split[-1]['_style'][0] - style[0]) > .6 or split[-1]['_style'][1] != style[1]
+                                or reading_structure >= 4 and style[1] and split[-1]['_style'][2] != style[2]))
                     paragraph_break = False
                     if paragraph and split and role == 'body' and not caption_pattern.match(native_text):
                         from .paragraph_layout import starts_paragraph
-                        paragraph_break = starts_paragraph(native['lines'], split[-1]['lines'], line)
+                        paragraph_break = starts_paragraph(native['lines'], split[-1]['lines'], line, dash_lists=dash_lists, structured_headings=reading_structure >= 2)
                     if not split or paragraph_break or index in list_starts or split[-1]['_role'] != role or split[-1]['_reason'] != reason or changed:
                         split.append({'lines': [], 'bbox': list(lr), '_role': role, '_style': style,
                                       '_reason': reason, '_list_start': index in list_starts})
@@ -708,9 +1076,10 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                         for line in block['lines'])
                 else:
                     numbered_entries = len(re.findall(r'(?:^|\s)\d{1,3}\.\s+[A-Z]', value))
-                if re.match(r'^References(?:\s|$)', value, re.I) or (
+                if (not paragraph or reading_structure < 5 or kind in {'body','reference'}) and (
+                        re.match(r'^References(?:\s|$)', value, re.I) or (
                         numbered_entries >= 2 and
-                        len(re.findall(r'\b(?:19|20)\d{2}\b', value)) >= 2):
+                        len(re.findall(r'\b(?:19|20)\d{2}\b', value)) >= 2)):
                     kind = 'reference'
                 if METADATA.match(value):
                     kind = 'header-footer'
@@ -718,10 +1087,17 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if (number == 1 and rect.y1 < page.rect.height / 2 and value.count(',') >= 4
                         and len(words) > 8 and sum(w[0].isupper() for w in words) / len(words) > .8):
                     kind = 'preserve'
-                parts = _parts(block, number, page.get_links(), paragraph=paragraph)
+                parts = _parts(block, number, page.get_links(), paragraph=paragraph, greek_variants=greek_variants, extended_citations=paragraph and extended_citations, italic_words=paragraph and italic_words, short_prose=paragraph and short_prose, script_geometry=paragraph and script_geometry)
                 # 只有原位数学/引用锚点的片段没有可翻译正文，直接保护；
                 # 例如被出版社拆成独立文本块的行内下标表达式。
                 if kind == 'body' and parts and all(p['fixed'] for p in parts):
+                    kind = 'formula'
+                # 出版社将行内公式拆为独立块，分号/括号仍可能使用正文字体。
+                # 只有确定锚点和数学标点、没有任何可翻译词的块整体保留；
+                # 不把带“where/and”等解释文字的句子误归为公式。
+                if (paragraph and symbol_revision >= 2 and kind == 'body' and parts
+                        and any(p['fixed'] for p in parts)
+                        and all(p['fixed'] or re.fullmatch(r'[\s,;:().\[\]{}]+', p['text']) for p in parts)):
                     kind = 'formula'
                 if paragraph and number == 1 and (
                         re.match(r'^(?:Received|Accepted)\s+\d', value) or
@@ -752,7 +1128,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                'preserve_reason': block['_reason'],
                                'italic': all(s['flags'] & 2 for l in block['lines'] for s in l['spans']),
                                'heading': bool(paragraph and re.match(r'^[a-z]\.\s+[A-Z]', value) and
-                                   all(s['flags'] & 2 for l in block['lines'] for s in l['spans'])),
+                                   all(s['flags'] & 2 for l in block['lines'] for s in l['spans']) or
+                                   paragraph and publisher_layout and journal and journal['family'] == 'asce'
+                                   and kind == 'body' and value in {'Results', 'Discussion', 'Conclusions'}),
                                'page_width': page.rect.width})
     if corpus_evidence:
         # PDF 可把行内分式的横线和分母另写成原生块。分子已作为行内
@@ -782,6 +1160,11 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     anchor['rect'] = list(fitz.Rect(anchor['rect']) | r)
                     absorbed.add(formula['id'])
         blocks = [b for b in blocks if b['id'] not in absorbed]
+    if paragraph and vector_fractions:
+        _preserve_vector_fractions(source, blocks, include_label=fraction_labels,
+                                   glyph_structure=fraction_structure and fraction_labels)
+    if paragraph and formula_openers:
+        _detach_formula_openers(blocks)
     # 期刊图注也会分成左右两栏；视觉模型有时只识别带 Fig. 标题的一栏。
     # 将同页、同字号、横向相邻且垂直带重合的另一栏归入图注，避免把它
     # 拼进跨页正文。该几何证据不延伸到下方独立正文，也不要求人工改计划。
@@ -804,8 +1187,16 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     # 页内先判断是否确有双栏，再按栏阅读。通栏标题必须与下方双栏分开；
     # 这仍是自动排序启发式，不代表任意版式的语义完整性已得到证明。
     blocks.sort(key=lambda b: (b['page'], int(b['rect'][0] >= b['page_width'] / 2), b['rect'][1]))
-    _preserve_front_matter(blocks, paragraph=paragraph)
-    _preserve_auxiliary_sections(blocks, paragraph=paragraph)
+    # 机构封面可占 PDF 第1页，真正的文章首页在第2/3页。只沿用已有
+    # 姓名/机构证据和标题边界，不能把“第1个PDF页面”等同于文章首页。
+    first_article = min((b['page'] for b in blocks if b['kind'] == 'body'), default=1) if paragraph and frontmatter_after_cover else 1
+    _preserve_front_matter(blocks, paragraph=paragraph, first_page=first_article, middle_dot_names=middle_dot_names,
+                           asce_credentials=publisher_layout and journal and journal['family'] == 'asce',
+                           spaced_names=spaced_names, pipe_names=reading_structure)
+    _preserve_auxiliary_sections(blocks, paragraph=paragraph,
+        visual_boundaries=paragraph and reading_structure >= 5,
+        frontiers_sidebar_page=first_article if paragraph and reading_structure >= 5
+        and journal and journal['family'] == 'frontiers' else None)
     if paragraph:
         if corpus_evidence:
             # 作者、通讯标记等在最终前置信息分类后已原样保留，不能继续
@@ -816,7 +1207,28 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                         for c in block['text']):
                     issues.append(f'第{block["page"]}页待译区域有未解决的异常编码；需核对局部 OCR 与源字形')
         from .paragraph_layout import paragraph_groups
+        groups = paragraph_groups(blocks, section_boundaries=section_boundaries,
+                                  mixed_first_page=content_geometry, dash_lists=dash_lists,
+                                  pipe_headings=reading_structure, structured_headings=reading_structure >= 2,
+                                  appendix_captions=reading_structure >= 3, heading_styles=reading_structure >= 4)
+        if extended_citations >= 2:
+            groups = _protect_group_citations(blocks, groups)
         return {'schema': 2, **({'journal': journal} if journal else {}),
+                **({'symbol_revision': symbol_revision} if symbol_revision else {}),
+                **({'frontmatter_revision': 2} if frontmatter_after_cover else {}),
+                **({'reading_structure_revision': int(reading_structure)} if reading_structure else {}),
+                **({'script_geometry_revision': int(script_geometry)} if script_geometry else {}),
+                **({'publisher_font_revision': 1} if publisher_font_styles else {}),
+                **({'spacing_revision': 1} if nonadvancing_spaces else {}),
+                **({'author_separator_revision': 1} if middle_dot_names else {}),
+                **({'publisher_layout_revision': 1} if publisher_layout else {}),
+                **({'citation_revision': int(extended_citations)} if extended_citations else {}),
+                **({'prose_revision': 2 if short_prose else 1} if italic_words else {}),
+                **({'formula_opener_revision': 1} if formula_openers else {}),
+                **({'dash_list_revision': 1} if dash_lists else {}),
+                **({'author_spacing_revision': 1} if spaced_names else {}),
+                **({'vector_fraction_revision': 3 if fraction_labels and fraction_structure else
+                    2 if fraction_labels else 1} if vector_fractions else {}),
                 **({'grouping_revision': 2} if section_boundaries else {}),
                 **({'reference_revision': 2} if reference_line_starts else {}),
                 **({'geometry_revision': 2} if content_geometry else {}),
@@ -825,8 +1237,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     for n, value in watermarks.items()]} if corpus_evidence and paragraph else {}),
                 'source_sha256': digest(source), 'blocks': blocks,
                 'protected_regions': protected,
-                'groups': paragraph_groups(blocks, section_boundaries=section_boundaries,
-                                           mixed_first_page=content_geometry), 'issues': issues}
+                'groups': groups, 'issues': issues}
     bodies = [b for b in blocks if b['kind'] == 'body']
     groups = []
     for body in bodies:
@@ -860,7 +1271,24 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
                             section_boundaries=plan.get('grouping_revision') == 2,
                             reference_line_starts=plan.get('reference_revision') == 2,
                             content_geometry=plan.get('geometry_revision') == 2,
-                            corpus_evidence=plan.get('evidence_revision') == 1)
+                            corpus_evidence=plan.get('evidence_revision') == 1,
+                            symbol_revision=plan.get('symbol_revision', 0),
+                            frontmatter_after_cover=plan.get('frontmatter_revision') == 2,
+                            publisher_font_styles=plan.get('publisher_font_revision') == 1,
+                            extended_citations=plan.get('citation_revision', 0),
+                            nonadvancing_spaces=plan.get('spacing_revision') == 1,
+                            middle_dot_names=plan.get('author_separator_revision') == 1,
+                            publisher_layout=plan.get('publisher_layout_revision') == 1,
+                            italic_words=plan.get('prose_revision') in {1, 2},
+                            short_prose=plan.get('prose_revision') == 2,
+                            formula_openers=plan.get('formula_opener_revision') == 1,
+                            dash_lists=plan.get('dash_list_revision') == 1,
+                            spaced_names=plan.get('author_spacing_revision') == 1,
+                            vector_fractions=plan.get('vector_fraction_revision') in {1, 2, 3},
+                            fraction_labels=plan.get('vector_fraction_revision') in {2, 3},
+                            fraction_structure=plan.get('vector_fraction_revision') == 3,
+                            reading_structure=plan.get('reading_structure_revision', 0),
+                            script_geometry=plan.get('script_geometry_revision', 0))
     if plan != actual:
         raise ValueError('自动版面计划与源文件/检测结果不一致；拒绝人工改写或过期缓存')
     skip_block_ids = skip_block_ids or set()
@@ -1274,6 +1702,14 @@ def verify_unchanged(source: Path, candidate: Path, editable: list[dict], *, sca
                     ink = body_masks[number].point(lambda value: 255 if value else 0)
                     diff.paste((0, 0, 0), mask=ink)
                 if diff.getbbox():
-                    raise ValueError(f'第{number}页正文区域外像素改变，拒绝发布候选')
+                    from .diagnostics import LocatedError
+                    region = [v/scale for v in diff.getbbox()]
+                    # 差异区不一定属于某个句子；显示真实像素范围及该范围
+                    # 的原页上下文，不把邻近正文伪称为已定位的失败译文。
+                    raise LocatedError(f'第{number}页正文区域外像素改变，拒绝发布候选', [{
+                        'pages': [number], 'source': a.get_textbox(fitz.Rect(region)),
+                        'regions': [{'page': number, 'rect': region}],
+                        'errors': ['preservation.pixels 原文保护范围出现可见差异；可能存在越界排字、位移或源内容缺失。'],
+                    }], 'preservation')
             pages.append({'page': number, 'outside_pixels_equal': True})
     return {'dpi': scale * 72, 'pages': pages}

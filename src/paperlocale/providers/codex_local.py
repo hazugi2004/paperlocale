@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import shutil
 import subprocess
@@ -93,6 +94,40 @@ def _parse_keyed_response(text: str, segments: list[Segment]) -> list[Translatio
 REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 
 
+def _run_codex(
+    command: list[str], *, timeout: float, input: str | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Own one CLI process group so failed calls cannot overlap their retries.
+
+    macOS/Linux descendants inherit this session's process group. No global
+    process lookup or PID tree traversal is needed. Detached sessions are outside
+    this boundary; Codex must not daemonize its work. Other platforms need an
+    equivalent containment mechanism before they can safely run this provider.
+    """
+    if os.name != "posix":
+        raise NotImplementedError("Codex 本地 Provider 的安全进程组管理目前仅支持 macOS/Linux（POSIX）")
+    with subprocess.Popen(
+        command, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", cwd=cwd, start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+        except BaseException:
+            # Kill the group even when the leader has exited: descendants may
+            # still hold its stdout/stderr pipes open. Never use our own group.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            # Reap the child we own. Orphaned descendants are reaped by the OS;
+            # do not wait on inherited pipes that a detached process may hold.
+            process.wait()
+            raise
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def resolve_codex(codex_bin: str | Path | None) -> str:
     """显式路径 > PATH > macOS 常见用户安装位置；不修改系统符号链接。
 
@@ -101,7 +136,10 @@ def resolve_codex(codex_bin: str | Path | None) -> str:
     自动换 CLI 或模型。显式路径仍由 subprocess 报告其真实启动错误。
     """
     if codex_bin:
-        return str(Path(codex_bin).expanduser())
+        selected = os.path.expanduser(str(codex_bin))
+        # Translation runs in a temporary cwd; bind explicit relative paths now.
+        # A bare executable name still uses normal PATH lookup.
+        return str(Path(selected).resolve()) if os.path.dirname(selected) else selected
     resolved = shutil.which("codex")
     if resolved:
         return resolved
@@ -138,13 +176,9 @@ class CodexLocalProvider(TranslationProvider):
     def provenance(self) -> dict[str, object]:
         """读取实际 Codex CLI 版本，不把登录信息或用户配置写入清单。"""
 
-        completed = subprocess.run(
+        completed = _run_codex(
             [self.codex_bin, "--version"],
-            text=True,
-            encoding="utf-8",
-            capture_output=True,
             timeout=30,
-            check=False,
         )
         version = (completed.stdout.strip() or completed.stderr.strip()).splitlines()
         if completed.returncode != 0 or not version:
@@ -200,14 +234,10 @@ class CodexLocalProvider(TranslationProvider):
                     ]
                 )
             command.append("-")
-            completed = subprocess.run(
+            completed = _run_codex(
                 command,
                 input=prompt,
-                text=True,
-                encoding="utf-8",
-                capture_output=True,
                 timeout=self.timeout_seconds,
-                check=False,
                 cwd=root,
             )
             if completed.returncode != 0:

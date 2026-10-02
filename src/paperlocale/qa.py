@@ -46,6 +46,28 @@ def _box(page: object, name: str) -> tuple[float, float, float, float]:
     return tuple(float(value) for value in rectangle)  # type: ignore[return-value]
 
 
+def _canonical_page_geometry(source: Path, target: Path) -> list[dict]:
+    """Use the preserved workflow's source coordinates, with pixel proof of rotation."""
+    from .font_geometry import open_source_pdf
+
+    result = []
+    with fitz.open(source) as raw, open_source_pdf(source) as before, fitz.open(target) as after:
+        for index, (a, b) in enumerate(zip(before, after)):
+            normalized = raw[index].rotation != a.rotation
+            if normalized:
+                x = raw[index].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                y = a.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                if (x.width, x.height, x.samples) != (y.width, y.height, y.samples):
+                    raise ValueError(f'第{index + 1}页源页归一化改变了原文像素')
+            result.append({'source_media_box': tuple(a.mediabox), 'translated_media_box': tuple(b.mediabox),
+                           'source_crop_box': tuple(a.cropbox), 'translated_crop_box': tuple(b.cropbox),
+                           'source_rotation': a.rotation, 'translated_rotation': b.rotation,
+                           'source_effective_rect': tuple(a.rect), 'translated_effective_rect': tuple(b.rect),
+                           'raw_source_rotation': raw[index].rotation,
+                           'source_rotation_pixels_verified': normalized})
+    return result
+
+
 def _image_counts(pdf_path: Path) -> list[int]:
     """统计内容流实际调用的图片（含嵌套 Form 与同图多次放置）。
 
@@ -288,6 +310,7 @@ def inspect_pdf_pair(
     output_dir: Path,
     dpi: int = 144,
     pdftoppm_bin: str | Path | None = None,
+    canonical_source_geometry: bool = False,
 ) -> dict[str, object]:
     """生成机器报告和全部页面对照图；不以自动检查替代人工视觉确认。"""
 
@@ -301,6 +324,7 @@ def inspect_pdf_pair(
 
     source_reader = PdfReader(source_path)
     target_reader = PdfReader(target_path)
+    geometry = _canonical_page_geometry(source_path, target_path) if canonical_source_geometry else []
     errors: list[str] = []
     warnings: list[str] = []
     pages: list[dict[str, object]] = []
@@ -331,9 +355,20 @@ def inspect_pdf_pair(
         target_media = _box(target_page, "mediabox")
         source_crop = _box(source_page, "cropbox")
         target_crop = _box(target_page, "cropbox")
-        if any(abs(left - right) > 0.1 for left, right in zip(source_media, target_media)):
+        raw_source_media, raw_source_crop = source_media, source_crop
+        if canonical_source_geometry:
+            record = geometry[index]
+            source_media, target_media = record['source_media_box'], record['translated_media_box']
+            source_crop, target_crop = record['source_crop_box'], record['translated_crop_box']
+            if record['source_rotation'] != record['translated_rotation']:
+                errors.append(f"第{index + 1}页旋转方向不一致")
+            if record['source_effective_rect'] != record['translated_effective_rect']:
+                errors.append(f"第{index + 1}页实际尺寸不一致")
+        if (source_media != target_media if canonical_source_geometry else
+                any(abs(left - right) > 0.1 for left, right in zip(source_media, target_media))):
             errors.append(f"第{index + 1}页 MediaBox 不一致")
-        if any(abs(left - right) > 0.1 for left, right in zip(source_crop, target_crop)):
+        if (source_crop != target_crop if canonical_source_geometry else
+                any(abs(left - right) > 0.1 for left, right in zip(source_crop, target_crop))):
             errors.append(f"第{index + 1}页 CropBox 不一致")
 
         target_text, cmap_warning_count = _extract_text(target_page)
@@ -378,6 +413,9 @@ def inspect_pdf_pair(
                 "translated_vector_drawings": target_vectors,
                 "translated_text_characters": len(target_text),
             }
+        if canonical_source_geometry:
+            page_record.update(geometry[index], raw_source_media_box=raw_source_media,
+                               raw_source_crop_box=raw_source_crop)
         if (
             target_vectors < source_vectors
             and index < len(source_vector_objects)

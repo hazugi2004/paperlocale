@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+from subprocess import TimeoutExpired
 import time
 import traceback
 from pathlib import Path
@@ -37,7 +38,7 @@ def _message(error: Exception) -> str:
     for name, secret in os.environ.items():
         if ('KEY' in name or 'TOKEN' in name) and len(secret) >= 8:
             value = value.replace(secret, '[redacted]')
-    value = re.sub(r'sk-[^\s\"\'<>]+', '[redacted]', value)
+    value = re.sub(r'(?<![\w-])sk-[^\s\"\'<>]+', '[redacted]', value)
     value = re.sub(r'(?i)(bearer\s+)\S+', r'\1[redacted]', value)
     return value[-3000:]
 
@@ -78,15 +79,20 @@ def _transient(error: Exception) -> bool:
     # 不对普通 ValueError/RuntimeError 猜测性重试：它们可能是内容校验、
     # 磁盘空间或身份校验失败。HTTP 401/403 等永久问题直接等待外部恢复。
     from .providers.qwen_mt import QwenRequestError
-    if isinstance(error, QwenRequestError):
-        return False
     seen = set()
-    while error.__cause__ is not None and id(error) not in seen:
+    while id(error) not in seen:
+        # 定位异常可包住 Provider 的最终错误；解包不能丢掉已耗尽的重试预算。
+        if isinstance(error, QwenRequestError):
+            return False
         seen.add(id(error))
+        if error.__cause__ is None:
+            break
         error = error.__cause__
     if isinstance(error, HTTPError):
         return error.code in {408, 429, 500, 502, 503, 504}
-    return isinstance(error, (TimeoutError, ConnectionError, URLError))
+    # subprocess.run kills and reaps the timed-out Codex process before raising.
+    # Its TimeoutExpired is not a TimeoutError; retain the same single retry cap.
+    return isinstance(error, (TimeoutError, TimeoutExpired, ConnectionError, URLError))
 
 
 def resume_waiting(root: Path) -> None:

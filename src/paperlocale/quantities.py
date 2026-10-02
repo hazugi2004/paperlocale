@@ -18,7 +18,7 @@ for symbol, aliases in {
     'cm': ['厘米'], 'mm': ['毫米'], 'kg': ['千克', '公斤'], 'g': ['克'],
     's': ['秒', 'second', 'seconds'], 'min': ['分钟'], 'h': ['小时', 'hour', 'hours'],
     'd': ['天', '日', 'day', 'days'], 'yr': ['年', 'year', 'years'],
-    'event': ['events', '次事件', '次'], 'decade': ['decades', '十年'],
+    'event': ['events', '个事件', '次事件', '事件', '次'], 'decade': ['decades', '十年'],
     'Pa': ['帕', '帕斯卡'], 'hPa': ['百帕'], 'kPa': ['千帕'],
     'K': ['开尔文'], '°C': ['摄氏度', '℃'], '°F': ['华氏度', '℉'],
     '°': ['度'], '%': ['百分比', 'percent'], 'W': ['瓦', '瓦特'], 'MW': ['兆瓦'],
@@ -116,7 +116,14 @@ def find_quantities(text: str, excluded: list[tuple[int, int]] = ()) -> list[Qua
             continue
         separator = re.match(r'\s*(?:[-‑]\s*)?', text[match.end():])
         unit_start = match.end() + separator.end()
-        parsed = _unit_expression(text, unit_start)
+        # A hyphenated return-period adjective (100-year event) binds the
+        # number to years; "event" is its noun, not a multiplied unit.
+        # Explicit year·event and event/year expressions retain all factors.
+        period = re.match(r'years?(?=\s+events?\b)', text[unit_start:])
+        if period and re.search('[-‑]', separator.group()):
+            parsed = (unit_start + period.end(), (('yr', 1),), 1)
+        else:
+            parsed = _unit_expression(text, unit_start)
         if parsed is None:
             continue
         end, signature, _count = parsed
@@ -128,6 +135,15 @@ def find_quantities(text: str, excluded: list[tuple[int, int]] = ()) -> list[Qua
         # 2019 event yr−1 等实际计数/频率仍须配对校验。年份留给数字门禁。
         if (_count == 1 and re.fullmatch(r'(?:18|19|20)\d{2}\s+event',
                                        text[match.start():end])):
+            continue
+        # “the 1976 events of the Am region”指该年的一组事件，不是1976次。
+        # 复数须有定冠词与地区归属证据，或“the 1995 and 1998 events”
+        # 这种完整年份并列结构；孤立的“2019 events”以及
+        # 复合频率单位仍按次数校验，年份自身继续由数字门禁保留。
+        if (_count == 1 and re.fullmatch(r'(?:18|19|20)\d{2}\s+events', text[match.start():end])
+                and (re.search(r'\bthe\s+$', text[:match.start()], re.I)
+                     and re.match(r'\s+of\s+(?:the\s+)?[A-Za-z][A-Za-z -]{0,60}\s+(?:region|zone)\b', text[end:], re.I)
+                     or re.search(r'\bthe\s+(?:18|19|20)\d{2}(?:,\s*(?:18|19|20)\d{2})*\s+and\s+$', text[:match.start()], re.I))):
             continue
         if any(match.start() < b and end > a for a, b in excluded):
             continue

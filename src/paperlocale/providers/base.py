@@ -154,7 +154,7 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
    must_preserve 中每个表面形式必须至少保留指定次数，不要省略重复图号、
    变量、单位或引文。仍需返回完整 target，不能只返回差异或解释。
 """
-    anchor_instruction = ("fixed_anchor_text 说明占位符在 PDF 中原样显示的内容（含括号）。"
+    anchor_instruction = ("fixed_anchor_text 说明占位符在 PDF 中原样显示的内容（含括号）。占位符前后的信息须保持对应，不能把数值、单位或整句移过固定锚点来改变所属位置。"
                           "target 仍保留占位符，不能重复其文本或标点；代回原文后语句及括号须完整。\n"
                           if context.anchor_text else "")
     return f"""{context.domain.prompt}

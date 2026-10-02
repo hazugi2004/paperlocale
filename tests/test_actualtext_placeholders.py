@@ -61,7 +61,7 @@ class ActualTextTests(unittest.TestCase):
                 self.assertEqual(before[0].get_pixmap().samples, after[0].get_pixmap().samples)
 
     def test_stream_and_structure_placeholders_preserve_ink(self):
-        for structure in [False,True]:
+        for structure, label in [(False, 'inline-eq-IEq1'), (True, 'inline-eq-IEq1'), (False, 'display-eq-Equ1'), (True, 'display-eq-Equ1')]:
             with self.subTest(structure=structure),tempfile.TemporaryDirectory() as folder:
                 path=Path(folder)/'source.pdf'
                 with fitz.open() as doc:
@@ -71,7 +71,7 @@ class ActualTextTests(unittest.TestCase):
                         def obj(value):
                             ref=doc.get_new_xref();doc.update_object(ref,value);return ref
                         root=obj('<< /Type /StructTreeRoot >>')
-                        elem=obj(f'<< /Type /StructElem /S /Figure /P {root} 0 R /Pg {page.xref} 0 R /K 0 /ActualText (inline-eq-IEq1) >>')
+                        elem=obj(f'<< /Type /StructElem /S /Figure /P {root} 0 R /Pg {page.xref} 0 R /K 0 /ActualText ({label}) >>')
                         tree=obj(f'<< /Nums [0 [{elem} 0 R]] >>')
                         doc.xref_set_key(root,'K',f'[{elem} 0 R]');doc.xref_set_key(root,'ParentTree',f'{tree} 0 R')
                         doc.xref_set_key(doc.pdf_catalog(),'StructTreeRoot',f'{root} 0 R')
@@ -79,12 +79,12 @@ class ActualTextTests(unittest.TestCase):
                         doc.xref_set_key(page.xref,'StructParents','0')
                         prefix=b'/Figure <</MCID 0>> BDC\n'
                     else:
-                        prefix=b'/Span <</ActualText (inline-eq-IEq1)>> BDC\n'
+                        prefix=f'/Span <</ActualText ({label})>> BDC\n'.encode()
                     doc.update_stream(content,prefix+doc.xref_stream(content)+b'\nEMC')
                     doc.save(path)
                 original=path.read_bytes()
                 with fitz.open(path) as before,open_source_pdf(path) as after:
-                    self.assertIn('inline-eq',before[0].get_text())
+                    self.assertIn(label,before[0].get_text())
                     self.assertEqual(after[0].get_text().strip(),'T')
                     self.assertEqual(before[0].get_pixmap(matrix=fitz.Matrix(3,3)).samples,
                                      after[0].get_pixmap(matrix=fitz.Matrix(3,3)).samples)

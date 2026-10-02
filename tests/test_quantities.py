@@ -2,10 +2,28 @@
 import unittest
 from paperlocale.contracts import validate_translation, scientific_quantities
 from paperlocale.domains import load_domain_pack
+from paperlocale.quantities import find_quantities
 from paperlocale.providers.base import Segment, TranslationContext
 from paperlocale.providers.codex_local import _keyed_request
 
 class QuantityTests(unittest.TestCase):
+    def test_return_period_event_is_not_year_times_event(self):
+        for source, target in [
+            ('a 100-year event', '100年一遇事件'),
+            ('20-year events become 8-year events', '20年一遇事件变为8年一遇事件'),
+            ('20- and 50-year events', '20年和50年一遇事件'),
+        ]:
+            with self.subTest(source=source):
+                self.assertEqual(validate_translation(source, target), [])
+        for source, target in [
+            ('a 100-year event', '50年一遇事件'),
+            ('a 100-year event', '100次事件'),
+            ('100 events per year', '100年一遇事件'),
+            ('100 year·event', '100年'),
+        ]:
+            with self.subTest(source=source):
+                self.assertTrue(validate_translation(source, target))
+
     def test_natural_aliases_and_compound_notation(self):
         for source, target in [
             ('50 km', '50千米'), ('10 m', '10米'), ('500 hPa', '500百帕'),
@@ -42,6 +60,16 @@ class QuantityTests(unittest.TestCase):
         self.assertEqual(validate_translation('m/s','米/秒'), [])
         self.assertTrue(validate_translation('m s−1','m'))
 
+    def test_year_named_plural_events_require_geographic_context(self):
+        source = 'such as the 1976 events of the Am region.'
+        self.assertEqual(validate_translation(source, '例如Am地区1976年的事件。'), [])
+        self.assertTrue(validate_translation(source, '例如Am地区的事件。'))
+        self.assertTrue(find_quantities('The 1976 events were counted.'))
+        self.assertTrue(find_quantities('1976 events yr−1'))
+        self.assertEqual(validate_translation('in the 1995 and 1998 events', '在1995年和1998年的事件中'), [])
+        self.assertTrue(find_quantities('We counted 1995 and 1998 events.'))
+        self.assertTrue(find_quantities('the 1995 and 1998 events yr−1'))
+
     def test_calendar_event_and_ordinal_are_not_units(self):
         source = 'The 2019 event was long-lasting. The second event lasted longer.'
         self.assertEqual(scientific_quantities(source), [])
@@ -58,6 +86,15 @@ class QuantityTests(unittest.TestCase):
         self.assertEqual(validate_translation('5 seconds', '5秒'), [])
         self.assertTrue(validate_translation('second·event', '事件'))
         self.assertTrue(validate_translation('event s−1', '事件'))
+
+    def test_chinese_event_frequency_keeps_per_year(self):
+        self.assertEqual(validate_translation('less than one event per year', '每年不到1个事件/年'), [])
+        self.assertEqual(validate_translation('less than one event per year', '平均每年不到1次事件'), [])
+        self.assertEqual(validate_translation('2 events per year', '每年2次事件'), [])
+        self.assertTrue(validate_translation('2 events per year', '每年3次事件'))
+        self.assertTrue(validate_translation('2 events per year', '每天2次事件'))
+        self.assertTrue(validate_translation('event per year', '事件'))
+        self.assertTrue(validate_translation('2 events/year', '2个事件/天'))
 
     def test_wet_day_hour_alternatives_are_not_a_divided_unit(self):
         self.assertEqual(validate_translation(

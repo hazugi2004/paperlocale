@@ -51,6 +51,7 @@ def record_error(error: Exception, root: Path) -> dict:
             return empty
     manifest = evidence_file('run_manifest.json', {})
     locations = evidence_file('source_locations.json', [])
+    context = evidence_file('repair_context.json', {})
     resolved = []
     for item in items:
         matches = [loc for loc in locations if loc['id'] == item.get('id')]
@@ -61,6 +62,11 @@ def record_error(error: Exception, root: Path) -> dict:
                 candidate['validation_source'] = item['source']
             if candidate not in resolved:
                 resolved.append(candidate)
+    from .error_categories import classify, rule_detail
+    classification = classify(error, category)
+    for item in resolved:
+        item['anchors'] = context.get('anchors', {}).get(item.get('id'), {})
+        item['rule_details'] = [rule_detail(reason) for reason in item.get('errors', [])]
     page_context = []
     if not resolved and manifest.get('source_pdf'):
         import re
@@ -77,7 +83,7 @@ def record_error(error: Exception, root: Path) -> dict:
     # 只有唯一定位到待译单元才能保留原文；错误期间不改版面计划或科学合同。
     if category in {'translation', 'layout'} and resolved and all(i.get('pages') for i in resolved):
         actions.append({'key': 't', 'label': '仅清除失败片段缓存并重新翻译（可能计费）'})
-        if category == 'layout' and all(i.get('font_size', 0) > 6 for i in resolved):
+        if classification['code'] == 'layout.capacity' and all(i.get('font_size', 0) > 6 for i in resolved):
             floors = sorted({round(float(i['font_size']), 2) for i in resolved})
             actions.append({'key': 'f', 'label': f'仅降低失败段落字号下限 10%（当前 {floors} pt，最低 6 pt）'})
         actions.append({'key': 's', 'label': '跳过这些片段，保留原文并记录未翻译项'})
@@ -87,19 +93,27 @@ def record_error(error: Exception, root: Path) -> dict:
         # 字体绑定失败发生在请求模型前，重译/缩字号不能修复字体映射。
         # 仅允许明确保留该完整段落，避免省去其中某个数值或公式。
         actions.append({'key': 's', 'label': '保留这些段落原文，不替换不支持的原字体字形'})
+    if category in {'translation', 'layout'} and (root/'repair_context.json').exists() and any(i.get('id') and 'target' in i for i in resolved):
+        actions.append({'key': 'e', 'label': '编辑失败译文并校验（不调用模型）'})
     if (root / 'recovery_undo.json').exists():
         actions.append({'key': 'b', 'label': '回退上一次修复及其后续尝试，恢复修复前断点'})
     actions.append({'key': 'q', 'label': '暂不处理，保存断点并退出'})
     location, solution = error_details(error)
     record = {'error_id': str(time.time_ns()), 'category': category, 'message': _message(error),
-              'location': location, 'solution': solution, 'diagnostic_warnings': warnings, 'items': resolved, 'page_context': page_context, 'actions': actions,
+              'classification': classification, 'location': location, 'solution': classification['guidance'], 'diagnostic_warnings': warnings, 'items': resolved, 'page_context': page_context, 'actions': actions,
               'source_pdf': manifest.get('source_pdf'), 'source_sha256': manifest.get('source_sha256')}
-    _save(root / 'error_report.json', record)
+    try:
+        _save(root / 'error_report.json', record)
+    except OSError as failure:
+        # 工作区不可写时仍返回诊断，由 CLI 的结构化输出交给 App 展示。
+        record['diagnostic_warnings'].append('诊断无法保存到工作区：' + _message(failure))
     return record
 
 
 def print_context(record: dict) -> None:
     import sys
+    if record.get('classification'):
+        print('错误分类：' + record['classification']['title'], file=sys.stderr)
     for warning in record.get('diagnostic_warnings', []):
         print(warning, file=sys.stderr)
     if not record['items']:

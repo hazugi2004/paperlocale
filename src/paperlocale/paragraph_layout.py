@@ -15,10 +15,10 @@ from statistics import median
 import pymupdf as fitz
 
 from .font_geometry import line_ink, _source_anchor_glyphs
-from .source_layout import CAPTION, NO_LINE_START, NO_LINE_END, anchor_errors
+from .source_layout import CAPTION, APPENDIX_CAPTION, MAIN_HEADING, NO_LINE_START, NO_LINE_END, anchor_errors
 
 
-def starts_paragraph(native_lines, preceding, line):
+def starts_paragraph(native_lines, preceding, line, *, dash_lists=False, structured_headings=False):
     """原生块可包含多段；用首行缩进或额外行距划分，忽略同行上标碎片。"""
     if not preceding:
         return False
@@ -36,9 +36,12 @@ def starts_paragraph(native_lines, preceding, line):
     value = ''.join(c['c'] for s in line['spans'] for c in s['chars'])
     # 悬挂列表的新编号相对正文是向左退回，而不是首行向右缩进。
     # 即使PDF把上一条末行与下一条首行放在一个文本块，也必须分段。
-    if re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])(?:\s+[A-Za-z]|$)', value):
+    if (dash_lists and re.match(r'^[–—]\s+[A-Za-z]', value) or
+            re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])(?:\s+[A-Za-z]|$)', value)):
         return True
     prefix = ' '.join(''.join(c['c'] for s in l['spans'] for c in s['chars']) for l in preceding)
+    if structured_headings and MAIN_HEADING.fullmatch(prefix.strip()):
+        return True
     if re.match(r'^\d+(?:\.\d+)+\.?\s', prefix) and len(prefix.split()) <= 18:
         # 正常字重的两行小节标题可能与正文共用PDF块。以相对本块
         # 正文行距的额外留白结束标题，保留同样行距的标题续行。
@@ -68,7 +71,7 @@ def starts_paragraph(native_lines, preceding, line):
             baseline - previous_y > 1.65 * size)
 
 
-def paragraph_groups(blocks, *, section_boundaries=True, mixed_first_page=True):
+def paragraph_groups(blocks, *, section_boundaries=True, mixed_first_page=True, dash_lists=False, pipe_headings=False, structured_headings=False, appendix_captions=False, heading_styles=False):
     """正文与图注分别建立阅读链；缩进段首和标题是不可跨越的段落边界。"""
     groups = []
     # AGU 首页为窄侧栏加宽正文，按页面中线分类会把侧栏续行与摘要交错。
@@ -112,6 +115,8 @@ def paragraph_groups(blocks, *, section_boundaries=True, mixed_first_page=True):
                 a, b = fitz.Rect(previous['rect']), fitz.Rect(block['rect'])
                 style = (abs(median(p['size'] for p in old) - size) < .6 and
                          is_bold(old) == is_bold(ordinary))
+                if heading_styles and is_bold(old) and is_bold(ordinary) and previous.get('italic') != block.get('italic'):
+                    style = False
                 new_frame = block['page'] != previous['page'] or b.y0 < a.y0 or b.y0 - a.y1 > 2 * size
                 full_end = old[-1]['rect'][2] > a.x1 - 2 * size
                 incomplete = (not re.search(r'[.!?:;][\s\d)\]]*$', previous['text']) or
@@ -122,17 +127,20 @@ def paragraph_groups(blocks, *, section_boundaries=True, mixed_first_page=True):
                 # 编号首行可能以句号结束，后续悬挂行仍属于该列表项。
                 # 只在同页紧邻、字号字重一致且左侧确有悬挂缩进时连接。
                 if (kind == 'body' and style and block['page'] == previous['page'] and
-                        re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])\s+[A-Za-z]', previous['text']) and
+                        (re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])\s+[A-Za-z]', previous['text']) or dash_lists and re.match(r'^[–—]\s+[A-Za-z]', previous['text'])) and
                         .7*size < b.x0-a.x0 < 4*size and -.5*size <= b.y0-a.y1 < size):
                     connect = True
                 if kind == 'caption':
                     connect = (style and block['page'] == previous['page'] and
-                               not CAPTION.match(block['text']))
-                elif block.get('list_start') or re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])\s+[A-Za-z]', block['text']):
+                               not (APPENDIX_CAPTION if appendix_captions else CAPTION).match(block['text']))
+                elif block.get('list_start') or dash_lists and re.match(r'^[–—]\s+[A-Za-z]', block['text']) or re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])\s+[A-Za-z]', block['text']):
                     connect = False
                 # 编号小节标题及独立公式之间的连接词各占原物理位置，
                 # 不能把正文分配到标题/“and”的短框中。
-                heading = lambda text: bool(re.match(r'^\d+(?:\.\d+)+\.?\s+[A-Z]', text)) and len(text.split()) <= 18
+                heading = lambda text: len(text.split()) <= 18 and bool(
+                    re.match(r'^\d+(?:\.\d+)+\.?\s+[A-Z]', text) or
+                    pipe_headings and re.match(r'^\d+(?:\.\d+)*\s*\|\s*[A-Z]', text) or
+                    structured_headings and MAIN_HEADING.fullmatch(text))
                 if sidebar and kind == 'body' and previous['page'] == block['page'] == 1 and (
                         (a.x1 < gutter) != (b.x1 < gutter)):
                     connect = False
@@ -179,12 +187,15 @@ def attach_frames(units, plan):
             b = blocks[sid]
             parts = b['parts']
             ordinary = [p for p in parts if not p['fixed']]
-            size = median(p['size'] for p in ordinary)
+            # A citation can occupy a whole continuation frame. Its native
+            # glyph runs still supply the original size, weight and baselines.
+            metrics = ordinary or parts
+            size = median(p['size'] for p in metrics)
             rect = fitz.Rect(b['rect'])
-            ys = sorted(set(round(p['baseline'], 2) for p in ordinary))
+            ys = sorted(set(round(p['baseline'], 2) for p in metrics))
             gaps = [y-x for x,y in zip(ys, ys[1:]) if .8*size < y-x < 1.7*size]
             frame = {'page': b['page'], 'rect': list(rect), 'size': size,
-                     'bold': is_bold(ordinary),
+                     'bold': is_bold(metrics),
                      'leading': median(gaps) if gaps else size * 1.2,
                      'indent': max(0, parts[0]['rect'][0] - rect.x0),
                      'weight': len(b['text']), 'source_block': sid}
@@ -194,7 +205,7 @@ def attach_frames(units, plan):
             # 仅合并同页、右边界一致、紧邻且有明确列表编号的片段；后续
             # 行仍保留内缩，不能借合并框侵入编号左侧空白或邻近公式。
             hanging = (last and last['page'] == frame['page'] and
-                       re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪])\s+',
+                       re.match(r'^(?:\(\d{1,3}\)|\d{1,3}[.)]|[a-z][.)]|[•●▪–—])\s+',
                                 blocks[last['source_block']]['text']) and
                        .7*size < rect.x0-last['rect'][0] < 4*size)
             # 同段末行可比前行短；原生数学片段也可能与同一行正文框
@@ -259,6 +270,24 @@ def bind_inline_glyphs(source, units):
                 peers = [p for slot in unit['slots'] for p in slot if p['page'] == anchor['page']]
                 # 用最近正文基线保留上标/下标的相对高度；上标本身的基线不是正文基线。
                 anchor['body_baseline'] = min(peers, key=lambda p: abs(p['baseline']-anchor['baseline']))['baseline'] if peers else anchor['baseline']
+                # A wrapped URL can have no prose on its final native line. Its
+                # real hyperlink and character rectangles prove the continuation;
+                # do not align that line relative to the preceding prose baseline.
+                if re.search(r'[/#&]', anchor['text']) and not re.search(r'\s', anchor['text']):
+                    url_text = anchor['text']
+                    url_chars = [c for c in anchor['chars'] if c['text'].strip()]
+                    # An opening prose parenthesis is outside the hyperlink.
+                    # Keep its native glyph, but prove only the enclosed URL.
+                    if re.match(r'\(https?://', url_text) and url_chars[0]['text'] == '(':
+                        url_text, url_chars = url_text[1:], url_chars[1:]
+                    for link in page.get_links():
+                        uri = link.get('uri', '')
+                        if (re.match(r'https?://', uri) and url_text in uri and
+                                all(fitz.Point((c['rect'][0]+c['rect'][2])/2,
+                                               (c['rect'][1]+c['rect'][3])/2) in link['from']
+                                    for c in url_chars)):
+                            anchor['source_url'] = uri
+                            break
 
 
 def compact_target(text):
@@ -290,8 +319,72 @@ def frame_boundary(tokens, desired, anchors):
     # 窄侧栏的单行框通常只能容纳容量估算附近的字。跨出数十词元去追
     # 后一句逗号会把整句硬塞到该行，导致后续框尚有空间却提前报溢出。
     nearby = [i for i in clauses if abs(i-desired) <= 3]
-    choices = nearby or balanced
+    # 原文可能含跨栏长括号，甚至自身缺右括号；内容合同会保留原文写法。
+    # 此处不能为了寻找“括号外”切点退回数百词元，否则首框大片空白、
+    # 后框容量被人为耗尽。跨框只是物理换栏，可在比例附近连续排完整括号。
+    choices = nearby or [i for i in balanced if abs(i-desired) <= 3]
     return min(choices, key=lambda i: (abs(i-desired), i)) if choices else desired
+
+
+def wrap_citation_anchors(unit, tokens):
+    """宽引文按原分号、明确网址按原路径/参数分隔符换行，公式不拆分。
+
+    模型仍只见原来的一个标记；内容合同先校验整个标记。这里只拆已有
+    字形列表，每个字形恰好出现一次，字体、颜色、字号不改。避免一整行
+    引文加句末中文标点超过栏宽，导致避头规则反复退回而误报容量不足。
+    """
+    from .source_layout import CITATION
+    anchors = list(unit['anchors'])
+    # A complete source citation may span several native line anchors. Confirm
+    # its full syntax in reading order before allowing any fragment to wrap.
+    source, expanded, cursor, spans = unit.get('source', ''), '', 0, []
+    for marker in re.finditer(r'\{v(\d+)\}', source):
+        expanded += source[cursor:marker.start()]
+        index = int(marker[1])
+        text = anchors[index]['text']
+        spans.append((index, len(expanded)+len(text)-len(text.lstrip()),
+                      len(expanded)+len(text.rstrip())))
+        expanded += text
+        cursor = marker.end()
+    expanded += source[cursor:]
+    citation_parts = {index for match in CITATION.finditer(expanded)
+                      for index, start, end in spans if match.start() <= start < end <= match.end()}
+    width = min(f['rect'][2]-f['rect'][0] for f in unit['frames'])
+    replacements = {}
+    for i, anchor in enumerate(unit['anchors']):
+        citation = ';' in anchor['text'] and (i in citation_parts or CITATION.fullmatch(anchor['text']))
+        url = anchor.get('source_url') or re.match(r'\(?https?://', anchor['text']) or (
+                                       '&' in anchor['text'] and
+                                       re.fullmatch(r'[\w%+=.&-]+', anchor['text']) and
+                                       re.search(r'%[0-9A-Fa-f]{2}', anchor['text']) and '=' in anchor['text'])
+        if (anchor.get('source_url') and anchor.get('glyphs') and
+                all(abs(g['origin'][1]-anchor['baseline']) < .1*anchor['size'] for g in anchor['glyphs'])):
+            anchor = {**anchor, 'body_baseline': anchor['baseline']}
+            anchors[i] = anchor
+        if (not (citation or url) or
+                anchor['ink'][2]-anchor['ink'][0] < .8*width or not anchor.get('glyphs')):
+            continue
+        groups, current = [], []
+        for position, glyph in enumerate(anchor['glyphs']):
+            current.append(glyph)
+            if (glyph['text'] in ('/&#' if url else ';') and not
+                    (url and glyph['text'] == '/' and position+1 < len(anchor['glyphs'])
+                     and anchor['glyphs'][position+1]['text'] == '/')):
+                groups.append(current); current = []
+        if current:
+            groups.append(current)
+        if len(groups) < 2:
+            continue
+        replacement = []
+        for glyphs in groups:
+            ink = fitz.Rect(glyphs[0]['rect'])
+            for glyph in glyphs[1:]:
+                ink |= fitz.Rect(glyph['rect'])
+            replacement.append('{v'+str(len(anchors))+'}')
+            anchors.append({**anchor, 'glyphs': glyphs, 'ink': list(ink),
+                            'text': ''.join(g['text'] for g in glyphs)})
+        replacements['{v'+str(i)+'}'] = replacement
+    return anchors, [piece for token in tokens for piece in replacements.get(token, [token])]
 
 
 def fit_paragraph(unit, target, font, min_size, bold_font):
@@ -304,6 +397,7 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
     if errors:
         raise ValueError('; '.join(errors))
     tokens = re.findall(r'\{v\d+\}|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', compact_target(target))
+    anchors, tokens = wrap_citation_anchors(unit, tokens)
     size = median(f['size'] for f in unit['frames'])
     floor = size*.8 if min_size is None else min_size
     if not 0 < floor <= size:
@@ -320,13 +414,20 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
             share = frame['weight']/sum(f['weight'] for f in unit['frames'][fi:])
             limit = len(remaining) if fi == len(unit['frames'])-1 else max(1, round(len(remaining)*share))
             if limit < len(remaining):
-                limit = frame_boundary(remaining, limit, unit['anchors'])
+                limit = frame_boundary(remaining, limit, anchors)
             while limit < len(remaining) and (remaining[limit][0] in NO_LINE_START or remaining[limit-1][-1] in NO_LINE_END):
                 limit += 1
             portion = remaining[:limit]
             cursor = 0
             prose = ''.join(t for t in portion if not re.fullmatch(r'\{v\d+\}', t))
             _, prose_bottom, _, prose_top = line_ink(face, prose, current) if prose.strip() else (0,0,0,0)
+            # 表格边缘紧贴单行注释时，上标 a/b/c 的墨迹高于中文正文。
+            # 避让宽障碍须计入本框内的原字号锚点，否则上标会被横向挤到表外，
+            # 或整行无谓下移一个行距，误报溢出。最终仍逐字核验所有障碍和框边界。
+            anchor_tops = [anchors[int(match[1])]['body_baseline'] -
+                           anchors[int(match[1])]['ink'][1]
+                           for token in portion if (match := re.fullmatch(r'\{v(\d+)\}', token))]
+            clearance_top = max([prose_top] + anchor_tops)
             baseline = rect.y0 + current*.88
             row = 0
             previous_bottom = rect.y0 - .5
@@ -336,21 +437,35 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                 # 时先将整行基线降至其下沿，仍受段落边界和最终墨迹检查约束。
                 while True:
                     wide = [b for b in obstacles if (b & rect).width > .5*rect.width
-                            and b.intersects(fitz.Rect(rect.x0, baseline-prose_top,
+                            and b.intersects(fitz.Rect(rect.x0, baseline-clearance_top,
                                                        rect.x1, baseline-prose_bottom))]
                     if not wide:
                         break
-                    baseline = max(b.y1 for b in wide) + prose_top + .001
+                    baseline = max(b.y1 for b in wide) + clearance_top + .001
                 line_start = cursor
-                x = rect.x0 + (min(frame['indent'], 2*current) if row == 0 and fi == 0
+                # 超过普通首行缩进的空白可能属于同行前置公式/另一文本块。
+                # 不能把这种几何占位压成两个汉字，否则会与独立排版的连接词重叠。
+                indent = frame['indent'] if frame['indent'] > 4*size else min(frame['indent'], 2*current)
+                x = rect.x0 + (indent if row == 0 and fi == 0
                                else frame.get('hanging_indent', 0))
                 line_items = []
                 while cursor < len(portion):
                     token = portion[cursor]
                     match = re.fullmatch(r'\{v(\d+)\}', token)
-                    anchor = unit['anchors'][int(match[1])] if match else None
+                    anchor = anchors[int(match[1])] if match else None
                     if anchor:
                         ink = fitz.Rect(anchor['ink'])
+                        # 同行公式被 PDF 拆为固定左半和可译块中的右括号时，
+                        # 首个闭合片段必须接回原字形位置，不能随中文基线上移。
+                        # 只处理首词元、短闭合片段及紧邻的已保护墨迹；完整
+                        # 引文和后续普通行内公式仍正常流动。
+                        if (row == 0 and fi == 0 and cursor == 0 and len(anchor['text']) <= 12
+                                and re.search(r'[)\]}]$', anchor['text'])
+                                and not re.search(r'[(\[{]', anchor['text'])
+                                and any(0 <= ink.x0-b.x1 < .5*size and
+                                        min(ink.y1,b.y1)>max(ink.y0,b.y0) for b in obstacles)):
+                            x = ink.x0-.25
+                            baseline = anchor['body_baseline']
                         width = ink.width + .5
                         top, bottom = anchor['body_baseline']-ink.y0, anchor['body_baseline']-ink.y1
                     else:
@@ -501,8 +616,12 @@ def write_inline(page, item, font_refs):
                 prefix = key+'/'
         document.xref_set_key(owner, prefix+alias, f'{ref} 0 R')
         paint = ' '.join(str(v) for v in color) + (' g' if len(color)==1 else ' rg' if len(color)==3 else ' k')
+        # 字形原点是 MuPDF 的裁切后页面坐标；PDF 内容流使用 MediaBox
+        # 坐标。height-y 只适用于 CropBox 原点为零的页面。非零裁切边距
+        # 必须逆变换，否则所有重放引文会一起偏移到栏外（HESS 实例）。
+        pdf_point = fitz.Point(x, y) * ~page.transformation_matrix
         commands.append(f'q {paint} BT /{alias} {g["size"]:.10f} Tf 1 0 0 1 '
-                        f'{x:.10f} {page.rect.height-y:.10f} Tm <{g.get("source_code", "0000" if g.get("truetype") else "00")}> Tj ET Q')
+                        f'{pdf_point.x:.10f} {pdf_point.y:.10f} Tm <{g.get("source_code", "0000" if g.get("truetype") else "00")}> Tj ET Q')
     if commands:
         ref = document.get_new_xref()
         document.update_object(ref, '<<>>')
@@ -621,17 +740,21 @@ def relocate_links(document, original, placements):
             rect = fitz.Rect(link['from'])
             matches = [p for p in moving if p['inline_anchor']['page'] == source_page and
                        rect.intersects(fitz.Rect(p['inline_anchor']['ink']))]
-            if len(matches) != 1:
+            if not matches:
                 continue
-            item = matches[0]
-            glyphs = [g for g in item['inline_anchor']['glyphs'] if rect.intersects(fitz.Rect(g['rect']))]
-            if not glyphs:
+            moved_links = []
+            for item in matches:
+                glyphs = [g for g in item['inline_anchor']['glyphs'] if rect.intersects(fitz.Rect(g['rect']))]
+                if not glyphs:
+                    continue
+                box = fitz.Rect(glyphs[0]['rect'])
+                for g in glyphs[1:]:box |= fitz.Rect(g['rect'])
+                dx,dy=item['shift'];box=fitz.Rect(box.x0+dx,box.y0+dy,box.x1+dx,box.y1+dy)
+                changed = {k:v for k,v in link.items() if k not in ('xref','id')}
+                changed['from'] = box
+                moved_links.append((item['page'], changed))
+            if not moved_links:
                 continue
-            box = fitz.Rect(glyphs[0]['rect'])
-            for g in glyphs[1:]:box |= fitz.Rect(g['rect'])
-            dx,dy=item['shift'];box=fitz.Rect(box.x0+dx,box.y0+dy,box.x1+dx,box.y1+dy)
-            changed = {k:v for k,v in link.items() if k not in ('xref','id')}
-            changed['from'] = box
             deletion = link
             if not link.get('xref'):
                 # 部分命名目标使MuPDF返回xref=0；delete_link此时静默无效，
@@ -652,9 +775,12 @@ def relocate_links(document, original, placements):
                     raise ValueError(f'第{source_page}页链接原注释无法唯一定位')
                 deletion = {**link, 'xref': candidates[0]}
             document[source_page-1].delete_link(deletion)
-            document[item['page']-1].insert_link(changed)
             expected[source_page].remove(link)
-            expected[item['page']].append(changed)
+            # 一条长网址换行后各段仍指向同一原始目标；删除旧点击区一次，
+            # 按实际字形组建立多个新区域，不把整条链接留在旧英文位置。
+            for target_page, changed in moved_links:
+                document[target_page-1].insert_link(changed)
+                expected[target_page].append(changed)
     return expected
 
 

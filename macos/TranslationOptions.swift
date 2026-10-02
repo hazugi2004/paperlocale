@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // 只生成 CLI 参数，不包含密钥。服务能力来自 PaperLocale 当前的 Provider 合同：
 // Codex 支持推理档位；兼容 API 与 Qwen-MT 不接收 reasoning-effort。
@@ -65,15 +66,35 @@ struct SourceIssue: Decodable {
     let target: String?
     let errors: [String]?
     let validation_source: String?
+    let rule_details: [RuleDetail]?
+    let anchors: [String: String]?
+    let regions: [SourceRegion]?
     let source: String
     let pages: [Int]?
     var pageLabel: String { "PDF 第 " + (pages ?? []).map { String($0) }.joined(separator: ", ") + " 页" }
+}
+struct SourceRegion: Decodable {
+    let page: Int
+    let rect: [Double]
 }
 struct SourcePageContext: Decodable {
     let page: Int
     let source: String
 }
+struct RuleDetail: Decodable {
+    let code: String
+    let title: String
+    let message: String
+    let guidance: String
+}
+struct ErrorClassification: Decodable {
+    let code: String
+    let title: String
+    let guidance: String
+}
 struct RepairReport: Decodable, Identifiable {
+    let source_pdf: String?
+    let classification: ErrorClassification?
     let error_id: String
     let message: String
     let solution: String
@@ -87,4 +108,18 @@ struct JobProgress: Decodable {
     let fraction: Double
     let completed: Int
     let total: Int
+}
+
+// 与 Python workspaces.run_directory 使用完全相同的 UTF-8 路径摘要，避免同名 PDF 共用缓存。
+enum WorkspacePaths {
+    static var defaultRoot: String {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("paperlocale").path
+    }
+    static func runDirectory(pdf: String, root: String) -> URL {
+        let source = URL(fileURLWithPath: (pdf as NSString).expandingTildeInPath)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let digest = SHA256.hash(data: Data(source.path.utf8)).map { String(format: "%02x", $0) }.joined()
+        return URL(fileURLWithPath: (root as NSString).expandingTildeInPath)
+            .appendingPathComponent(source.deletingPathExtension().lastPathComponent + "-" + digest.prefix(12))
+    }
 }

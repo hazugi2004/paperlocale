@@ -5,11 +5,53 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
 
+from paperlocale.diagnostics import LocatedError
+from paperlocale.domains import load_domain_pack
+from paperlocale.providers import Segment, TranslationContext
+from paperlocale.providers.qwen_mt import QwenMTProvider, QwenRequestError
 from paperlocale.recovery import print_error, run_waiting, resume_waiting
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_wrapped_qwen_quota_errors_do_not_replay_provider_requests(self):
+        for code, message, requests in (
+            ('insufficient_quota', 'Account quota exhausted', 1),
+            ('Throttling.AllocationQuota', 'Allocated quota exceeded', 2),
+        ):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                root, calls = Path(directory), []
+                provider=QwenMTProvider(base_url='https://example.invalid/v1', api_key='test',
+                                        model='qwen-mt-flash', min_request_interval_seconds=0)
+                context=TranslationContext('en','zh-CN',load_domain_pack('atmospheric-science'))
+                def http_failure(*args, **kwargs):
+                    body=json.dumps({'error': {'code': code, 'message': message}}).encode()
+                    raise HTTPError(provider.endpoint,429,'quota',{'Retry-After':'0'},io.BytesIO(body))
+                def operation():
+                    calls.append(1)
+                    try:
+                        try:
+                            provider.translate([Segment('probe','Soil moisture changed.')],context)
+                        except QwenRequestError as error:
+                            raise LocatedError(str(error),[], 'translation') from error
+                    except LocatedError as error:
+                        raise RuntimeError('workflow wrapper') from error
+                def cancel_wait(delay):
+                    status=json.loads((root/'waiting.json').read_text())
+                    self.assertEqual(status['state'],'waiting')
+                    self.assertFalse(status['automatic_retry_used'])
+                    self.assertEqual(delay,2)
+                    raise KeyboardInterrupt()
+                with patch('paperlocale.providers.qwen_mt.urllib.request.urlopen',side_effect=http_failure) as request, \
+                     patch('paperlocale.providers.qwen_mt.time.sleep'), \
+                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(KeyboardInterrupt):
+                        run_waiting(operation,root,sleep=cancel_wait)
+                self.assertEqual(len(calls),1)
+                self.assertEqual(request.call_count,requests)
+
     def test_transient_retries_once_and_returns_real_result(self):
         with tempfile.TemporaryDirectory() as directory:
             root, calls, waits = Path(directory), [], []

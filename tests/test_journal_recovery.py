@@ -16,6 +16,21 @@ from paperlocale.domains import load_domain_pack
 
 
 class JournalRecoveryTests(unittest.TestCase):
+    def test_asce_explicit_font_style_ends_heading_group(self):
+        from paperlocale.journals import publisher_style_flags
+        from paperlocale.paragraph_layout import paragraph_groups
+        self.assertEqual(publisher_style_flags('asce', 'AdvOT555e2c97.BI', 4), 22)
+        self.assertEqual(publisher_style_flags('generic', 'AdvOT555e2c97.BI', 4), 4)
+        self.assertEqual(publisher_style_flags('asce', 'Unknown.BI', 4), 4)
+        # 错误 flag 使极窄标题与长正文连成一段；恢复字重后两块分别排版。
+        blocks=[]
+        for ident, text, rect, font in [('heading','RF',[40,100,53,110],'AdvOT555e2c97.BI'),
+                                      ('body','To enhance the regression accuracy.',[40,116,290,220],'AdvOT483a8203')]:
+            flags=publisher_style_flags('asce',font,4)
+            blocks.append(dict(id=ident,text=text,rect=rect,page=5,kind='body',
+                               parts=[dict(text=text,fixed=False,size=9.5,bold=bool(flags & 16),rect=rect)]))
+        self.assertEqual(paragraph_groups(blocks), [['heading'], ['body']])
+
     def make_source(self, root, journal=True):
         source = root/'source.pdf'
         with fitz.open() as doc:

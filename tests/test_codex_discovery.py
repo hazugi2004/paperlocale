@@ -1,10 +1,16 @@
 """可执行路径选择不依赖测试机安装，不读取任何登录材料。"""
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from paperlocale.providers.codex_local import resolve_codex
 
 
 class CodexDiscoveryTests(unittest.TestCase):
+    def test_relative_binary_is_bound_before_temporary_working_directory(self):
+        self.assertEqual(resolve_codex('validation/codex'), str(Path('validation/codex').resolve()))
+        self.assertEqual(resolve_codex('./codex'), str(Path('codex').resolve()))
+        self.assertEqual(resolve_codex('codex'), 'codex')
+
     def test_explicit_and_path_take_precedence(self):
         with patch("shutil.which", return_value="/path/codex"):
             self.assertEqual(resolve_codex("/chosen/codex"), "/chosen/codex")

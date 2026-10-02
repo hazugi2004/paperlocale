@@ -417,7 +417,7 @@ def _remove_placeholder_actualtext(document):
         # 只识别空白及标准合字的这种形式；其他有意义的 ActualText 保留。
         import unicodedata
         ligatures = {unicodedata.normalize('NFKD', chr(c)) for c in range(0xFB00, 0xFB07)}
-        return (bool(re.fullmatch(r'inline-eq-IEq\d+', value)) or
+        return (bool(re.fullmatch(r'(?:inline-eq-IEq|display-eq-Equ)\d+', value)) or
                 ('\u200b' in value and value.replace('\u200b', '') in {'', *ligatures}))
     # /Size 允许包含空闲或未分配编号，xref_get_key 不能读取这些槽位。
     # 仅遍历 MuPDF 标记为普通对象(n)或压缩对象(o)的实际对象；损坏的

@@ -20,3 +20,6 @@ auth.json
 
 # 本地真实论文、翻译缓存和验证证据不得进入公开发行。
 技术工作区/
+# Local paper-validation evidence and machine-specific launch wrapper.
+/validation/
+/translate-paper

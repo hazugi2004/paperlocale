@@ -97,7 +97,7 @@ class CodexResponseKeysTest(unittest.TestCase):
 
             arguments = dict(segments_path=root / "segments.jsonl", translations_path=root / "translations.jsonl",
                              provider=CodexLocalProvider(codex_bin="/fake/codex"), domain=self.domain)
-            with patch("paperlocale.providers.codex_local.subprocess.run", side_effect=fake_run) as run:
+            with patch("paperlocale.providers.codex_local._run_codex", side_effect=fake_run) as run:
                 self.assertEqual(translate_segment_file(**arguments), (0, 1))
                 self.assertEqual(translate_segment_file(**arguments), (1, 0))
                 self.assertEqual(run.call_count, 2)

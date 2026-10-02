@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.2 — 2026-10-02
+
+- Add in-app source PDF comparison, classified errors, checked translation edits, rollback, and fresh-layout recovery with validated cache import.
+- Default new workspaces to `~/paperlocale`, support a configurable root, and restore existing run settings.
+- Repair publisher-specific mathematical encodings and author metadata, plus common cropped-page glyph coordinates, split formulas, long citations/URLs, lists and frame boundaries.
+- Preserve native rectangle, shading, Form, page-box and proven protected-table text precision across PDF rewriting.
+- Recognize structured headings, appendix captions, scientific subscripts and return-period wording without dropping body text or weakening content checks.
+- Bind resumed cache imports to their original source and translation identity, honor provider-owned retry budgets, and clean up Codex process groups after timeouts or interruption.
+- Prevent publication sidebars and table reference labels from swallowing abstracts or later body sections; validate rotated pages against the pixel-proven canonical source.
+- Preserve strict content, source protection and human acceptance gates. See [scope and validation](docs/releases/v0.8.2.md).
+
 ## 0.8.1 — 2026-09-28
 
 - Show segment ID, PDF pages, validation rules, original text and the current rejected translation directly in macOS repair dialogs and CLI diagnostics.

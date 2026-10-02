@@ -164,7 +164,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser("run", help="从当前断点推进到完整候选 PDF 和机器 QA")
     run.add_argument("source_pdf", type=Path)
-    run.add_argument("--run-dir", type=Path, required=True)
+    workspaces = run.add_mutually_exclusive_group()
+    workspaces.add_argument("--run-dir", type=Path, help="指定已有或新建的单篇运行目录")
+    workspaces.add_argument("--workspace-dir", type=Path, help="统一工作区根目录，默认 ~/paperlocale")
     run.add_argument("--source-language", default="en")
     run.add_argument("--target-language", default="zh-CN")
     run.add_argument("--pages")
@@ -410,7 +412,9 @@ def build_parser() -> argparse.ArgumentParser:
     repair = subparsers.add_parser("repair-choice", help="应用当前错误的修复选项或回退（不自动启动模型）")
     repair.add_argument("--run-dir", type=Path, required=True)
     repair.add_argument("--error-id", required=True)
-    repair.add_argument("--choice", choices=("r", "t", "f", "s", "b", "q"), required=True)
+    repair.add_argument("--choice", choices=("r", "t", "f", "s", "b", "q", "e"), required=True)
+    repair.add_argument("--edits-file", type=Path, help="人工修订的片段 ID 到译文 JSON 映射")
+    repair.add_argument("--check-only", action="store_true", help="仅校验修订，不写缓存或调用模型")
     journal = subparsers.add_parser("journal-info", help="显示 PDF 期刊归属及识别证据")
     journal.add_argument("source_pdf", type=Path)
     resume = subparsers.add_parser("resume-waiting", help="修正问题后通知等待进程继续")
@@ -459,6 +463,9 @@ def _provider_from_args(args: argparse.Namespace):
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.command == "run" and args.run_dir is None:
+        from .workspaces import run_directory
+        args.run_dir = run_directory(args.source_pdf, args.workspace_dir)
     from .recovery import print_error, run_waiting
     try:
         if args.command == "run":
@@ -477,7 +484,10 @@ def main() -> int:
         print_error(error, root)
         if root is not None and args.command != "repair-choice":
             from .diagnostics import record_error, print_context
-            print_context(record_error(error, root))
+            import json
+            report = record_error(error, root)
+            print_context(report)
+            print('PAPERLOCALE_ERROR ' + json.dumps(report, ensure_ascii=False), flush=True)
         return 1
 
 
@@ -499,8 +509,16 @@ def _execute(args: argparse.Namespace) -> int:
         print(json.dumps(identify_journal(args.source_pdf.expanduser().resolve()), ensure_ascii=False, indent=2))
         return 0
     if args.command == "repair-choice":
+        import json
         from .repair_choices import apply_choice
-        apply_choice(args.run_dir, args.choice, args.error_id)
+        edits = json.loads(args.edits_file.read_text()) if args.edits_file else None
+        if args.check_only:
+            from .repair_editor import check_edits
+            checked = check_edits(args.run_dir, args.error_id, edits)
+            valid = not any(row['errors'] for row in checked)
+            print(json.dumps({'valid': valid, 'items': checked}, ensure_ascii=False))
+            return 0 if valid else 1
+        apply_choice(args.run_dir, args.choice, args.error_id, edits)
         print("修复选项已应用；回退不会自动重启模型，其他选项可从原断点继续。")
         return 0
     if args.command == "resume-waiting":

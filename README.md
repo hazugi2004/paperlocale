@@ -101,17 +101,17 @@ Use `--api-key-csv /path/to/key.csv` to read a complete, unique `sk-` CSV field 
 Qwen-MT without truncating punctuation. This explicit option overrides the key
 environment variable and never writes credentials to run metadata.
 
-For v0.6.3, install the exact public release with:
+Install the exact public release with:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.8.1"
+python -m pip install "paperlocale[layout]==0.8.2"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-## Quick start (0.8.1)
+## Quick start (0.8.2)
 
 New runs use paragraph frames (`--layout-mode paragraph`). The title, abstract,
 main text and figure/table captions are translated. Natural paragraph boundaries
@@ -121,14 +121,28 @@ flow continuously, without artificial spaces or spreading short lines across the
 old English lines. Inline citations and supported mathematical glyphs move with
 the text using the original font programs; their link targets are preserved.
 
-Figure labels, tables, standalone formulas, author details, auxiliary sections and
-references remain original. Fonts may shrink within each paragraph to 80% of the
+Figure labels, table cells, standalone formulas, author details, publisher notices
+and references remain original. Research acknowledgements, availability statements
+and external figure/table captions are translated. Fonts may shrink within each paragraph to 80% of the
 source size to fit complete content; `--min-font-size` specifies an explicit floor.
 Existing `preserved` and `legacy` runs retain their original engines and caches.
 
 ```bash
 paperlocale run paper.pdf --run-dir runs/paper
 ```
+
+To select subscribed local Codex explicitly and keep all output outside the source
+directory, use the following command after authenticating Codex on this machine:
+
+```bash
+paperlocale run /path/to/paper.pdf --run-dir runs/paper \
+  --output-pdf output/paper.zh.pdf --layout-mode paragraph \
+  --provider codex-local --model gpt-6-astra --reasoning-effort high \
+  --domain atmospheric-science --unattended --no-wait-on-error
+```
+
+Rerun the same command to resume compatible checkpoints. `codex-local` requires
+a POSIX system and access to the explicitly selected model in the local account.
 
 No manual layout-plan review is required. A complete candidate is created only
 after all body translations, layout, protected content, and text readback pass.
@@ -491,6 +505,16 @@ See [changes, validation and limits](docs/releases/v0.7.5.md). Existing runs use
 Fixes split inline subscripts, a reviewed C0-encoded minus, duplicate confidence-band drawing, and caption detection edges. Adds explicit `--no-qa` without claiming acceptance. See the [release notes](docs/releases/v0.7.7.md).
 
 The experimental [macOS native frontend](macos/README.md) selects PDFs, models and reasoning effort. It requires an installed CLI and layout dependencies. Universal 2, macOS 13+; ad-hoc signed, not Apple notarized.
+
+## 应用内修复与统一工作区
+
+新运行默认使用 `~/paperlocale`，可用 `--workspace-dir <目录>` 指定根目录，或用 `--run-dir <已有运行>` 精确续跑。App 支持选择根目录和打开已有运行。
+
+修复台内嵌源 PDF，按页展示规则差异及固定公式标记，支持编辑失败译文、本地校验、保存继续和快照回退。CLI 对应 `repair-choice --choice e --edits-file <片段ID到译文的JSON> --check-only`；省略 `--check-only` 才写入修订。内容门禁通过仍需实际排版、机器 QA 和视觉检查。
+
+## 0.8.2
+
+新增应用内 PDF 对照与译文修订、分类诊断、可配置统一工作区，以及严格缓存恢复、正文识别和图表精度修复。详见 [更新与验证范围](docs/releases/v0.8.2.md)。
 
 ## 0.8.1
 

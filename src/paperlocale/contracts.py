@@ -249,6 +249,10 @@ def _quantity_validation_text(text: str) -> str:
     million 遗漏或平方变长度被当成等价译法。单独的 million 普通用词不处理。
     """
     units = {"kilometer": "km", "kilometre": "km", "meter": "m", "metre": "m"}
+    # 中文把频率分母放在数值之前；仅规范明确的“每年…N次”结构，
+    # 比较词和数值原样保留，不把相隔任意句子的“年”“事件”拼成单位。
+    text = re.sub(r'每(十年|年|天|日|小时)(平均)?(不到|少于|超过|约)?\s*(\d+(?:\.\d+)?)\s*(?:次事件|个事件|次|事件)(?![/每])',
+                  lambda m: (m[2] or '') + (m[3] or '') + m[4] + ' event/' + m[1], text)
     text = re.sub(
         r"\b(square|cubic)\s+(kilometers?|kilometres?|meters?|metres?)\b",
         lambda m: units[m[2].removesuffix("s")] + ("²" if m[1] == "square" else "³"),
@@ -275,6 +279,14 @@ def validate_translation(
     if not target.strip():
         return ["译文为空"]
 
+    # C0/C1/DEL 是控制码，不是科学符号。拒绝而不删除：字符若来自源 PDF，
+    # 需要先核对源字形；若模型新添，则由重试或人工修订纠正，避免到排版才报缺字。
+    import unicodedata
+    for index, character in enumerate(target):
+        if unicodedata.category(character) == 'Cc' and character not in '\n\r\t':
+            context = target[max(0, index-18):index+19]
+            origin = '原文也包含此字符，须核对源字形' if character in source else '原文不包含此字符'
+            errors.append(f"character 不可见控制字符 U+{ord(character):04X}，译文第 {index+1} 字符；{origin}；上下文 {context!r}")
     source_counts = protected_counts(source)
     target_counts = protected_counts(target)
     for category in ("formula", "style", "url", "doi"):

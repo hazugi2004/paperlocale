@@ -105,7 +105,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         try:
             return fit_unit(unit, target, font, choices['font_sizes'].get(unit['id'], minimum), bold)
         except ValueError as error:
-            raise LocatedError(str(error), [unit_location(unit)], 'layout') from error
+            raise LocatedError(str(error), [{**unit_location(unit), 'validation_source': unit['source'], 'target': target, 'errors': [str(error)]}], 'layout') from error
     if import_cache_from is not None:
         if not paragraph:
             raise ValueError('缓存导入只支持段落模式')
@@ -188,6 +188,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         write_jsonl_atomic(translations, [r for r in read_jsonl(translations) if r['id'] not in skipped_ids])
     anchor_text = {u['id']: {'{v' + str(i) + '}': a['text'] for i, a in enumerate(u['anchors'])}
                    for u in units if u['anchors']}
+    # 修复台使用与实际流水线相同的领域合同和锚点，不从错误文案猜校验配置。
+    save_json(root / 'repair_context.json', {'source_sha256': manifest['source_sha256'],
+              'layout_plan_sha256': plan_hash, 'domain': domain.pack_id,
+              'domain_sha256': domain.content_sha256, 'anchors': anchor_text})
     translate_segment_file(segments_path=segments, translations_path=translations,
                            provider=provider, domain=domain, contract_repair=contract_repair,
                            max_segments=max_segments, max_characters=max_characters, anchor_text=anchor_text,
@@ -219,10 +223,12 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         save_json(root / 'layout_failures.json', {sid: reason for sid, (_, reason) in failed.items()})
         raise LocatedError('译文预排版或锚点校验失败，已禁用自动修复：' +
                          '; '.join(f'{sid[:12]}: {reason}' for sid, (_, reason) in failed.items()),
-                           [unit_location(u) for u, _ in failed.values()], 'layout')
+                           [{**unit_location(u), 'validation_source': u['source'], 'target': targets[u['id']],
+                             'errors': [reason]} for u, reason in failed.values()], 'layout')
     refinement_path = root / 'layout_refinements.json'
     refinements = json.loads(refinement_path.read_text(encoding='utf-8')) if refinement_path.exists() else {}
-    for sid, (unit, reason) in failed.items():
+    for index, (sid, (unit, reason)) in enumerate(failed.items(), 1):
+        emit_progress("精炼失败段落并验证排版", .72+.08*(index-1)/len(failed), index-1, len(failed))
         size = min_font_size or median(p['size'] for slot in unit['slots'] for p in slot)
         budgets = [math.floor(sum(fitz.Rect(p.get('writing_rect', p['rect'])).width for p in slot) / size)
                    for slot in unit['slots']]
@@ -367,6 +373,10 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                 expected_links = relocate_links(written, original, placements)
                 linked = written.tobytes(garbage=0, deflate=True)
             temporary.write_bytes(linked)
+        # Last serialization step: later MuPDF saves would round these values again.
+        from .vector_precision import restore_vector_precision
+        precision_evidence = restore_vector_precision(source, temporary,
+            protected_regions=plan['protected_regions'])
         writing_regions = editable + ([frame for u in units for frame in u['frames']] if paragraph else [])
         evidence = verify_unchanged(source, temporary, writing_regions, expected_links=expected_links)
         from .source_watermarks import verify_backgrounds
@@ -437,7 +447,14 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     extracted = ''.join(c['c'] for c in page_chars[item['page']] if abs(c['origin'][1] - item['baseline']) < .01 and fitz.Point((c['bbox'][0] + c['bbox'][2]) / 2,
                                                                            (c['bbox'][1] + c['bbox'][3]) / 2) in rectangle)
                 if ''.join(extracted.split()) != ''.join(item['target'].split()):
-                    raise ValueError(f'回读译文与排版内容不同：page={item["page"]}, expected={item["target"]!r}, actual={extracted!r}')
+                    unit = next((u for u in units if u['id'] == item.get('paragraph_id')), None)
+                    raise LocatedError(f'第{item["page"]}页回读译文与排版内容不同', [{
+                        'id': item.get('paragraph_id'), 'source': unit['source'] if unit else '',
+                        'target': targets[unit['id']] if unit else item['target'],
+                        'pages': [item['page']], 'regions': [{'page':item['page'], 'rect':item['rect']}],
+                        'errors': [f'preservation.readback 应写入 {item["target"]!r}；实际回读 {extracted!r}；请核对重叠、缺字或错位。'],
+                    }], 'preservation')
+        evidence['vector_precision'] = precision_evidence
         evidence.update(source_sha256=digest(source), translated_sha256=digest(temporary),
                         layout_plan_sha256=plan_hash, font=font_evidence,
                         protected_region_count=len(protected), logical_group_count=len(units),

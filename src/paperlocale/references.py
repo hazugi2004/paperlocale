@@ -128,7 +128,8 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
 
 
 def _reference_geometry(
-    source_pdf: Path,
+    source_pdf: Path, *, supplementary_boundary: bool = False, styled_boundaries: bool = False,
+    visual_exclusions: list[dict] | None = None,
 ) -> tuple[list[int], str | None, tuple[str, ...], list[dict[str, object]]]:
     """返回标题页、标题后区域和由 PDF 坐标确定的左侧稿件行号。
 
@@ -136,7 +137,14 @@ def _reference_geometry(
     因此识别和区域收集都以可见文本行为单位，不依赖块边界。
     """
 
-    document = fitz.open(source_pdf)
+    heading_matches = lambda text, numbers: (_heading_block_matches(text, numbers) or
+        styled_boundaries and bool(re.fullmatch(r'REFERENCES AND NOTES', text.strip(), re.I)))
+    inline_boundaries = set()
+    if visual_exclusions is None:
+        document = fitz.open(source_pdf)
+    else:
+        from .font_geometry import open_source_pdf
+        document = open_source_pdf(source_pdf)
     headings: list[tuple[int, float, float, float, float]] = []
     page_text_lines: list[list[tuple[float, float, float, float, str]]] = []
     page_line_entries: list[list[tuple[float, float, str]]] = []
@@ -144,12 +152,24 @@ def _reference_geometry(
     page_sizes: list[tuple[float, float]] = []
     try:
         for page_index, page in enumerate(document):
+            # New extraction revisions exclude headings that are actual table/
+            # figure labels. None retains the exact legacy heading algorithm.
+            excluded = []
+            if visual_exclusions is not None:
+                excluded = [fitz.Rect(region['rect']) for region in visual_exclusions
+                            if region['page'] == page_index + 1]
             page_sizes.append((page.rect.width, page.rect.height))
             text_lines: list[tuple[float, float, float, float, str]] = []
             line_entries: list[tuple[float, float, str]] = []
             for block in page.get_text("dict")["blocks"]:
                 for line in block.get("lines", []):
                     bbox = line["bbox"]
+                    if styled_boundaries and line.get('spans'):
+                        first = line['spans'][0]
+                        if (first['text'].strip().endswith(':') and
+                                POST_REFERENCE_HEADING_RE.fullmatch(first['text'].strip().rstrip(':')) and
+                                (first['flags'] & 16 or re.search(r'(?:Bold|[.]B)$', first['font']))):
+                            inline_boundaries.add((page_index, float(bbox[0]), float(bbox[1])))
                     content_parts: list[str] = []
                     for span in line.get("spans", []):
                         span_text = str(span.get("text", ""))
@@ -192,8 +212,15 @@ def _reference_geometry(
             page_text_lines.append(text_lines)
             page_line_entries.append(line_entries)
             line_numbers = [entry[2] for entry in line_entries]
-            for line in text_lines:
-                if _heading_block_matches(line[4], line_numbers):
+            heading_lines = [line for line in text_lines if heading_matches(line[4], line_numbers)]
+            def in_visual(line):
+                rect = fitz.Rect(line[:4])
+                return rect.get_area() > 0 and any(
+                    (rect & box).get_area() > .5 * rect.get_area() for box in excluded)
+            if visual_exclusions is not None and any(not in_visual(line) for line in heading_lines):
+                excluded.extend(fitz.Rect(table.bbox) for table in page.find_tables().tables)
+            for line in heading_lines:
+                if not in_visual(line):
                     headings.append(
                         (page_index, line[0], line[1], line[3], float(page.rect.width))
                     )
@@ -217,7 +244,8 @@ def _reference_geometry(
         for line in page_text_lines[page_index]:
             width, height = page_sizes[page_index]
             in_margin = line[3] < height * 0.08 or line[1] > height * 0.94
-            if in_margin and (margin_counts[line[4]] > 1 or line[4].strip().isdigit()):
+            if in_margin and (margin_counts[line[4]] > 1 or line[4].strip().isdigit() or
+                    styled_boundaries and re.fullmatch(r'\d+\s+of\s+\d+', line[4].strip(), re.I)):
                 continue
             if page_index == heading_page and line[1] < heading_bottom:
                 # References 从左栏下半部开始时，右栏顶部已经是后续书目；
@@ -278,8 +306,11 @@ def _reference_geometry(
             # 参考文献必须止于下一个编号章节，不能把其后的 Figure 或 Table
             # 章节误标为参考文献。标题自身已经在上方排除，不会触发此边界。
             if (
-                NUMBERED_SECTION_HEADING_RE.fullmatch(cleaned)
+                (page_index, line[0], line[1]) in inline_boundaries
+                or NUMBERED_SECTION_HEADING_RE.fullmatch(cleaned)
                 or POST_REFERENCE_HEADING_RE.fullmatch(cleaned)
+                or supplementary_boundary and re.fullmatch(
+                    r"Supporting Information|Supplementary (?:Information|Materials?)", cleaned, re.I)
             ):
                 region_boundary = (page_index, line[1])
                 break
@@ -307,7 +338,7 @@ def _reference_geometry(
     # 标题自身属于 preserve 区域；紧凑期刊中译后首条书目可与标题相交，
     # 必须一起恢复而不是把英文 References 当成待保护的正文阻止修复。
     for line in page_text_lines[heading_page]:
-        if _heading_block_matches(line[4], [entry[2] for entry in page_line_entries[heading_page]]):
+        if heading_matches(line[4], [entry[2] for entry in page_line_entries[heading_page]]):
             column = int(line[0] >= heading_page_width / 2) if heading_page in two_column_pages else 0
             if (heading_page, column) in selected_lines:
                 selected_lines[(heading_page, column)].append(line)

@@ -15,6 +15,82 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_dash_items_keep_continuations_but_do_not_merge(self):
+        """PDF 中紧邻的破折号列表应按条翻译，悬挂续行仍属于同一条。"""
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'dash-list.pdf'
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_font(fontname='TestSerif', fontbuffer=fitz.Font('tiro').buffer)
+                for x, y, value in [
+                    (40, 100, '– Spatial extent of each event'),
+                    (50, 112, 'and its latitude and longitude bounds.'),
+                    (40, 124, '– Mean values of each indicator'),
+                    (50, 136, 'and the associated maximum values.')]:
+                    page.insert_text((x, y), value, fontsize=10, fontname='TestSerif')
+                doc.save(source)
+            plan = extract_layout(source, paragraph=True)
+            blocks = {b['id']: b for b in plan['blocks']}
+            paragraphs = [' '.join(blocks[i]['text'] for i in group) for group in plan['groups']]
+            self.assertEqual(len(paragraphs), 2)
+            self.assertIn('longitude bounds.', paragraphs[0])
+            self.assertIn('maximum values.', paragraphs[1])
+            self.assertTrue(all(p.startswith('– ') for p in paragraphs))
+
+    def test_partial_math_closer_stays_attached_to_fixed_formula(self):
+        from paperlocale.paragraph_layout import fit_paragraph
+        anchor={'text':'t)}','ink':[90,103,104,114],'body_baseline':112}
+        unit={'id':'closer','source':'{v0} and','anchors':[anchor], 'frames':[{
+            'page':1,'rect':[88,100,150,130],'size':10,'bold':False,'leading':12,
+            'weight':10,'indent':0,'obstacles':[[80,100,88,116]]}]}
+        placed=fit_paragraph(unit,'{v0}和',fitz.Font('china-s'),None,None)
+        self.assertEqual(placed[0]['shift'],[0,0])
+
+    def test_split_url_preserves_glyphs_and_each_click_target(self):
+        from paperlocale.paragraph_layout import wrap_citation_anchors,relocate_links
+        text='https://example.org/search?a=1&b=2&c=3'
+        glyphs=[{'text':c,'rect':[40+i*3,50,42+i*3,58]} for i,c in enumerate(text)]
+        anchor={'text':text,'ink':[40,50,40+len(text)*3,58],'glyphs':glyphs,'page':1}
+        unit={'anchors':[anchor],'frames':[{'rect':[40,50,40+len(text)*3,100]}]}
+        anchors,tokens=wrap_citation_anchors(unit,['{v0}'])
+        chunks=[anchors[int(t[2:-1])] for t in tokens]
+        self.assertEqual([g for a in chunks for g in a['glyphs']],glyphs)
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'links.pdf'
+            with fitz.open() as doc:
+                page=doc.new_page();page.insert_link({'kind':fitz.LINK_URI,'from':fitz.Rect(anchor['ink']),'uri':'https://example.org/search?a=1&b=2&c=3'});doc.save(path)
+            with fitz.open(path) as source,fitz.open(path) as output:
+                placements=[{'page':1,'inline_anchor':a,'shift':[0,20*(i+1)]} for i,a in enumerate(chunks)]
+                expected=relocate_links(output,source,placements)
+                written=fitz.open(stream=output.tobytes(),filetype='pdf')
+                self.assertEqual(len(written[0].get_links()),len(chunks))
+                self.assertEqual({l['uri'] for l in expected[1]},{'https://example.org/search?a=1&b=2&c=3'})
+                written.close()
+
+    def test_long_parenthesis_does_not_empty_first_frame(self):
+        """跨栏括号可继续到下一框，不能为寻找括号外切点丢掉首框容量。"""
+        from paperlocale.paragraph_layout import fit_paragraph, frame_boundary
+        target = '说明（' + '甲乙丙丁戊己庚辛壬癸' * 6 + '）。'
+        self.assertEqual(frame_boundary(list(target), 50, []), 50)
+        unit = {'id': 'long-parenthesis', 'source': target, 'anchors': [], 'frames': [
+            {'page': 1, 'rect': [0, 0, 100, 75], 'size': 10, 'bold': False,
+             'leading': 12, 'weight': 50, 'indent': 0},
+            {'page': 2, 'rect': [0, 0, 100, 30], 'size': 10, 'bold': False,
+             'leading': 12, 'weight': len(target)-50, 'indent': 0}]}
+        placed = fit_paragraph(unit, target, fitz.Font('china-s'), 10, None)
+        self.assertEqual(''.join(p['target'] for p in placed), target)
+        self.assertEqual({p['page'] for p in placed}, {1, 2})
+
+    def test_large_first_line_offset_keeps_space_for_inline_formula_fragments(self):
+        from paperlocale.paragraph_layout import fit_paragraph
+        unit={'id':'after-formula','source':'A complete paragraph.','anchors':[], 'frames':[{
+            'page':1,'rect':[50,100,290,160],'size':10,'bold':False,'leading':12,
+            'weight':30,'indent':120}]}
+        placed=fit_paragraph(unit,'This is a complete paragraph after a formula.',fitz.Font('china-s'),None,None)
+        self.assertEqual(placed[0]['origin_x'],170)
+        self.assertTrue(all(p['rect'][0]>=170 for p in placed if p['baseline']==placed[0]['baseline']))
+        self.assertTrue(any(p['origin_x']==50 for p in placed[1:]))
+
     def test_paragraph_skips_fixed_formula_without_losing_text(self):
         """段落框首行被公式占满时，从下一条可用行完整排字，不覆盖公式。"""
         from paperlocale.paragraph_layout import fit_paragraph
@@ -25,6 +101,36 @@ class ParagraphTests(unittest.TestCase):
         placed = fit_paragraph(unit,'Hello world',fitz.Font('china-s'),None,None)
         self.assertEqual(''.join(p['target'] for p in placed),'Hello world')
         self.assertTrue(all(not fitz.Rect(p['rect']).intersects(obstacle) for p in placed))
+
+    def test_full_width_citation_wraps_without_losing_original_glyphs(self):
+        from paperlocale.paragraph_layout import fit_paragraph
+        text='(Smith et al. 2020; Wang et al. 2021)'
+        glyphs=[{'text':c, 'rect':[i*3,0,i*3+2,8]} for i,c in enumerate(text)]
+        width=len(text)*3
+        anchor={'text':text, 'ink':[0,0,width-1,8], 'body_baseline':8,
+                'glyphs':glyphs, 'page':1}
+        unit={'id':'citation','source':'{v0}.','anchors':[anchor], 'frames':[{
+            'page':1,'rect':[0,0,width+1,50],'size':10,'bold':False,'leading':12,
+            'weight':40,'indent':0}]}
+        placed=fit_paragraph(unit,'{v0}。',fitz.Font('china-s'),None,None)
+        replayed=[g for p in placed if 'inline_anchor' in p for g in p['inline_anchor']['glyphs']]
+        self.assertEqual(replayed,glyphs)
+        self.assertEqual(placed[-1]['target'],'。')
+        self.assertTrue(all(p['rect'][2]<=width+1 for p in placed))
+        self.assertEqual(unit['anchors'],[anchor])
+
+    def test_table_footnote_superscript_clearance_does_not_report_false_overflow(self):
+        """表格外框侵入不足1pt时，上标高度参与避让，注释仍在原框完整排下。"""
+        from paperlocale.paragraph_layout import fit_paragraph
+        anchor={'text':'b','ink':[20,0,23,4],'body_baseline':7.2}
+        unit={'id':'note','source':'Note {v0} text.','anchors':[anchor], 'frames':[{
+            'page':1,'rect':[0,10,200,22.4],'size':7.17,'bold':False,'leading':8.6,
+            'weight':20,'indent':0,'obstacles':[[-1,0,201,10.52]]}]}
+        target='注：{v0}平均气温。'
+        placed=fit_paragraph(unit,target,fitz.Font('china-s'),None,None)
+        self.assertEqual(''.join(p['target'] for p in placed),target)
+        self.assertEqual(placed[0]['font_size'],7.17)
+        self.assertTrue(all(p['rect'][1]>10.52 and p['rect'][3]<=22.4 for p in placed))
 
     def test_wide_figure_edge_does_not_split_caption_with_large_gap(self):
         from paperlocale.paragraph_layout import fit_paragraph

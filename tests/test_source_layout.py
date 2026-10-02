@@ -68,6 +68,95 @@ class Provider(TranslationProvider):
 
 
 class SourceLayoutTests(unittest.TestCase):
+    def test_mixed_italic_prose_translates_to_and_as_but_keeps_variable(self):
+        from paperlocale.source_layout import _parts
+        spans = []
+        x = 40
+        for value, italic in [('Note: ', False), ('belonging to land, denoted as x', True)]:
+            chars = [{'c': c, 'origin': [x+i*5, 100], 'bbox': [x+i*5, 90, x+(i+1)*5, 103]}
+                     for i, c in enumerate(value)]
+            spans.append({'font': 'Times-Italic' if italic else 'Times-Roman', 'flags': 2 if italic else 0,
+                          'size': 10, 'origin': [x, 100], 'chars': chars})
+            x += len(value)*5
+        parts = _parts({'lines': [{'spans': spans}]}, 1, [], paragraph=True,
+                       italic_words=True, short_prose=True)
+        prose = ''.join(p['text'] for p in parts if not p['fixed'])
+        fixed = ''.join(p['text'] for p in parts if p['fixed'])
+        self.assertIn('belonging to land, denoted as', prose)
+        self.assertEqual(fixed.strip(), 'x')
+
+    def test_vector_fraction_stays_whole_and_ordinary_underline_does_not(self):
+        """分子分母与原横线共同保护；单行数学下划线不能被当作分式。"""
+        from copy import deepcopy
+        from paperlocale.source_layout import _preserve_vector_fractions
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'fraction.pdf'
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.draw_line((100, 100), (125, 100), width=.4)
+                doc.save(source)
+            def part(text, baseline, fixed=True):
+                return {'text': text, 'page': 1, 'fixed': fixed, 'size': 8,
+                        'baseline': baseline, 'rect': [100, baseline-6, 124, baseline+2],
+                        'chars': [{'text': text, 'origin': [100, baseline],
+                                   'rect': [100, baseline-6, 124, baseline+2]}]}
+            original = [{'id': 'body', 'page': 1, 'kind': 'body', 'rect': [40, 80, 200, 120],
+                         'text': 'Ratio P Q follows.', 'parts': [part('Ratio', 90, False),
+                            part('P', 97), part('Q', 106), part('follows.', 112, False)]}]
+            blocks = deepcopy(original)
+            _preserve_vector_fractions(source, blocks)
+            self.assertEqual([p['text'] for p in blocks[0]['parts']], ['Ratio', 'follows.'])
+            self.assertEqual(blocks[1]['kind'], 'formula')
+            self.assertEqual(blocks[1]['parts'], original[0]['parts'][1:3])
+            ordinary = deepcopy(original)
+            ordinary[0]['parts'][2] = part('Q', 97)
+            before = deepcopy(ordinary)
+            _preserve_vector_fractions(source, ordinary)
+            self.assertEqual(ordinary, before)
+
+    def test_detached_formula_opener_uses_run_rectangles(self):
+        from paperlocale.source_layout import _detach_formula_openers
+        prose = {'page': 1, 'text': 'The explanation.', 'fixed': False,
+                 'rect': [10, 10, 100, 20], 'size': 10}
+        opener = {'page': 1, 'text': '(', 'fixed': True,
+                  'rect': [10, 22, 14, 34], 'size': 10}
+        body = {'id': 'body', 'page': 1, 'kind': 'body', 'parts': [prose, opener],
+                'rect': [10, 10, 100, 34], 'text': 'The explanation. ('}
+        formula = {'id': 'formula', 'page': 1, 'kind': 'formula', 'rect': [15, 22, 100, 34]}
+        blocks = [body, formula]
+        _detach_formula_openers(blocks)
+        self.assertEqual(body['rect'], prose['rect'])
+        self.assertEqual(body['parts'], [prose])
+        self.assertEqual(blocks[-1]['parts'], [opener])
+        self.assertEqual(blocks[-1]['kind'], 'formula')
+
+    def test_fragmented_author_names_keep_word_boundaries(self):
+        from paperlocale.source_layout import _preserve_front_matter
+        blocks = [
+            {'kind': 'body', 'page': 1, 'rect': [0, 0, 200, 20], 'text': 'Research title',
+             'parts': [{'text': 'Research title', 'size': 18}]},
+            {'kind': 'body', 'page': 1, 'rect': [0, 30, 200, 45], 'text': 'Qimin Deng1 · Sheng Wu2',
+             'parts': [{'text': text, 'size': size} for text, size in
+                       [('Qimin', 10), ('Deng', 10), ('1', 7), ('· Sheng', 10), ('Wu', 10), ('2', 7)]]},
+            {'kind': 'body', 'page': 1, 'rect': [0, 60, 200, 70], 'text': 'Abstract',
+             'parts': [{'text': 'Abstract', 'size': 10}]}]
+        _preserve_front_matter(blocks, paragraph=True, middle_dot_names=True, spaced_names=True)
+        self.assertEqual(blocks[1]['kind'], 'preserve')
+        self.assertEqual(blocks[2]['kind'], 'body')
+
+    def test_author_separators_and_asce_credentials_are_metadata_only(self):
+        from paperlocale.source_layout import _preserve_front_matter
+        def block(text,y,size):
+            return {'kind':'body','page':1,'rect':[0,y,400,y+size],'text':text,
+                    'parts':[{'size':size,'text':text}]}
+        for text,asce in [('Qimin Deng · Louise J. Slater · Christian L. E. Franzke',False),
+                          ('Sushree Swagatika Swain, Aff.M.ASCE; Ashok Mishra; and Chandranath Chatterjee',True),
+                          ('Dineshkumar Muthuvel and Amai Mahesha, M.ASCE',True)]:
+            blocks=[block('Research title',10,18),block(text,50,12),block('Abstract',90,10),block('Normal text here.',110,10)]
+            _preserve_front_matter(blocks,paragraph=True,middle_dot_names=True,asce_credentials=asce)
+            self.assertEqual(blocks[1]['kind'],'preserve',text)
+            self.assertEqual(blocks[3]['kind'],'body')
+
     def test_default_colour_space_survives_text_redaction(self):
         from paperlocale.safe_text import restore_default_color_spaces
         with fitz.open() as source:
@@ -166,6 +255,34 @@ class SourceLayoutTests(unittest.TestCase):
             self.assertIn(token, fixed)
         self.assertIn('where', ordinary)
         self.assertIn('changes.', ordinary)
+
+    def test_punctuation_between_fixed_variables_is_not_translatable_prose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp)/'formula.pdf'
+            with fitz.open() as doc:
+                page=doc.new_page()
+                page.insert_text((40,100),'xx',fontname='tiit',fontsize=10)
+                page.insert_text((51,100),'; ',fontname='tiro',fontsize=10)
+                page.insert_text((57,100),'yy',fontname='tiit',fontsize=10)
+                doc.save(source)
+            modern=extract_layout(source,paragraph=True)
+            legacy=extract_layout(source,paragraph=True,symbol_revision=0)
+            self.assertEqual(modern['symbol_revision'],4)
+            self.assertEqual(modern['blocks'][0]['kind'],'formula')
+            self.assertEqual(legacy['blocks'][0]['kind'],'body')
+            path=Path(tmp)/'plan.json';save_json(path,legacy)
+            self.assertEqual(load_plan(source,path,paragraph=True)[0],legacy)
+
+    def test_variant_greek_symbols_keep_original_glyphs_with_versioned_plan(self):
+        from paperlocale.source_layout import _parts
+        text='The function ϕ and parameter ϑ describe changes.'
+        span={'font':'Body','size':10,'flags':0,
+              'chars':[{'c':c,'origin':(40+i*5,100),'bbox':(40+i*5,92,45+i*5,102)} for i,c in enumerate(text)]}
+        block={'lines':[{'spans':[span]}]}
+        parts=_parts(block,1,[],paragraph=True)
+        self.assertEqual(''.join(p['text'] for p in parts if p['fixed']), 'ϕϑ')
+        legacy=_parts(block,1,[],paragraph=True,greek_variants=False)
+        self.assertNotIn('ϕ', ''.join(p['text'] for p in legacy if p['fixed']))
 
     def test_math_font_brackets_and_control_codes_remain_source_glyphs(self):
         from paperlocale.source_layout import _parts
@@ -726,6 +843,39 @@ class SourceLayoutTests(unittest.TestCase):
             self.assertEqual([b['kind'] for b in blocks],
                              ['body', 'preserve', 'preserve', 'body', 'body'])
 
+    def test_only_nonadvancing_spaces_are_removed(self):
+        from paperlocale.source_layout import normalize_nonadvancing_spaces
+        chars = [dict(c=c, origin=(x, 100)) for c, x in [('m', 40), (' ', 45), ('a', 45),
+                 (' ', 50), ('i', 50), (' ', 52), ('n', 52), (' ', 57), ('2', 60), (' ', 65), ('m', 68)]]
+        raw = [{'lines': [{'dir': (1, 0), 'spans': [{'chars': chars}]}]}]
+        normalize_nonadvancing_spaces(raw)
+        self.assertEqual(''.join(c['c'] for c in raw[0]['lines'][0]['spans'][0]['chars']), 'main 2 m')
+
+    def test_front_matter_after_cover_preserves_names_and_legacy_plan(self):
+        # PDF 封面页不等于论文首页；只保护标题与摘要之间的姓名/单位。
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'cover.pdf'
+            with fitz.open() as document:
+                cover = document.new_page(width=600, height=800)
+                cover.insert_text((40, 90), 'VU Research Portal', fontsize=18)
+                cover.insert_text((40, 125), 'Take down policy', fontsize=10)
+                page = document.new_page(width=600, height=800)
+                page.insert_text((40, 90), 'Soil moisture controls ecosystems', fontsize=18)
+                page.insert_text((40, 125), 'Jane Doe and John Smith', fontsize=10)
+                page.insert_text((40, 150), 'Department of Ecology, Example University', fontsize=9)
+                page.insert_text((40, 190), 'Abstract', fontsize=12)
+                page.insert_text((40, 220), 'We measured daily soil moisture and ecosystem response.', fontsize=10)
+                document.save(source)
+            modern = extract_layout(source, paragraph=True)
+            old = extract_layout(source, paragraph=True, frontmatter_after_cover=False)
+            for value in ['Jane Doe and John Smith', 'Department of Ecology, Example University']:
+                self.assertEqual(next(b for b in modern['blocks'] if b['text'] == value)['kind'], 'preserve')
+                self.assertEqual(next(b for b in old['blocks'] if b['text'] == value)['kind'], 'body')
+            self.assertEqual(modern['frontmatter_revision'], 2)
+            path = Path(directory) / 'plan.json'
+            save_json(path, old)
+            self.assertEqual(load_plan(source, path, paragraph=True)[0], old)
+
     def test_auxiliary_sections_stay_original_and_later_methods_resume(self):
         # References 之后的 Methods 仍属于正文；辅助标题和跨页内容均保护。
         with tempfile.TemporaryDirectory() as directory:
@@ -925,3 +1075,10 @@ class SourceLayoutTests(unittest.TestCase):
             self.assertFalse((run / 'render_output' / 'translated.pdf').exists())
             self.assertTrue((run / 'translations.jsonl').exists())
             self.assertEqual(load_manifest(run)['status'], 'collected')
+
+
+class ExtendedCitationTests(unittest.TestCase):
+    def test_accented_names_keep_native_citation(self):
+        for value in ('(Ruiz- Aĺvarez et al. 2021)', '(Muñoz-Sabater et al., 2021)', '(Álvarez and Müller 2020)'):
+            self.assertIsNotNone(CITATION.fullmatch(value), value)
+        self.assertIsNone(CITATION.fullmatch('(February 2020)'))

@@ -74,6 +74,16 @@ def restore_source_symbols(page, raw, cache):
 # Wang 2025、Hao 2019、Feng 2026 等原页截图与字形逐项对照。
 # 键同时约束字体类型、em 单位和完整轮廓，原 PDF 字形从不替换。
 CORPUS_REVIEWED_OUTLINES = {
+    # Science Advances 2017, DOI 10.1126/sciadv.1700263 p8: source glyph
+    # visibly theta, but ToUnicode is q. Exact CFF outline, never font-name guessing.
+    ('cff', 1000, 'fa52c7bfd1455f0d35985b2ed79329ed45c72e3349e71925053e726623bf699d'): 'θ',
+    # ASCE Swain 2024 第7页原页与轮廓核验：AdvP4C4E74 的可打印
+    # ToUnicode ð/Þ/¼ 实际绘制括号/等号。只接受下列完整轮廓摘要，
+    # 不能把其他字体中的正常拉丁字母或四分之一替换成数学符号。
+    ('cff', 1000, '6a57c4966188f4b99005c9ac50f8b2e323b5246e60ac26df88165339d2f5a2f3'): '(',
+    ('cff', 1000, '42412fd504944455c49cb6069544ae3c7de998a3f5ecce2c64592660da201a45'): ')',
+    ('cff', 1000, '12a0dcdcc6b95615a4479200f021cc840b986cee1d7186f669d5b64d9fb3f2ec'): '=',
+
     ('cff', 1000, '009bf73f6cd5e6a4b9fad7ea090f889190737b331baf18c1215701cb2860c3c7'): '∑',
     ('cff', 1000, '41020f8e445e7438a3fcdcd376fa89b3a307a80736e95a6a3bf9a69d8ca855d2'): '=',
     ('cff', 1000, 'e7e216f90c92f695051d79db83522daca5ecbcb0f36897fb95ee05d35023a3e2'): '(',
@@ -125,7 +135,7 @@ CORPUS_REVIEWED_OUTLINES = {
 }
 
 
-def restore_verified_symbols(page, raw, cache):
+def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_math=False):
     """新计划专用：已核验异常轮廓恢复语义；无墨迹字符恢复空白。
 
     不推断未知控制码，也不向模型传入乱码。空白要由实际原字形的空
@@ -135,7 +145,8 @@ def restore_verified_symbols(page, raw, cache):
         for line in block.get('lines', []):
             for span in line['spans']:
                 for char in span['chars']:
-                    if char['c'].isprintable() or char['c'].isspace() or char['c'] == '\u00ad':
+                    if (char['c'].isprintable() and not (printable_math and char['c'] in 'ðÞ¼' or latin_math and char['c'] == 'q')
+                            or char['c'].isspace() or char['c'] == '\u00ad'):
                         continue
                     native = {'text': char['c'], 'rect': char['bbox'], 'origin': char['origin']}
                     glyphs = _source_anchor_glyphs(page, [native], cache, include_empty=True)

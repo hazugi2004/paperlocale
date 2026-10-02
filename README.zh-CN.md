@@ -71,22 +71,33 @@ v0.4.0 网页桥接的操作与额度边界见
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.8.1"
+python -m pip install "paperlocale[layout]==0.8.2"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-## 开始翻译（0.8.1）
+## 开始翻译（0.8.2）
 
 新运行默认采用段落框模式（`--layout-mode paragraph`），翻译标题、摘要、正文（含方法）和图注/表注。先按原文缩进、行距与标题样式拆分自然段，再将跨页、跨栏或被图片分隔的同一段联合翻译，写回对应物理框。中文连续换行，不分散到每条旧英文行，不插入汉字间空格。行内引文和已支持的数学字形使用原字体随正文移动，链接目标保留、点击区域同步移动。
 
-图中文字、表内文字、独立公式、作者与机构、致谢等辅助章节及参考文献保留原文。为容纳完整内容，每段字号最多缩小到原字号的80%；可用 `--min-font-size` 明确指定下限。既有 `preserved` 和 `legacy` 运行继续使用原模式及缓存。
+图中文字、表内文字、独立公式、作者与机构、出版商声明及参考文献保留原文；致谢、数据可用性等研究文本和图表外部题注译为中文。为容纳完整内容，每段字号最多缩小到原字号的80%；可用 `--min-font-size` 明确指定下限。既有 `preserved` 和 `legacy` 运行继续使用原模式及缓存。
 
 ```bash
 paperlocale run paper.pdf --run-dir runs/paper
 ```
+
+本机已登录 Codex 后，可明确选择订阅模型，并把断点和译文都放到来源目录之外：
+
+```bash
+paperlocale run /path/to/paper.pdf --run-dir runs/paper \
+  --output-pdf output/paper.zh.pdf --layout-mode paragraph \
+  --provider codex-local --model gpt-6-astra --reasoning-effort high \
+  --domain atmospheric-science --unattended --no-wait-on-error
+```
+
+中断后重复同一命令可复用兼容断点。`codex-local` 要求 POSIX 系统及本机账号拥有所选模型的访问权限。
 
 无需核对或修改版面计划。全部正文通过内容、排版、保护区和回读检查后才生成完整候选；错误会保存断点并保持等待，不生成有缺口的 PDF。外部问题修正后，执行 `paperlocale resume-waiting --run-dir runs/paper` 继续。瞬时网络故障最多自动重试一次，已有翻译与精炼答复继续复用，不切换模型。
 

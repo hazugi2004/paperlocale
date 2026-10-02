@@ -41,6 +41,24 @@ def font_bytes(extra=False, cmap=True):
 
 
 class InlineTrueTypeTests(unittest.TestCase):
+    def test_replay_uses_cropbox_transform_and_serialized_glyph_positions(self):
+        """真实非零 CropBox：原字形平移必须落在页面坐标，不能偏移裁切边距。"""
+        with tempfile.TemporaryDirectory() as folder:
+            source=Path(folder)/'source.pdf';candidate=Path(folder)/'candidate.pdf'
+            with fitz.open() as doc:
+                page=doc.new_page(width=600,height=800)
+                page.insert_font(fontname='fixture',fontbuffer=font_bytes())
+                page.insert_text((100,100),'2',fontname='fixture',fontsize=12)
+                page.set_cropbox(fitz.Rect(8,9,592,791));doc.save(source)
+            with fitz.open(source) as doc:
+                native=doc[0].get_text('rawdict')['blocks'][0]['lines'][0]['spans'][0]['chars']
+                chars=[{'text':c['c'],'origin':c['origin'],'rect':c['bbox']} for c in native]
+                glyphs=_source_anchor_glyphs(doc[0],chars,{})
+                item={'page':1,'shift':[50,30],'inline_anchor':{'page':1,'text':'2','glyphs':glyphs}}
+                write_inline(doc[0],item,{})
+                doc.save(candidate)
+            self.assertEqual(verify_inline(candidate,[item])[0]['glyphs'],1)
+
     def test_skipped_multiline_text_does_not_cover_independent_heading(self):
         from paperlocale.safe_text import safe_erase_rectangles
         with tempfile.TemporaryDirectory() as folder:

@@ -42,7 +42,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(manifest["status"], "rendered")
 
     def test_package_version_matches_current_release(self) -> None:
-        self.assertEqual(__version__, "0.8.1")
+        self.assertEqual(__version__, "0.8.2")
 
     def test_qwen_csv_key_is_opaque_and_takes_explicit_precedence(self) -> None:
         """有标点的完整CSV字段传入Provider；环境变量不得替换显式选定的密钥。"""
@@ -93,7 +93,7 @@ class CliTest(unittest.TestCase):
 
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
-            build_parser().parse_args(["run", "paper.pdf"])
+            build_parser().parse_args(["run"])
         self.assertEqual(raised.exception.code, 2)
         output = stderr.getvalue()
         self.assertIn("原因：", output)

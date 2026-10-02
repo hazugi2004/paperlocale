@@ -19,7 +19,7 @@ def read_choices(root: Path, source_hash: str) -> dict:
     return choices
 
 
-def apply_choice(root: Path, key: str, error_id: str) -> None:
+def apply_choice(root: Path, key: str, error_id: str, edits: dict | None = None) -> None:
     """一次选择只改变明确失败片段；重试仍走原流程，绝不把失败设为成功。"""
     root = root.expanduser().resolve()
     report = json.loads((root / 'error_report.json').read_text())
@@ -29,6 +29,12 @@ def apply_choice(root: Path, key: str, error_id: str) -> None:
         return
     if report.get('source_pdf') and digest(Path(report['source_pdf'])) != report['source_sha256']:
         raise ValueError('源 PDF 已变化，不能应用旧诊断修复')
+    checked = None
+    if key == 'e':
+        from .repair_editor import check_edits
+        checked = check_edits(root, error_id, edits)
+        if any(row['errors'] for row in checked):
+            raise ValueError('修订尚未通过：' + '; '.join(row['id'][:12] + ': ' + '；'.join(row['errors']) for row in checked if row['errors']))
     if key == 'b':
         record = json.loads((root / 'recovery_undo.json').read_text())
         backup = root / 'recovery_backups' / record['backup']
@@ -84,7 +90,10 @@ def apply_choice(root: Path, key: str, error_id: str) -> None:
         _save(root / 'recovery_undo.json', {'backup': stamp, 'files': snapshot_files})
         ids = {item['id'] for item in report['items'] if item.get('id')}
         choices = read_choices(root, report['source_sha256'])
-        if key == 's':
+        if key == 'e':
+            from .repair_editor import save_edits
+            save_edits(root, checked, error_id)
+        elif key == 's':
             field = 'skip_blocks' if report['category'] == 'extraction' else 'skip'
             choices[field] = sorted(set(choices.get(field, [])) | ids)
         elif key == 'f':
@@ -132,7 +141,14 @@ def interactive_run(operation, root: Path):
             if key == 'q':
                 return 1
             try:
-                apply_choice(root, key, report['error_id'])
+                edits = None
+                if key == 'e':
+                    edits = {}
+                    for item in report['items']:
+                        if item.get('id') and 'target' in item and item['id'] not in edits:
+                            value = input(f"片段 {item['id'][:12]} 的新译文（单行，留空不改）：")
+                            if value: edits[item['id']] = value
+                apply_choice(root, key, report['error_id'], edits)
             except Exception as error:
                 print_error(error, root)
                 continue

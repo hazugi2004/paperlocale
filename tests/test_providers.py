@@ -65,7 +65,7 @@ class ProviderTest(unittest.TestCase):
             model="gpt-5.6-sol",
             reasoning_effort="high",
         )
-        with patch("paperlocale.providers.codex_local.subprocess.run", side_effect=fake_run):
+        with patch("paperlocale.providers.codex_local._run_codex", side_effect=fake_run):
             result = provider.translate([self.segment], self.context)
         self.assertEqual(result[0].target, "土壤湿度为10 mm。")
         self.assertEqual(result[0].id, self.segment.id)
@@ -84,7 +84,7 @@ class ProviderTest(unittest.TestCase):
             reasoning_effort="high",
         )
         with patch(
-            "paperlocale.providers.codex_local.subprocess.run",
+            "paperlocale.providers.codex_local._run_codex",
             return_value=completed,
         ):
             self.assertEqual(

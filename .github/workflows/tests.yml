@@ -65,10 +65,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Resolve layout dependencies
-        # 单元测试只安装 test extra，无法发现核心依赖与 pdf2zh-next 的版本冲突；
-        # dry-run 会执行完整依赖求解，但不会下载并安装体积较大的版面工具链。
-        run: python -m pip install --dry-run ".[layout]"
+      - name: Install layout dependencies and check startup
+        # 依赖求解成功不代表可启动：BabelDOC 曾因 bitstring 5 移除 BitStream 而
+        # 导入失败。真实执行版本命令，在 PR 阶段就检查这类传递依赖不兼容。
+        run: |
+          python -m pip install ".[layout]"
+          python -m pip check
+          pdf2zh_next --version
 
   unit-tests:
     strategy:

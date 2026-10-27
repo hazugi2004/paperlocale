@@ -41,7 +41,12 @@ paperlocale = "paperlocale.cli:main"
 
 [project.optional-dependencies]
 test = ["reportlab>=4"]
-layout = ["pdf2zh-next>=2.9,<3"]
+layout = [
+  "pdf2zh-next>=2.9,<3",
+  # BabelDOC 0.6.x 导入 BitStream；bitstring 5 已移除此接口，会让 CLI 启动失败。
+  # 仅约束版面工具链；上游移除此接口依赖并通过真实版面测试后再放开上限。
+  "bitstring>=4.3,<5",
+]
 
 [project.urls]
 Repository = "https://github.com/hazugi2004/paperlocale"

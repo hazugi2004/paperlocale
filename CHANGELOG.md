@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keep the layout extra on bitstring 4.x because BabelDOC 0.6.x imports the `BitStream` interface removed in bitstring 5.
+- Start the layout CLI in pull request and weekly compatibility checks so import failures expose their underlying traceback.
+
 ## 0.8.2 — 2026-10-02
 
 - Add in-app source PDF comparison, classified errors, checked translation edits, rollback, and fresh-layout recovery with validated cache import.

@@ -2,8 +2,25 @@
 
 ## Unreleased
 
+## 0.8.3 — 2026-10-28
+
 - Keep the layout extra on bitstring 4.x because BabelDOC 0.6.x imports the `BitStream` interface removed in bitstring 5.
 - Start the layout CLI in pull request and weekly compatibility checks so import failures expose their underlying traceback.
+- Index painted-image rectangles without changing the strict matching tolerance or transparent-image protection, avoiding quadratic scans on complex maps.
+- Preserve evidenced CRediT author sidebars and recognize Earth's Future while retaining the original classification of existing layout plans.
+- Write distinct Unicode characters sharing one font glyph with separate ToUnicode dictionaries; retain exact text readback and scientific minus signs.
+- Restore four visually reviewed bracket outlines only under a new source-symbol revision; preserve the original encoding and reject unknown glyphs.
+- Rejoin evidenced fragments of one full-width body line and separate an adjoining prose predicate from a scripted variable, retaining source coordinates and old-plan replay.
+- Keep commas inside geometrically verified multi-index subscripts so one variable remains one original-font anchor.
+- Preserve precomposed Unicode scripts and translate ordinary words before raised citation numbers, including Latin ligatures; only explicit matching bibliography links override an ambiguous unit-power interpretation.
+- Avoid MuPDF image-resource name exhaustion on dense pages without Forms using the same text-deletion geometry and original resource bindings; retain native Form instancing on other pages.
+- Recover a visually proven misencoded decimal point only by exact CFF outline under a new symbol revision, keeping normal colons and old plans unchanged.
+- Parse each immutable page once for protected-region text proofs while retaining the original per-region glyph, style, position and native-array checks.
+- Bound large content-stream parsing to a per-call, byte-derived budget using the public pypdf configuration API, preserving other resource limits and strict QA; retain only relevant parsed operations to reduce dense-page memory.
+- Preserve URI strings containing literal delimiters, backslashes or Unicode when relocating links, including split cross-page regions and indirect annotation arrays.
+- Rejoin visually reviewed tall brackets and enclosed short mathematical subscripts using source geometry under script revision 4; retain ordinary prose and old-plan replay.
+- Require ordered nonempty image calls, unchanged image resources and the matching source-preservation pixel report before accepting native removal of empty-clipped image calls.
+- Validate the update with 534 automated tests, the deterministic layout smoke, and two real papers totaling 35 pages; scope and acceptance limits are recorded in [the robustness report](docs/robustness-20261027.md).
 
 ## 0.8.2 — 2026-10-02
 

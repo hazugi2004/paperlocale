@@ -27,6 +27,7 @@ PROFILES = [
     ('Earth System Science Data', 'copernicus', r'10\.5194/essd-|earth\s*syst\.\s*sci\.\s*data'),
     ('Geophysical Research Letters', 'agu', r'10\.1029/\d{4}gl|geophysical\s+research\s+letters'),
     ('Journal of Geophysical Research: Atmospheres', 'agu', r'10\.1029/\d{4}jd|journal of\s+geophysical research:\s*atmospheres'),
+    ("Earth's Future", 'agu', r"10\.1029/\d{4}ef\d+|earth[’']s\s+future"),
     ('Journal of Hydrometeorology', 'ams', r'10\.1175/jhm-|journal\s+of\s+hydrometeorology'),
     ('Journal of Hydrology', 'elsevier', r'10\.1016/j\.jhydrol\.|journal\s+of\s+hydrology|S00221694'),
     ('Earth-Science Reviews', 'elsevier', r'10\.1016/j\.earscirev\.|earth-science\s+reviews'),
@@ -44,11 +45,13 @@ PROFILES = [
 ]
 
 
-def identify_journal(source: Path, *, related=True) -> dict:
+def identify_journal(source: Path, *, related=True, earths_future=True) -> dict:
     """优先元数据与前部页证据；不扫描末尾书目来判所属期刊。
 
     无刊名的 *_supplement 可核验同目录正文：正文元数据标题必须完整出现于
     补充材料首页，不能只凭相似文件名继承。单独移动的无标识附件返回 unknown。
+    earths_future=False 仅供旧版面计划重算：旧计划尚无这项刊物适配，恢复时
+    必须保持原来的刊物归属，不能使已有分类或计划身份因新增规则而变化。
     """
     with fitz.open(source) as doc:
         front = [p.get_text() for p in list(doc)[:3]]
@@ -56,7 +59,8 @@ def identify_journal(source: Path, *, related=True) -> dict:
     evidence = [('metadata', metadata)] + [(i+1, t) for i, t in enumerate(front)]
     for page, text in evidence:
         text = re.sub(r'-\s*\n\s*', '', text)
-        matches = [(name, family, re.search(pattern, text, re.I)) for name, family, pattern in PROFILES]
+        matches = [(name, family, re.search(pattern, text, re.I)) for name, family, pattern in PROFILES
+                   if earths_future or name != "Earth's Future"]
         matches = [x for x in matches if x[2]]
         # 一页中多刊物命中可能来自封面引用或正文讨论，保留冲突，不任意选第一项。
         if len(matches) == 1:
@@ -69,7 +73,7 @@ def identify_journal(source: Path, *, related=True) -> dict:
                 title = doc.metadata.get('title') or ''
             normalize = lambda v: re.sub(r'\W+', '', v).lower()
             if len(title) > 30 and normalize(title) in normalize(front[0]):
-                match = identify_journal(parent, related=False)
+                match = identify_journal(parent, related=False, earths_future=earths_future)
                 if match['family'] != 'generic':
                     return {**match, 'evidence': '补充材料标题与正文元数据一致：'+title,
                             'related_source': str(parent.resolve()), 'page': 1}

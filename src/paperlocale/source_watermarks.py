@@ -9,6 +9,8 @@ import pymupdf as fitz
 from pypdf import PdfReader
 from pypdf.generic import ContentStream
 
+from .pdf_streams import parsed_content_stream
+
 
 def background_layers(document):
     """拆分已声明的背景水印与正文；输出源绘制指令及逐字符证据。"""
@@ -25,7 +27,7 @@ def background_layers(document):
     for number in candidates:
         source = reader.pages[number]
         properties = source['/Resources'].get('/Properties', {})
-        operations = source.get_contents().operations
+        operations = parsed_content_stream(source.get_contents(), reader).operations
         start = next((i for i, (_, op) in enumerate(operations) if op not in {b'q', b'cm'}), None)
         if start is None:
             continue

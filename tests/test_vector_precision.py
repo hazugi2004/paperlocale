@@ -10,10 +10,71 @@ from pypdf import PdfReader
 from pypdf.generic import DictionaryObject, FloatObject, NameObject
 from paperlocale.source_watermarks import set_page_stream
 from paperlocale.vector_precision import (restore_rectangles, restore_vector_precision,
-                                         _same_resource, _SourceFloat)
+                                         _same_resource, _SourceFloat, _protected_text_regions)
 
 
 class VectorPrecisionTests(unittest.TestCase):
+    def test_cached_bounds_keep_native_contains_edge_and_empty_box_semantics(self):
+        from unittest.mock import Mock
+        with fitz.open() as doc:
+            page = doc.new_page()
+            page.insert_text((40, 60), 'A', fontsize=10)
+            span = page.get_texttrace()[0]
+            char = span['chars'][0]
+            boxes = [(0, 0, 10, 10), (0, 0, 0, 0), (10, 10, 10, 10),
+                     (-.00001, 0, 10, 10), (0, 0, 10.00001, 10),
+                     (5, 0, 4, 10), (0, 6, 10, 5), (float('nan'), 0, 10, 10)]
+            regions = [{'kind': 'figure', 'rect': [0, 0, 10, 10]}]
+            for box in boxes:
+                with self.subTest(box=box):
+                    altered = (*char[:3], box)
+                    trace = [{**span, 'chars': [altered]}]
+                    proxy = Mock(get_texttrace=Mock(return_value=trace),
+                                 transformation_matrix=page.transformation_matrix)
+                    # 直接调用已安装PyMuPDF的原contains作为独立判据；
+                    # 测试完整返回proof，不能只比较“是否有任意相交像素”。
+                    expected = fitz.Rect(regions[0]['rect']).contains(fitz.Rect(box))
+                    proofs = _protected_text_regions(proxy, proxy, regions)
+                    self.assertEqual(bool(proofs), expected)
+                    if expected:
+                        self.assertEqual(proofs[0][0][0][0], altered)
+
+    def test_region_proofs_parse_each_page_once_without_weakening_glyph_checks(self):
+        from unittest.mock import Mock
+        with fitz.open() as source, fitz.open() as target:
+            a, b = source.new_page(), target.new_page()
+            for page in (a, b):
+                page.insert_text((40, 60), 'Fixed figure label', fontsize=10)
+            a.insert_text((40, 110), 'Original table label', fontsize=10)
+            b.insert_text((40, 110), 'Changed table label', fontsize=10)
+            regions = ([{'kind': 'figure', 'rect': [30, 40, 200, 70]}] * 200
+                       + [{'kind': 'table', 'rect': [30, 90, 200, 120]},
+                          {'kind': 'figure', 'rect': [300, 300, 400, 400]},
+                          {'kind': 'body', 'rect': [30, 40, 200, 70]}])
+            # 真 PDF 提供样式、GID、字框和坐标；代理仅计数整页重放次数。
+            # 改字区域、空区域与正文区域不能因缓存而升级成保护证明。
+            before, after = a.get_texttrace(), b.get_texttrace()
+            proxies = [Mock(transformation_matrix=page.transformation_matrix,
+                            get_texttrace=Mock(return_value=trace))
+                       for page, trace in ((a, before), (b, after))]
+            proofs = _protected_text_regions(*proxies, regions)
+            self.assertEqual(len(proofs), 200)
+            for proxy in proxies:
+                proxy.get_texttrace.assert_called_once_with()
+            rect = fitz.Rect(regions[0]['rect'])
+            def original_filter(trace):
+                return [(char, tuple(span[k] for k in
+                         ('font', 'size', 'dir', 'wmode', 'color', 'opacity', 'type')))
+                        for span in trace for char in span['chars']
+                        if rect.contains(fitz.Rect(char[3]))]
+            self.assertEqual(proofs, [(original_filter(before), original_filter(after),
+                                      tuple(a.transformation_matrix))] * 200)
+            for proxy in proxies:
+                proxy.get_texttrace.reset_mock()
+            self.assertEqual(_protected_text_regions(*proxies, [regions[-1]]), [])
+            for proxy in proxies:
+                proxy.get_texttrace.assert_not_called()
+
     def test_rectangles_keep_ctm_clip_paint_and_comments(self):
         for paint in [b'f', b'f*', b'S', b'B', b'B*', b'W n', b'W* n']:
             with self.subTest(paint=paint):

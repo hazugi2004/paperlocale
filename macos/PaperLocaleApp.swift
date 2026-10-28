@@ -29,7 +29,7 @@ import PDFKit
     @Published var effort = "medium"
     @Published var runQA = true
     @Published var running = false
-    @Published var log = "选择论文 PDF，确认翻译服务与模型后开始。\n需要本机已安装 PaperLocale 0.8.2 的 layout 依赖；Codex 服务需要已登录的 Codex CLI，API 服务需要对应密钥。"
+    @Published var log = "选择论文 PDF，确认翻译服务与模型后开始。\n需要本机已安装 PaperLocale 0.8.3 的 layout 依赖；Codex 服务需要已登录的 Codex CLI，API 服务需要对应密钥。"
     @Published var dropTarget = false
     @Published var fraction = 0.0
     @Published var stage = "等待开始"
@@ -271,7 +271,7 @@ import PDFKit
     func start(repair: RepairAction? = nil, report: RepairReport? = nil) {
         guard !running else { return }
         guard FileManager.default.isExecutableFile(atPath: cli) else {
-            log = "找不到可执行的 PaperLocale：\(cli)\n请按本地构建说明安装 PaperLocale 0.8.2，或选择已安装的命令。"
+            log = "找不到可执行的 PaperLocale：\(cli)\n请按本地构建说明安装 PaperLocale 0.8.3，或选择已安装的命令。"
             return
         }
         guard FileManager.default.fileExists(atPath: pdf), !model.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -387,7 +387,7 @@ struct ContentView: View {
                 MascotImage(name: "AppIcon").frame(width: 52, height: 52)
                 VStack(alignment: .leading) {
                     Text("PaperLocale").font(.title.bold())
-                    Text("0.8.2 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
+                    Text("0.8.3 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -450,7 +450,7 @@ struct ContentView: View {
                         TextField("PaperLocale 路径", text: $job.cli)
                         Button("选择…", action: job.selectCLI)
                     }.disabled(job.running)
-                    Text("此应用调用本机 CLI；需要 PaperLocale 0.8.2、layout 依赖、Poppler，以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译；模型是否可用由你的账户决定。")
+                    Text("此应用调用本机 CLI；需要 PaperLocale 0.8.3、layout 依赖、Poppler，以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译；模型是否可用由你的账户决定。")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Text(job.fontFile.isEmpty ? "中文字体：自动获取" : job.fontFile).lineLimit(1)
@@ -666,7 +666,7 @@ struct RollingProgress: View {
     @StateObject private var job = TranslationJob()
     init() {
         if CommandLine.arguments.contains("--version") {
-            print("PaperLocale macOS 0.8.2")
+            print("PaperLocale macOS 0.8.3")
             exit(0)
         }
     }

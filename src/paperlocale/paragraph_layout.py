@@ -731,6 +731,33 @@ def merge_inline_parts(parts):
     return result
 
 
+def _insert_uri_link(page, link):
+    """安全写入移动后的 URI 注释；网址按原字符保存，不修剪或重新编码目标。
+
+    PyMuPDF 1.25.2 的 insert_link 将 URI 直接嵌入 PDF 括号字符串，
+    原网址含单括号或反斜杠时会产生坏注释。使用其官方字符串编码函数
+    同时处理括号、反斜杠和 Unicode；其余链接种类仍沿用原写入路径。
+    页坐标必须逆变换到 PDF 坐标，不能假定 CropBox 原点为零。
+    """
+    document = page.parent
+    kind, annots = document.xref_get_key(page.xref, 'Annots')
+    if kind == 'xref':
+        annots = document.xref_object(int(annots.split()[0]))
+    elif kind == 'null':
+        annots = '[]'
+    if not annots.strip().startswith('[') or not annots.strip().endswith(']'):
+        raise ValueError('链接注释列表不是有效的 PDF 数组')
+    box = fitz.Rect(link['from']) * ~page.transformation_matrix
+    coordinates = ' '.join(f'{value:.10f}' for value in box)
+    xref = document.get_new_xref()
+    document.update_object(xref, '<< /Type /Annot /Subtype /Link /Border [0 0 0] '
+                           f'/Rect [{coordinates}] /A << /S /URI '
+                           f'/URI {fitz.get_pdf_str(link["uri"])} >> >>')
+    # 保留列表中的所有原注释引用，仅向本页追加新链接；间接数组也不原地
+    # 改写，以免意外改变共享同一数组的其他页面。
+    document.xref_set_key(page.xref, 'Annots', annots.strip()[:-1] + f' {xref} 0 R]')
+
+
 def relocate_links(document, original, placements):
     """引文移动时同步其点击区域，目标 URI/页号保持不变；未移动区域保持原样。"""
     expected = {i: list(p.get_links()) for i,p in enumerate(original,1)}
@@ -779,7 +806,10 @@ def relocate_links(document, original, placements):
             # 一条长网址换行后各段仍指向同一原始目标；删除旧点击区一次，
             # 按实际字形组建立多个新区域，不把整条链接留在旧英文位置。
             for target_page, changed in moved_links:
-                document[target_page-1].insert_link(changed)
+                if changed['kind'] == fitz.LINK_URI:
+                    _insert_uri_link(document[target_page-1], changed)
+                else:
+                    document[target_page-1].insert_link(changed)
                 expected[target_page].append(changed)
     return expected
 

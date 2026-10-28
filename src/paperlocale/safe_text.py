@@ -350,6 +350,7 @@ def prepare_source_layer(source, editable, protected, erase_regions):
     像素核验或完整译文通过。任何异常都在调用翻译服务之前向上传播。
     """
     from .font_geometry import open_source_for_editing, restore_source_fonts
+    from .text_filter import apply_text_redactions
     document, original_fonts = open_source_for_editing(source)
     with document, open_source_pdf(source) as original:
         from .source_watermarks import background_layers, set_page_stream, restore_background, verify_backgrounds
@@ -363,9 +364,10 @@ def prepare_source_layer(source, editable, protected, erase_regions):
                 continue
             for part in (p for p in erase_regions if p['page'] == number):
                 page.add_redact_annot(fitz.Rect(part['rect']), fill=False, cross_out=False)
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
-                                  graphics=fitz.PDF_REDACT_LINE_ART_NONE,
-                                  text=fitz.PDF_REDACT_TEXT_REMOVE)
+            # 高密度地图可能超过 MuPDF 的图片资源重命名上限。统一入口仅在
+            # 已证明没有 Form 的超限页改用等价文字过滤，其余页沿用原删除。
+            # 删除后逐字符核验和最终原图/字形像素检查继续完整执行。
+            apply_text_redactions(page)
             verify_text_erased(page, edits, [p for p in protected if p['page'] == number])
             restore_default_color_spaces(page, original[number - 1])
             if number in layers:
@@ -409,8 +411,8 @@ def restore_changed_isolated_regions(page, source_page, editable, protected):
         return False
     for rect in regions:
         page.add_redact_annot(rect, fill=False, cross_out=False)
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
-                          graphics=fitz.PDF_REDACT_LINE_ART_NONE, text=fitz.PDF_REDACT_TEXT_REMOVE)
+    from .text_filter import apply_text_redactions
+    apply_text_redactions(page)
     for rect in regions:
         page.draw_rect(rect, color=None, fill=(1, 1, 1), width=0)
         form = page.show_pdf_page(rect, source_page.parent, source_page.number, clip=rect, keep_proportion=False)

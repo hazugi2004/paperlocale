@@ -15,6 +15,8 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.generic import (ArrayObject, ContentStream, DictionaryObject,
                            FloatObject, IndirectObject, NameObject)
 
+from .pdf_streams import content_parsing_budget
+
 
 def _float32(value):
     value = float(value)
@@ -48,19 +50,32 @@ def _operations(data):
     """
     stream = BytesIO(data)
     ends = []
+    starts = []
+    # 仍由同一个原生语法解析器读完全部指令；路径画点/着色等不改变
+    # 下列几何及文字状态，无须把数百万个无关操作数长驻在Python列表。
+    # 每个原始操作都推进边界，防止替换re/TJ时误吞此前未保留的图形字节。
+    retained = {b'q', b'Q', b'cm', b're', b'Do', b'gs', b'BT', b'ET', b'Tf',
+                b'Tc', b'Tw', b'Tz', b'Ts', b'Tr', b'TL', b'Tm', b'Td', b'TD',
+                b'T*', b'TJ', b'Tj', b"'", b'"'}
 
     class Operations(list):
+        previous_end = 0
+
         def append(self, operation):
-            super().append(operation)
-            ends.append(stream.tell())
+            end = stream.tell()
+            if operation[1] in retained:
+                super().append(operation)
+                starts.append(self.previous_end)
+                ends.append(end)
+            self.previous_end = end
 
     parsed = ContentStream(None, None)
     parsed._operations = Operations()
-    parsed._parse_content_stream(stream)
+    with content_parsing_budget(data):
+        parsed._parse_content_stream(stream)
     ctm = (1, 0, 0, 1, 0, 0)
     stack = []
-    start = 0
-    for (args, op), end in zip(parsed.operations, ends):
+    for (args, op), start, end in zip(parsed._operations, starts, ends):
         if op == b'q':
             stack.append(ctm)
         elif op == b'Q':
@@ -70,7 +85,6 @@ def _operations(data):
         elif op == b'cm':
             ctm = _multiply(tuple(map(_float32, args)), ctm)
         yield args, op, start, end, ctm
-        start = end
     if stack:
         raise ValueError('Unbalanced graphics state while preserving precision')
 
@@ -257,21 +271,38 @@ def _protected_text_regions(source_page, target_page, regions):
     """Require whole-box glyph identity; coordinates are proven per complete TJ run."""
     import pymupdf as fitz
 
-    def glyphs(page, rect):
+    # 每个区域仍独立核验完整字形与样式，不能用整页文本相似代替保护证据。
+    # 但 get_texttrace 会重放整页绘制流：高密度矢量图中反复调用会让同一页
+    # 被解析数百次。两页在本函数内都不修改，因此只读快照可安全各取一次；
+    # 没有图表区域时不解析页面，也不改变后续 TJ 原位/唯一性验证条件。
+    regions = [region for region in regions if region['kind'] in {'table', 'figure'}]
+    if not regions:
+        return []
+    def page_glyphs(page):
         result = []
         for span in page.get_texttrace():
             style = tuple(span[k] for k in ('font', 'size', 'dir', 'wmode', 'color', 'opacity', 'type'))
-            for char in span['chars']:
-                if rect.contains(fitz.Rect(char[3])):
-                    result.append((char, style))
+            result.extend((char, style, char[3]) for char in span['chars'])
+        return result
+
+    source_trace, target_trace = page_glyphs(source_page), page_glyphs(target_page)
+
+    def glyphs(trace, rect):
+        result = []
+        left, top, right, bottom = tuple(rect)
+        for char, style, (x0, y0, x1, y1) in trace:
+            # PyMuPDF Rect.__contains__ 对矩形正是以下六个非严格比较。
+            # 字框来自原生trace的四个float，不归一化、不扩框，也不改浮点值；
+            # 零面积、倒置框及NaN仍按原判据处理。避免每区每字反复分配
+            # 两个Rect对象，密集图片页的数千万次包含判断不再反复建对象。
+            if left <= x0 <= x1 <= right and top <= y0 <= y1 <= bottom:
+                result.append((char, style))
         return result
 
     proven = []
     for region in regions:
-        if region['kind'] not in {'table', 'figure'}:
-            continue
         rect = fitz.Rect(region['rect'])
-        before, after = glyphs(source_page, rect), glyphs(target_page, rect)
+        before, after = glyphs(source_trace, rect), glyphs(target_trace, rect)
         if before and [(char[:2], style) for char, style in before] == [(char[:2], style) for char, style in after]:
             proven.append((before, after, tuple(source_page.transformation_matrix)))
     return proven

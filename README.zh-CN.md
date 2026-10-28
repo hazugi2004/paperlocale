@@ -71,14 +71,18 @@ v0.4.0 网页桥接的操作与额度边界见
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.8.2"
+python -m pip install "paperlocale[layout]==0.8.3"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-## 开始翻译（0.8.2）
+0.8.3 改进密集图片页、科学上下标、嵌入字体回读和链接保留。改动及验收边界见
+[发布说明](docs/releases/v0.8.3.md)与[发布前鲁棒性验证记录](docs/robustness-20261027.md)。
+从当前源码安装时，使用 `python -m pip install ".[layout]"`。
+
+## 开始翻译
 
 新运行默认采用段落框模式（`--layout-mode paragraph`），翻译标题、摘要、正文（含方法）和图注/表注。先按原文缩进、行距与标题样式拆分自然段，再将跨页、跨栏或被图片分隔的同一段联合翻译，写回对应物理框。中文连续换行，不分散到每条旧英文行，不插入汉字间空格。行内引文和已支持的数学字形使用原字体随正文移动，链接目标保留、点击区域同步移动。
 

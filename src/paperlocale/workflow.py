@@ -35,7 +35,7 @@ from .passthrough import (
 )
 from .pipeline import translate_segment_file
 from .providers import TranslationProvider
-from .qa import inspect_pdf_pair
+from .qa import _bound_preservation_report, inspect_pdf_pair
 from .references import (
     REFERENCE_POLICIES,
     confirm_reference_review,
@@ -1130,6 +1130,24 @@ def qa_run(
         raise ValueError(f"qa 不接受状态：{manifest['status']}")
     _verify_source_pdf(manifest)
     rendered = _verify_rendered_pdf(manifest, bind_legacy=True)
+    preservation = None
+    if manifest.get('layout_mode') in {'paragraph', 'preserved'}:
+        # 图片数量例外需要当前成功版面保护报告的共同证据。旧报告、缺文件
+        # 或过期计划不能让 QA 放行；不给例外凭据，仍执行通常的缺图检查。
+        try:
+            plan = Path(str(manifest.get('layout_plan', '')))
+            report_path = Path(str(manifest.get('preservation_report', '')))
+            candidate = json.loads(report_path.read_text(encoding='utf-8'))
+            if (plan.is_file() and _sha256(plan) == manifest.get('layout_plan_sha256')
+                    and isinstance(candidate, dict)
+                    and candidate.get('layout_plan_sha256') == manifest.get('layout_plan_sha256')):
+                with fitz.open(rendered) as document:
+                    page_count = len(document)
+                if _bound_preservation_report(candidate, str(manifest['source_sha256']),
+                                               str(manifest['rendered_sha256']), page_count):
+                    preservation = candidate
+        except (OSError, ValueError, TypeError):
+            pass
     report = inspect_pdf_pair(
         source_pdf=Path(str(manifest["source_pdf"])),
         translated_pdf=rendered,
@@ -1137,6 +1155,7 @@ def qa_run(
         dpi=dpi,
         pdftoppm_bin=pdftoppm_bin,
         canonical_source_geometry=manifest.get('layout_mode') == 'paragraph',
+        preservation_report=preservation,
     )
     if report.get("source_sha256") != manifest["source_sha256"]:
         raise RuntimeError("源 PDF 在 QA 读取期间发生变化")

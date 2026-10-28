@@ -12,12 +12,12 @@ from paperlocale.source_symbols import restore_verified_symbols
 from paperlocale.safe_text import safe_erase_rectangles, prepare_source_layer
 
 
-def fixture(path, *, empty=False, ligature=False, zero_ink=False):
+def fixture(path, *, empty=False, ligature=False, zero_ink=False, control_code=None):
     data=program('cff',[.001,0,0,.001,0,0])
     cff=CFFFontSet();cff.decompile(BytesIO(data),None);top=cff[0]
-    name='fi' if ligature else 'P'
-    if ligature:
-        top.CharStrings.charStrings['fi']=top.CharStrings.charStrings.pop('P');top.charset[1]='fi'
+    name='fi' if ligature else 'FixtureBracket' if control_code is not None else 'P'
+    if name != 'P':
+        top.CharStrings.charStrings[name]=top.CharStrings.charStrings.pop('P');top.charset[1]=name
     if empty:
         glyph=top.CharStrings[name];glyph.program=[500,'endchar'];glyph.bytecode=None
     if zero_ink:
@@ -35,12 +35,16 @@ def fixture(path, *, empty=False, ligature=False, zero_ink=False):
         fontfile=obj('<< /Subtype /Type1C >>',buffer.getvalue())
         descriptor=obj(f'<< /Type /FontDescriptor /FontName /FixtureCFF /Flags 4 /FontBBox [0 0 500 700] '
                        f'/Ascent 700 /Descent 0 /CapHeight 700 /StemV 80 /ItalicAngle 0 /FontFile3 {fontfile} 0 R >>')
-        unicode='FB01' if ligature else 'E001'
-        cmap=obj('<<>>',f'begincmap /CMapType 2 def 1 begincodespacerange <00> <ff> endcodespacerange 1 beginbfchar <50> <{unicode}> endbfchar endcmap'.encode())
+        # 控制码fixture使用无Unicode名称的原生字形和实际控制码字节；
+        # 若仍使用/P及源编码50，MuPDF会按Adobe字形名恢复P而无法重现异常。
+        source_code = 80 if control_code is None else control_code
+        source_hex = f'{source_code:02X}'
+        unicode='FB01' if ligature else f'{control_code:04X}' if control_code is not None else 'E001'
+        cmap=obj('<<>>',f'begincmap /CMapType 2 def 1 begincodespacerange <00> <ff> endcodespacerange 1 beginbfchar <{source_hex}> <{unicode}> endbfchar endcmap'.encode())
         ref=obj(f'<< /Type /Font /Subtype /Type1 /BaseFont /FixtureCFF /FontDescriptor {descriptor} 0 R '
-                f'/FirstChar 80 /LastChar 80 /Widths [500] /Encoding << /Differences [80 /{name}] >> /ToUnicode {cmap} 0 R >>')
+                f'/FirstChar {source_code} /LastChar {source_code} /Widths [500] /Encoding << /Differences [{source_code} /{name}] >> /ToUnicode {cmap} 0 R >>')
         doc.xref_set_key(page.xref,'Resources',f'<< /Font << /F {ref} 0 R >> >>')
-        commands=b'BT /F 20 Tf 1 0 0 1 100 742 Tm <50> Tj ET'
+        commands=f'BT /F 20 Tf 1 0 0 1 100 742 Tm <{source_hex}> Tj ET'.encode()
         if ligature:
             second_cmap=obj('<<>>',b'begincmap /CMapType 2 def 1 begincodespacerange <00> <ff> endcodespacerange 1 beginbfchar <50> <00660069> endbfchar endcmap')
             second=obj(doc.xref_object(ref));doc.xref_set_key(second,'ToUnicode',f'{second_cmap} 0 R')
@@ -51,6 +55,50 @@ def fixture(path, *, empty=False, ligature=False, zero_ink=False):
 
 
 class CorpusEncodingTests(unittest.TestCase):
+    def test_additional_brackets_require_new_revision_and_preserve_native_identity(self):
+        import hashlib
+        from unittest.mock import patch
+        from fontTools.pens.recordingPen import RecordingPen
+        from paperlocale.font_geometry import _source_anchor_glyphs
+        # 自造CFF字体不复制论文或商业字体。控制码与可打印乱码都只有在
+        # 完整轮廓命中显式新表时恢复；原字形、字框、原点及原编码不变。
+        for code, expected in [('0001', '('), ('0003', ')'), ('00F0', '('), ('00DE', ')')]:
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'source.pdf'
+                fixture(path, control_code=int(code, 16) if code in {'0001', '0003'} else None)
+                with fitz.open(path) as doc:
+                    ref = doc[0].get_fonts()[0][0]
+                    cmap = int(doc.xref_get_key(ref, 'ToUnicode')[1].split()[0])
+                    doc.update_stream(cmap, doc.xref_stream(cmap).replace(b'E001', code.encode()))
+                    data = doc.tobytes()
+                with fitz.open(stream=data, filetype='pdf') as doc:
+                    page = doc[0]
+                    raw = page.get_text('rawdict')['blocks']
+                    char = raw[0]['lines'][0]['spans'][0]['chars'][0]
+                    native, bbox, origin = char['c'], char['bbox'], char['origin']
+                    cache = {}
+                    glyph = _source_anchor_glyphs(page, [{'text': native, 'rect': bbox,
+                                                        'origin': origin}], cache)[0]
+                    pen = RecordingPen()
+                    cache[glyph['xref']][1][glyph['name']].draw(pen)
+                    key = ('cff', 1000, hashlib.sha256(repr(pen.value).encode()).hexdigest())
+                    with patch('paperlocale.source_symbols.REVIEWED_BRACKET_OUTLINES', {key: expected}):
+                        # 共享缓存也不能让新增映射泄漏到旧修订，或被旧None遮住。
+                        shared_cache = {}
+                        restore_verified_symbols(page, raw, shared_cache, printable_math=True)
+                        self.assertEqual(char['c'], native)
+                        restore_verified_symbols(page, raw, shared_cache, printable_math=True,
+                                                 reviewed_brackets=True)
+                        self.assertEqual((char['c'], char['native_text']), (expected, native))
+                        self.assertEqual((char['bbox'], char['origin']), (bbox, origin))
+                        old_raw = page.get_text('rawdict')['blocks']
+                        restore_verified_symbols(page, old_raw, shared_cache, printable_math=True)
+                        self.assertEqual(old_raw[0]['lines'][0]['spans'][0]['chars'][0]['c'], native)
+                    # 同名字体、同控制码而轮廓未核验时仍不猜测、不当成空白。
+                    unknown = page.get_text('rawdict')['blocks']
+                    restore_verified_symbols(page, unknown, {}, printable_math=True, reviewed_brackets=True)
+                    self.assertEqual(unknown[0]['lines'][0]['spans'][0]['chars'][0]['c'], native)
+
     def test_printable_math_requires_reviewed_outline_and_new_revision(self):
         import hashlib
         from unittest.mock import patch

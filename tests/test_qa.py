@@ -103,6 +103,9 @@ class PdfQaTest(unittest.TestCase):
         original_propagate = logger.propagate
 
         class _NoisyPage:
+            def get_contents(self):
+                return None
+
             def extract_text(self) -> str:
                 logging.getLogger("pypdf._cmap").warning("recoverable cmap")
                 return "译文"

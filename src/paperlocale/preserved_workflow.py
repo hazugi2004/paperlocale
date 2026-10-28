@@ -300,11 +300,15 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     # 预排版使用最终嵌入字体的同一个子集，避免测量原字体、写入子集产生差异。
     font_bytes, font_evidence = _subset_repair_font(font_file, (''.join(targets.values()) or ' '))
     font = fitz.Font(fontbuffer=font_bytes)
+    from .unicode_fonts import unicode_glyph_aliases, insert_text_exact
+    font_aliases = unicode_glyph_aliases(font_bytes)
+    bold_aliases = {}
     bold_bytes = None
     if bold_file is not None:
         # 粗体也使用最终嵌入的字形子集测量，不能用细体宽度预检后再加粗。
         bold_bytes, bold_evidence = _subset_repair_font(Path(bold_file), (''.join(targets.values()) or ' '))
         bold_font = fitz.Font(fontbuffer=bold_bytes)
+        bold_aliases = unicode_glyph_aliases(bold_bytes)
         font_evidence = {'regular': font_evidence, 'bold': bold_evidence}
     placements = [placement for unit in units
                   for placement in fit_selected(unit, targets[unit['id']], font, min_font_size, bold_font)]
@@ -314,12 +318,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     try:
         with fitz.open(stream=reference_bytes, filetype='pdf') as document:
             inline_fonts = {}
+            unicode_fonts = {}
             for number, page in enumerate(document, 1):
                 if not any(p['page'] == number for p in editable):
                     continue
-                page.insert_font(fontname='PLPreserved', fontbuffer=font_bytes)
+                font_xref = page.insert_font(fontname='PLPreserved', fontbuffer=font_bytes)
                 if bold_bytes is not None:
-                    page.insert_font(fontname='PLPreservedBold', fontbuffer=bold_bytes)
+                    bold_xref = page.insert_font(fontname='PLPreservedBold', fontbuffer=bold_bytes)
                 for item in placements:
                     if item['page'] != number:
                         continue
@@ -328,8 +333,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                         write_inline(page, item, inline_fonts)
                         continue
                     rect, size = fitz.Rect(item['rect']), item['font_size']
-                    page.insert_text((item.get('origin_x', rect.x0), item.get('baseline', rect.y0 + font.ascender * size)), item['target'],
-                                     fontname='PLPreservedBold' if item.get('bold') else 'PLPreserved', fontsize=size)
+                    bold = item.get('bold')
+                    insert_text_exact(page,
+                        (item.get('origin_x', rect.x0), item.get('baseline', rect.y0 + font.ascender * size)),
+                        item['target'], fontname='PLPreservedBold' if bold else 'PLPreserved',
+                        font_xref=bold_xref if bold else font_xref,
+                        font=bold_font if bold else font, fontsize=size,
+                        aliases=bold_aliases if bold else font_aliases, font_refs=unicode_fonts)
             document.save(temporary, garbage=0, deflate=True)
         # 以序列化后重新打开的 PDF 为核验对象。MuPDF 编辑中间态与落盘后
         # 的图片插值可能不同，不能对中间态的差异过早重放整张图。

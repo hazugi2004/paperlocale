@@ -135,7 +135,31 @@ CORPUS_REVIEWED_OUTLINES = {
 }
 
 
-def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_math=False):
+# Nature Communications 2026, DOI 10.1038/s41467-026-78045-3，第12页：
+# 已对照原页6倍渲染和真实嵌入CFF轮廓。质心变量外侧的大圆括号来自
+# AdvP4C4E46（原控制码01/03），C(k)内侧圆括号来自AdvMacMthSyN（ð/Þ）。
+# 字体名/控制码只记作核查来源，匹配仍要求字体类型、em单位及完整轮廓。
+# 独立表只在symbol_revision>=5的新计划启用，旧计划按旧表逐字复核。
+REVIEWED_BRACKET_OUTLINES = {
+    ('cff', 1000, 'd83a9ff306d8151a92a21ea6c245e4e7c525eb6959f495d2852254ba4d12acf2'): '(',
+    ('cff', 1000, '55126c86ee75b559b4ea1920e8ab6c78e1d4e817d6c425d80d770e4d0b33f66c'): ')',
+    ('cff', 1000, 'b38cbca7ffc159ec20793361d8082124f3ec2b812cf24a4e32f2016e8dee7f76'): '(',
+    ('cff', 1000, '592f3c810e8944b06814bf87822af3c1bb05aecd92e07a0e12de4028ac79e434'): ')',
+}
+
+
+# Nature Communications 2026, DOI 10.1038/s41467-026-78045-3，第13页：
+# 已实际查看原文4倍/6倍影像，R = 6.371 × 10⁶ m 中只有一个基线小数点；
+# 原CFF却将GID 1命名为colon，ToUnicode也错误写成冒号。完整轮廓只有
+# 一个闭合圆点（边界87,0,191,105），不能按字体名、冒号字符或数值常识替换。
+# 独立表仅在symbol_revision>=6启用；旧0..5计划保持原有语义和续跑身份。
+REVIEWED_DECIMAL_OUTLINES = {
+    ('cff', 1000, 'ec06e4629f0944bbf2f97b7d5bead5409629361263ce74b794d06caa358c5079'): '.',
+}
+
+
+def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_math=False,
+                             reviewed_brackets=False, reviewed_decimals=False):
     """新计划专用：已核验异常轮廓恢复语义；无墨迹字符恢复空白。
 
     不推断未知控制码，也不向模型传入乱码。空白要由实际原字形的空
@@ -145,7 +169,8 @@ def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_ma
         for line in block.get('lines', []):
             for span in line['spans']:
                 for char in span['chars']:
-                    if (char['c'].isprintable() and not (printable_math and char['c'] in 'ðÞ¼' or latin_math and char['c'] == 'q')
+                    if (char['c'].isprintable() and not (printable_math and char['c'] in 'ðÞ¼' or latin_math and char['c'] == 'q'
+                            or reviewed_decimals and char['c'] == ':')
                             or char['c'].isspace() or char['c'] == '\u00ad'):
                         continue
                     native = {'text': char['c'], 'rect': char['bbox'], 'origin': char['origin']}
@@ -166,12 +191,25 @@ def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_ma
                     else:
                         _, outlines, scale, kind = cache[glyph['xref']]
                         units = 1 / scale
-                    key = ('corpus-semantic', glyph['xref'], glyph['name'])
+                    # 同一缓存先按旧修订核验、再显式生成新计划时，新表不能
+                    # 被旧修订缓存的None遮住；旧修订也不能借用新表的语义。
+                    # 小数点新表只审定原字符为冒号的候选。把开关和候选身份
+                    # 一并纳入缓存，防止同一GID的其他Unicode别名借用该语义，
+                    # 也防止新表命中/旧表None在不同修订间互相污染。
+                    decimal_candidate = reviewed_decimals and char['c'] == ':'
+                    key = ('corpus-semantic', glyph['xref'], glyph['name'], reviewed_brackets,
+                           reviewed_decimals, decimal_candidate)
                     if key not in cache:
                         pen = RecordingPen()
                         outlines[glyph['name']].draw(pen)
                         signature = hashlib.sha256(repr(pen.value).encode()).hexdigest()
-                        cache[key] = CORPUS_REVIEWED_OUTLINES.get((kind, units, signature))
+                        identity = (kind, units, signature)
+                        semantic = CORPUS_REVIEWED_OUTLINES.get(identity)
+                        if semantic is None and reviewed_brackets:
+                            semantic = REVIEWED_BRACKET_OUTLINES.get(identity)
+                        if semantic is None and decimal_candidate:
+                            semantic = REVIEWED_DECIMAL_OUTLINES.get(identity)
+                        cache[key] = semantic
                     semantic = cache[key]
                     if semantic:
                         char['native_text'], char['c'] = char['c'], semantic

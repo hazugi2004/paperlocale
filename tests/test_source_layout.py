@@ -267,7 +267,7 @@ class SourceLayoutTests(unittest.TestCase):
                 doc.save(source)
             modern=extract_layout(source,paragraph=True)
             legacy=extract_layout(source,paragraph=True,symbol_revision=0)
-            self.assertEqual(modern['symbol_revision'],4)
+            self.assertEqual(modern['symbol_revision'],6)
             self.assertEqual(modern['blocks'][0]['kind'],'formula')
             self.assertEqual(legacy['blocks'][0]['kind'],'body')
             path=Path(tmp)/'plan.json';save_json(path,legacy)

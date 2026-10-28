@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ from pathlib import Path
 import pymupdf as fitz
 from PIL import Image, ImageDraw
 from pypdf import PdfReader
-from pypdf.generic import ContentStream
+from .pdf_streams import content_parsing_budget, selected_content_operations
 
 PLACEHOLDER_RE = re.compile(r"\{v\d+\}|<style\s+id=|</style>", re.IGNORECASE)
 VECTOR_PAINT_OPERATORS = {
@@ -85,7 +86,7 @@ def _image_counts(pdf_path: Path) -> list[int]:
         if stream is None:
             return 0
         total = 0
-        for operands, operator in ContentStream(stream, reader).operations:
+        for operands, operator in selected_content_operations(stream, reader, {b'Do', b'INLINE IMAGE'}):
             if operator == b'INLINE IMAGE':
                 total += 1
             elif operator == b'Do':
@@ -102,6 +103,123 @@ def _image_counts(pdf_path: Path) -> list[int]:
 
     return [count(page.get_contents(), page.get('/Resources', {}), set())
             for page in reader.pages]
+
+
+def _nonempty_image_calls(pdf_path: Path, index: int) -> list[tuple]:
+    """只读记录非空裁切中的原生图片调用；不按图片包围框猜裁切结果。
+
+    MuPDF sanitize 在裁切交集为空时不转发图片。使用同一原生解释器的
+    image_filter 回调记录其余调用，no_update 禁止写回，文档副本用后关闭。
+    仅支持页内 Image XObject；Form/内联图片缺少这里所需的独立资源身份，
+    明确拒绝本证明，调用者继续按原缺图错误处理，不作宽松降级。
+    """
+    with fitz.open(pdf_path) as document:
+        page = document[index]
+        if page.get_xobjects():
+            raise ValueError('含 Form 的页面不能使用空裁切图片证明')
+        names = {item[7] for item in page.get_images(full=True)}
+
+        class ImageCalls(fitz.mupdf.PdfSanitizeFilterOptions2):
+            def __init__(self):
+                super().__init__()
+                self.use_virtual_image_filter()
+                # 重叠图片的后绘制内容会覆盖先绘制内容；相同调用集合及次数
+                # 不能证明顺序相同。按原生解释器的回调顺序保留每次调用。
+                self.calls = []
+
+            def image_filter(self, context, matrix, name, image, clip):
+                if not name or name not in names:
+                    raise ValueError('内联或未知图片无法建立源资源身份')
+                geometry = (matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f,
+                            clip.x0, clip.y0, clip.x1, clip.y1)
+                if not all(math.isfinite(value) for value in geometry):
+                    raise ValueError('图片调用包含非有限坐标')
+                self.calls.append((name, *geometry))
+                return image
+
+        observations = ImageCalls()
+        options = fitz._make_PdfFilterOptions(instance_forms=0, recurse=0, no_update=1,
+                                             sanitize=1, sopts=observations)
+        native = page._pdf_page()
+        fitz.mupdf.pdf_filter_page_contents(native.doc(), native, options)
+        return observations.calls
+
+
+def _empty_clip_image_evidence(source_path, target_path, index, source_page, target_page,
+                               source_count, target_count):
+    """建立非空调用顺序、几何及图片资源相同的局部证据。
+
+    clip 回调只给裁切包围框，不包含完整路径或透明度状态，所以本函数
+    不能独自免除缺图错误。调用者还必须持有当前源/译文件的成功版面
+    保护报告，联合其真实非正文及保护区域像素核验后才接纳空裁切差。
+    """
+    # 空 clip 中的内联图片会被 sanitize 在 image_filter 之前丢弃，不能
+    # 依靠回调里的未知名字检查覆盖它。先由原生 PDF 语法完整解析两条流，
+    # 明确拒绝任何内联图片；仅在 raw 数减少的诊断分支支付这次解析开销。
+    for page in (source_page, target_page):
+        if selected_content_operations(page.get_contents(), page.pdf, {b'INLINE IMAGE'}):
+            raise ValueError('含内联图片的页面不能使用空裁切图片证明')
+    before = _nonempty_image_calls(source_path, index)
+    after = _nonempty_image_calls(target_path, index)
+    if before != after:
+        return None
+    # 沿用精度核验的完整资源语义比较：解析后的图像数据、软蒙版、颜色空间
+    # 等必须一致；只允许压缩方式和 float32 表示差，不以 xref 编号当作身份。
+    from .vector_precision import _same_resource
+    source_objects = source_page.get('/Resources', {}).get('/XObject', {})
+    target_objects = target_page.get('/Resources', {}).get('/XObject', {})
+    used = {name for name, *_ in before}
+    for name in used:
+        key = '/' + name
+        if key not in source_objects or key not in target_objects:
+            return None
+        if not _same_resource(source_objects[key], target_objects[key]):
+            return None
+    effective = len(before)
+    if effective > min(source_count, target_count):
+        return None
+    return {'method': 'native_nonempty_clip_calls_and_source_image_resources',
+            'source_nonempty_calls': effective, 'translated_nonempty_calls': effective,
+            'source_empty_clip_calls': source_count - effective,
+            'translated_empty_clip_calls': target_count - effective,
+            'nonempty_call_geometry_and_multiplicity_equal': True,
+            'nonempty_call_order_equal': True,
+            'used_image_resources_equal': True, 'used_image_resource_count': len(used)}
+
+
+def _bound_preservation_report(report, source_sha256, translated_sha256, page_count):
+    """校验既有成功报告的文件绑定和完整结构，不把任意 truthy 对象当凭据。
+
+    run_preserved 只在每页非正文、全部保护区及固定墨迹核验均通过后写出
+    此报告。protected_region_count 与 fixed_ink_checks 是已成功核验的
+    工作量；body_overlap_pixels 是使用专门基准核验的重叠量，不是失败数。
+    这里复用该生成契约，不把局部图片调用签名升级成全部图形状态证明。
+    """
+    if (not isinstance(report, dict)
+            or report.get('source_sha256') != source_sha256
+            or report.get('translated_sha256') != translated_sha256
+            or type(report.get('dpi')) is not int or report['dpi'] < 144
+            or type(report.get('protected_region_count')) is not int
+            or report['protected_region_count'] < 0):
+        return False
+    pages = report.get('pages')
+    if (not isinstance(pages, list) or len(pages) != page_count
+            or any(not isinstance(item, dict) or type(item.get('page')) is not int
+                   or item['page'] != number or item.get('outside_pixels_equal') is not True
+                   for number, item in enumerate(pages, 1))):
+        return False
+    checks = report.get('fixed_ink_checks')
+    if not isinstance(checks, list):
+        return False
+    checked_pages = set()
+    for item in checks:
+        if (not isinstance(item, dict) or type(item.get('page')) is not int
+                or not 1 <= item['page'] <= page_count or item['page'] in checked_pages
+                or any(type(item.get(key)) is not int or item[key] < 0
+                       for key in ('fixed_ink_pixels', 'body_overlap_pixels'))):
+            return False
+        checked_pages.add(item['page'])
+    return True
 
 
 def _vector_paint_count(page: object) -> int:
@@ -182,7 +300,11 @@ def _extract_text(page: object) -> tuple[str, int]:
     logger.setLevel(logging.WARNING)
     logger.propagate = False
     try:
-        text = page.extract_text() or ""  # type: ignore[attr-defined]
+        contents = page.get_contents()  # type: ignore[attr-defined]
+        # 文本提取内部也会解析整页；使用相同局部有限预算，继续用独立
+        # pypdf回读文字，不因复杂图形页改换提取器或隐藏CMap异常。
+        with content_parsing_budget(contents.get_data() if contents is not None else b''):
+            text = page.extract_text() or ""  # type: ignore[attr-defined]
     finally:
         logger.handlers = original_handlers
         logger.setLevel(original_level)
@@ -311,6 +433,7 @@ def inspect_pdf_pair(
     dpi: int = 144,
     pdftoppm_bin: str | Path | None = None,
     canonical_source_geometry: bool = False,
+    preservation_report: dict | None = None,
 ) -> dict[str, object]:
     """生成机器报告和全部页面对照图；不以自动检查替代人工视觉确认。"""
 
@@ -324,6 +447,10 @@ def inspect_pdf_pair(
 
     source_reader = PdfReader(source_path)
     target_reader = PdfReader(target_path)
+    source_sha256, translated_sha256 = _sha256(source_path), _sha256(target_path)
+    preservation_bound = (len(source_reader.pages) == len(target_reader.pages)
+        and _bound_preservation_report(preservation_report, source_sha256,
+                                       translated_sha256, len(source_reader.pages)))
     geometry = _canonical_page_geometry(source_path, target_path) if canonical_source_geometry else []
     errors: list[str] = []
     warnings: list[str] = []
@@ -382,7 +509,17 @@ def inspect_pdf_pair(
             errors.append(f"第{index + 1}页仍有内部占位符：{placeholders[:10]!r}")
         source_images = source_image_counts[index]
         target_images = target_image_counts[index]
-        if source_images >= 0 and target_images < source_images:
+        image_evidence = None
+        if source_images >= 0 and target_images < source_images and preservation_bound:
+            try:
+                image_evidence = _empty_clip_image_evidence(source_path, target_path, index,
+                    source_page, target_page, source_images, target_images)
+            except Exception as exc:  # noqa: BLE001  # 原生不支持的结构仍保留缺图错误。
+                warnings.append(f'第{index + 1}页空裁切图片证明不可用：{exc}')
+            if image_evidence is not None:
+                image_evidence['bound_preservation_pixels_equal'] = True
+                image_evidence['preservation_dpi'] = preservation_report['dpi']
+        if source_images >= 0 and target_images < source_images and image_evidence is None:
             errors.append(
                 f"第{index + 1}页图片对象减少：source={source_images}, translated={target_images}"
             )
@@ -416,6 +553,8 @@ def inspect_pdf_pair(
         if canonical_source_geometry:
             page_record.update(geometry[index], raw_source_media_box=raw_source_media,
                                raw_source_crop_box=raw_source_crop)
+        if image_evidence is not None:
+            page_record['image_preservation_evidence'] = image_evidence
         if (
             target_vectors < source_vectors
             and index < len(source_vector_objects)
@@ -475,11 +614,14 @@ def inspect_pdf_pair(
                 pages[index - 1]["translated_nonwhite_ratio"] = round(ratio, 6)
                 pages[index - 1]["comparison"] = str(comparison_path)
 
+    final_source_sha256, final_translated_sha256 = _sha256(source_path), _sha256(target_path)
+    if (final_source_sha256, final_translated_sha256) != (source_sha256, translated_sha256):
+        errors.append('源文或译文 PDF 在 QA 读取期间发生变化，版面保护证据失效')
     report: dict[str, object] = {
         "source_pdf": str(source_path),
         "translated_pdf": str(target_path),
-        "source_sha256": _sha256(source_path),
-        "translated_sha256": _sha256(target_path),
+        "source_sha256": final_source_sha256,
+        "translated_sha256": final_translated_sha256,
         "source_pages": len(source_reader.pages),
         "translated_pages": len(target_reader.pages),
         "dpi": dpi,

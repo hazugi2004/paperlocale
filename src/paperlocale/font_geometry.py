@@ -107,6 +107,11 @@ def _source_anchor_glyphs(page, characters, cache, *, include_empty=False):
     支持水平等比 FontMatrix 的 Type 1/CFF 和有资源级证据的嵌入 TrueType；未知字体、编码或
     缺失字符返回 None，由调用方继续使用原完整字框检查，不静默跳过。
     """
+    # 图表保护区域通常没有固定文字；空输入原本最终也返回None。
+    # 提前返回避免为每个小图片框重新解析整页字体和绘制流；调用方仍
+    # 对该区域执行原来的完整像素保护核验，不能把None解释为跳过保护。
+    if not characters:
+        return None
     import re
     import pymupdf as fitz
     from fontTools.cffLib import CFFFontSet
@@ -410,7 +415,7 @@ def _remove_placeholder_actualtext(document):
     import re
     import pymupdf as fitz
     from pypdf import PdfReader
-    from pypdf.generic import ContentStream, DecodedStreamObject, IndirectObject
+    from pypdf.generic import DecodedStreamObject, IndirectObject
     def placeholder(value):
         # 排版工具还会在标准拉丁合字的每个字母之间插入 U+200B，
         # rawdict 随后把这些辅助字符分摊到一个真实字形的零宽续字上。
@@ -446,7 +451,8 @@ def _remove_placeholder_actualtext(document):
         if reader is None:
             reader = PdfReader(BytesIO(document.tobytes()))
         raw = DecodedStreamObject(); raw.set_data(data)
-        stream = ContentStream(raw, reader)
+        from .pdf_streams import parsed_content_stream
+        stream = parsed_content_stream(raw, reader)
         changed = False
         for args, op in stream.operations:
             if op != b'BDC' or len(args) != 2:

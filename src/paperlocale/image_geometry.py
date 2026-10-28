@@ -1,9 +1,40 @@
 """依据实际图片绘制和 alpha 支持集计算可见占用，不改写原 PDF 对象。"""
 from io import BytesIO
+from itertools import product
+import math
 import re
 
 import pymupdf as fitz
 from PIL import Image, ImageChops
+
+
+def _painted_image_index(boxes):
+    """按四个坐标建立0.01 pt网格；重复绘制框只保留一份匹配证据。
+
+    输入是MuPDF的fill-image绘制框，输出只用于候选查找，不改变保护区域。
+    复杂地图可能反复绘制十多万个图片实例，逐实例扫描全页框会成为平方级开销。
+    """
+    cells = {}
+    for box in boxes:
+        coordinates = tuple(box)
+        cell = tuple(math.floor(value * 100) for value in coordinates)
+        cells.setdefault(cell, set()).add(coordinates)
+    return cells
+
+
+def _matches_painted_image(outer, cells):
+    """检查图片外框确有绘制记录，严格沿用每坐标差<0.01 pt的原条件。
+
+    网格只缩小搜索范围：相邻格也必须查找，以免边界和负坐标处漏配；
+    落在同一格并不等于匹配。相同坐标的快速路径尤其适合重复绘制实例。
+    """
+    coordinates = tuple(outer)
+    cell = tuple(math.floor(value * 100) for value in coordinates)
+    if coordinates in cells.get(cell, ()):
+        return True
+    return any(max(abs(a - b) for a, b in zip(coordinates, box)) < .01
+               for offsets in product((-1, 0, 1), repeat=4)
+               for box in cells.get(tuple(value + delta for value, delta in zip(cell, offsets)), ()))
 
 
 def visible_image_regions(page, detections=()):
@@ -14,7 +45,7 @@ def visible_image_regions(page, detections=()):
     提取时使用无限裁剪，避免完全包含规则漏掉跨 CropBox 的图像。
     alpha 的任何非零值都视为可见，不用阈值抹掉半透明细线。
     """
-    painted = [fitz.Rect(box) for kind, box in page.get_bboxlog() if kind == 'fill-image']
+    painted = _painted_image_index(box for kind, box in page.get_bboxlog() if kind == 'fill-image')
     figures = [fitz.Rect(r['rect']) for r in detections
                if r['page'] == page.number + 1 and r['kind'] in {'figure', 'table'}]
     regions = []
@@ -22,7 +53,7 @@ def visible_image_regions(page, detections=()):
         if block['type'] != 1:
             continue
         outer = fitz.Rect(block['bbox'])
-        if not any(max(abs(a - b) for a, b in zip(outer, box)) < .01 for box in painted):
+        if not _matches_painted_image(outer, painted):
             continue
         with Image.open(BytesIO(block['image'])) as image:
             alpha = image.convert('RGBA').getchannel('A')

@@ -145,7 +145,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
-        self.assertEqual(manifest["paperlocale_version"], "0.8.2")
+        self.assertEqual(manifest["paperlocale_version"], "0.8.3")
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)
@@ -1275,6 +1275,54 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(upgraded["schema_version"], 4)
             self.assertEqual(upgraded["status"], "qa_generated")
             self.assertEqual(upgraded["rendered_sha256"], report["translated_sha256"])
+
+    def test_qa_passes_only_current_bound_preservation_evidence(self) -> None:
+        """QA适配层只传递当前文件及实际计划共同绑定的成功保护报告。"""
+        from paperlocale.source_layout import verify_unchanged
+
+        for mode, change in (('paragraph', None), ('preserved', None),
+                             ('paragraph', 'stale_plan'), ('paragraph', 'stale_pdf'),
+                             ('paragraph', 'missing_report')):
+            with self.subTest(mode=mode, change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, translated = root/'source.pdf', root/'translated.pdf'
+                with fitz.open() as document:
+                    page = document.new_page(width=200, height=200)
+                    page.insert_text((20, 50), 'Bound preservation report')
+                    document.save(source)
+                shutil.copy2(source, translated)
+                run_dir = root/'run'
+                manifest = initialize_run(source_pdf=source, run_dir=run_dir,
+                                          source_language='en', target_language='zh-CN')
+                plan = run_dir/'layout_plan.json'
+                plan.write_text('{"schema":2}', encoding='utf-8')
+                plan_hash = hashlib.sha256(plan.read_bytes()).hexdigest()
+                translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
+                preservation = verify_unchanged(source, translated, [])
+                preservation.update(source_sha256=manifest['source_sha256'],
+                    translated_sha256=translated_hash, layout_plan_sha256=plan_hash,
+                    protected_region_count=0, fixed_ink_checks=[])
+                preservation_path = run_dir/'preservation_report.json'
+                preservation_path.write_text(json.dumps(preservation), encoding='utf-8')
+                manifest.update(status='rendered', layout_mode=mode,
+                    rendered_pdf=str(translated), rendered_sha256=translated_hash,
+                    layout_plan=str(plan), layout_plan_sha256=plan_hash,
+                    preservation_report=str(preservation_path))
+                if change == 'stale_plan':
+                    plan.write_text('{"schema":2,"changed":true}', encoding='utf-8')
+                elif change == 'stale_pdf':
+                    preservation['translated_sha256'] = 'stale'
+                    preservation_path.write_text(json.dumps(preservation), encoding='utf-8')
+                elif change == 'missing_report':
+                    preservation_path.unlink()
+                save_manifest(run_dir, manifest)
+                report = {'source_sha256': manifest['source_sha256'],
+                          'translated_sha256': translated_hash, 'errors': []}
+                # 此处只mock QA适配器下游，文件/计划/保护报告绑定逻辑全部真实运行。
+                with patch('paperlocale.workflow.inspect_pdf_pair', return_value=report) as inspect:
+                    qa_run(run_dir)
+                passed = inspect.call_args.kwargs['preservation_report']
+                self.assertEqual(passed, preservation if change is None else None)
 
     def test_accept_rejects_rendered_pdf_changed_after_qa(self) -> None:
         """人工验收只能批准生成 QA 对照图时的确切候选 PDF。"""

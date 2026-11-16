@@ -3,6 +3,24 @@ import AppKit
 import UniformTypeIdentifiers
 import PDFKit
 
+enum LocalCLIInstallation {
+    // 构建脚本把 Python 发布版本写入 Info.plist。安装命令用同一个版本创建独立环境，
+    // 因此升级应用后会找到对应术语库的 CLI，旧应用也能继续使用原环境。
+    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+    static let bundled = Bundle.main.object(forInfoDictionaryKey: "PaperLocaleBundledCLI") as? Bool == true
+    static let path: String = {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        // 仅从源码构建窗口的用户仍可沿用原有 CLI 路径。
+        if !bundled { return home.appendingPathComponent(".local/bin/paperlocale").path }
+        return home.appendingPathComponent("Library/Application Support/PaperLocale/cli")
+            .appendingPathComponent(version)
+            .appendingPathComponent("bin/paperlocale").path
+    }()
+    static let installationHelp = bundled
+        ? "首次使用请运行下载包里的 Install PaperLocale CLI.command。"
+        : "请按源码构建说明安装同版本 CLI 及其排版依赖。"
+}
+
 // 轻量原生前端：唯一翻译实现仍是已安装的 PaperLocale CLI。
 // 不内置登录材料、不代理订阅、不自动更换模型；参数以数组传入，路径不会成为 shell 代码。
 @MainActor final class TranslationJob: ObservableObject {
@@ -17,8 +35,7 @@ import PDFKit
     var editingErrorID = ""
     private var receivedReport: RepairReport?
     private var importCacheFrom = ""
-    @Published var cli = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".local/bin/paperlocale").path
+    @Published var cli = LocalCLIInstallation.path
     @Published var provider = "codex-local"
     let codexModels = CodexModelChoice.load()
     @Published var selectedModel = "gpt-6-sol"
@@ -29,7 +46,7 @@ import PDFKit
     @Published var effort = "medium"
     @Published var runQA = true
     @Published var running = false
-    @Published var log = "选择论文 PDF，确认翻译服务与模型后开始。\n需要本机已安装 PaperLocale 0.8.3 的 layout 依赖；Codex 服务需要已登录的 Codex CLI，API 服务需要对应密钥。"
+    @Published var log = "\(LocalCLIInstallation.installationHelp)\n选择论文 PDF，确认翻译服务与模型后开始。"
     @Published var dropTarget = false
     @Published var fraction = 0.0
     @Published var stage = "等待开始"
@@ -271,7 +288,7 @@ import PDFKit
     func start(repair: RepairAction? = nil, report: RepairReport? = nil) {
         guard !running else { return }
         guard FileManager.default.isExecutableFile(atPath: cli) else {
-            log = "找不到可执行的 PaperLocale：\(cli)\n请按本地构建说明安装 PaperLocale 0.8.3，或选择已安装的命令。"
+            log = "找不到可执行的 PaperLocale：\(cli)\n\(LocalCLIInstallation.installationHelp) 也可在本地设置中选择同版本的 CLI。"
             return
         }
         guard FileManager.default.fileExists(atPath: pdf), !model.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -387,7 +404,7 @@ struct ContentView: View {
                 MascotImage(name: "AppIcon").frame(width: 52, height: 52)
                 VStack(alignment: .leading) {
                     Text("PaperLocale").font(.title.bold())
-                    Text("0.8.3 · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
+                    Text("\(LocalCLIInstallation.version) · macOS 测试版 · 英文学术 PDF → 中文").foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -450,7 +467,7 @@ struct ContentView: View {
                         TextField("PaperLocale 路径", text: $job.cli)
                         Button("选择…", action: job.selectCLI)
                     }.disabled(job.running)
-                    Text("此应用调用本机 CLI；需要 PaperLocale 0.8.3、layout 依赖、Poppler，以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译；模型是否可用由你的账户决定。")
+                    Text("\(LocalCLIInstallation.installationHelp) 翻译还需要 Poppler 以及所选服务的登录或密钥。兼容 API 的模型须支持聊天接口与结构化翻译。")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Text(job.fontFile.isEmpty ? "中文字体：自动获取" : job.fontFile).lineLimit(1)
@@ -666,7 +683,11 @@ struct RollingProgress: View {
     @StateObject private var job = TranslationJob()
     init() {
         if CommandLine.arguments.contains("--version") {
-            print("PaperLocale macOS 0.8.3")
+            print("PaperLocale macOS \(LocalCLIInstallation.version)")
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--cli-path") {
+            print(LocalCLIInstallation.path)
             exit(0)
         }
     }

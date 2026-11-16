@@ -8,12 +8,754 @@ soil moisture	土壤湿度	true	具体层次必须保留深度
 vegetation index	植被指数	true	NDVI/EVI 等缩写原样保留
 compound dry-hot event	复合干热事件	true	全文统一
 compound hot-dry event	复合干热事件	true	与 dry-hot 为词序变体，全文统一
+hot-dry compound event	复合干热事件	true	保留热端和旱端各自的识别阈值及尺度。
+dry-hot compound event	复合干热事件	true	保留热端和旱端各自的识别阈值及尺度。
 compound dry-hot condition	复合干热状况	true	用于状态或条件而非独立事件
 land-atmosphere interaction	陆气相互作用	true	不要与 land-atmosphere coupling 混淆
-potential evapotranspiration	潜在蒸散发	true	保留缩写 PET
+potential evapotranspiration	潜在蒸散发	false	保留 PET 和估算方法。GB/T 20481 使用潜在蒸散量，勿与参考作物蒸散量或实际蒸散发混用。
 significance test	显著性检验	true	具体检验名称必须保留
 sensitivity analysis	敏感性分析	true	不能与稳健性分析混用
 robustness analysis	稳健性分析	true	不能与敏感性分析混用
 bias correction	偏差校正	true	quantile mapping 应显式保留
 spatial resolution	空间分辨率	true	数值和单位必须保留
 temporal resolution	时间分辨率	true	数值和时间单位必须保留
+spatiotemporal resolution	时空分辨率	true	区分空间与时间两个维度，保留各自数值及单位。
+spatio-temporal resolution	时空分辨率	true	与 spatiotemporal resolution 为拼写变体。
+climate system	气候系统	false	包含大气、海洋、陆面、冰冻圈和生物圈等相互作用部分。
+climate change	气候变化	false	研究语境可能包括自然和人为成因。保留原文的时间尺度与定义。
+global warming	全球变暖	false	用于全球平均温度变化，保留采用的基准期。
+climate variability	气候变率	true	保留内部变率、外部强迫以及时间尺度的限定。
+internal climate variability	气候内部变率	false	气候系统内部过程导致的变率。
+natural variability	自然变率	false	保留原文对内部变率与自然外强迫的范围规定。
+interannual variability	年际变率	false	与年内、年代际变率区分。
+intra-seasonal variability	季节内变率	false	保留时间尺度，季节内振荡是具体类型。
+decadal variability	年代际变率	false	具体周期或频带按原文。
+multidecadal variability	多年代际变率	false	保留原文的频带定义。
+climatology	气候态	false	计算异常时常指多年平均气候态。学科名称语境译为气候学。
+climatological mean	气候平均值	false	保留平均期、时段和空间权重。
+climatological normal	气候常年值	false	若原文使用 WMO 标准期，保留具体起止年。
+baseline period	基准期	false	保留起止年，按原文说明用于距平、阈值还是模型拟合。
+reference period	参考期	false	保留起止年与取样规则。
+temperature anomaly	温度距平	false	保留变量及基准期，按原文区分距平与标准化异常。
+precipitation anomaly	降水距平	false	若为降水量百分率，保留百分率及其计算基准。
+sea surface temperature anomaly	海表温度距平	false	保留 SST 或 SSTA 以及基准期。
+equilibrium climate sensitivity	平衡气候敏感度	false	保留 ECS 及原文对强迫和达到平衡的定义。气候敏感性也是常见译法。
+transient climate response	瞬态气候响应	false	保留 TCR 及原文给出的 CO₂ 增长情景。瞬时气候响应是 IPCC 中文译法。
+effective radiative forcing	有效辐射强迫	true	保留 ERF 及 W m⁻² 等原单位。
+radiative forcing	辐射强迫	true	区分瞬时、平流层温度调整后及有效辐射强迫。
+climate feedback	气候反馈	true	保留反馈符号及反馈参数的定义。
+water vapor feedback	水汽反馈	false	与温度直减率反馈区分。
+water vapour feedback	水汽反馈	false	与 water vapor feedback 同义。
+lapse rate feedback	温度直减率反馈	false	与水汽反馈在一些分析中联合报告。
+surface albedo feedback	地表反照率反馈	true	保留地表及冰雪范围。
+cloud feedback	云反馈	false	区分短波、长波及净效应。
+Earth energy imbalance	地球能量不平衡	false	保留所指时间段和通量符号。
+ocean heat content	海洋热含量	true	保留深度范围、基准期和 OHC。
+ocean heat uptake	海洋热吸收	false	保留能量或通量的单位。
+ocean acidification	海洋酸化	true	保留 OA 及 pH 或海水碳酸盐化学指标。
+sea level rise	海平面上升	true	保留全球平均或相对海平面等限定。
+Atlantic meridional overturning circulation	大西洋经向翻转环流	false	保留 AMOC 及通量单位。
+El Niño–Southern Oscillation	厄尔尼诺–南方涛动	false	保留 ENSO 及其位相和判据。
+El Nino Southern Oscillation	厄尔尼诺–南方涛动	false	无重音符的拼写变体，保留 ENSO。
+Pacific decadal oscillation	太平洋年代际振荡	true	保留 PDO 及所用指数定义。
+interdecadal Pacific oscillation	年代际太平洋振荡	false	保留 IPO，亦称太平洋年代际振荡。与 PDO 的指数定义和空间范围不同。
+Indian Ocean dipole	印度洋偶极子	false	保留 IOD 与位相。
+North Atlantic Oscillation	北大西洋涛动	true	保留 NAO 及其指数版本。
+Arctic Oscillation	北极涛动	true	保留 AO 及其位相。
+quasi-biennial oscillation	准两年振荡	false	保留 QBO 及所指环流或层次。
+Madden-Julian oscillation	马登–朱利安振荡	false	保留 MJO 和季节内尺度。
+polar amplification	极地放大	false	保留南极、北极或其他区域限定。
+Arctic amplification	北极放大	false	区分区域变暖量与相对于全球变暖的比值。
+cryosphere	冰冻圈	true	保留原文包含的冰雪类别。
+snow water equivalent	雪水当量	true	保留 SWE，表示雪融化对应的水量。
+snow cover fraction	积雪覆盖比例	false	保留无量纲或百分率的表达。
+permafrost	多年冻土	true	区分多年冻土与季节冻土。
+active layer thickness	活动层厚度	true	多年冻土语境，保留量测时间及 ALT。
+sea ice extent	海冰范围	false	区分海冰范围与按海冰实际覆盖折算的面积，保留阈值。
+sea ice concentration	海冰密集度	false	保留格点覆盖比例与单位。
+shared socioeconomic pathway	共享社会经济路径	true	保留 SSP 标签及情景编号。
+representative concentration pathway	典型浓度路径	false	保留 RCP 及情景编号。代表性浓度路径也是常见译法。
+emission scenario	排放情景	false	保留具体情景、组分和排放口径。
+historical simulation	历史模拟	false	模型试验语境，保留起止年和外部强迫设置。
+climate projection	气候预估	false	保留其依赖的情景、时间窗和不确定性，预测是另一个概念。
+detection and attribution	检测与归因	false	区分变化显著性检测与成因归因，亦有探测与归因等译法。
+event attribution	事件归因	false	保留比较的事实世界和反事实世界。
+counterfactual climate	反事实气候	false	保留反事实试验中具体移除或改变的强迫。
+risk ratio	风险比	false	保留分子分母和基准。医学比值比是不同统计量。
+fraction of attributable risk	可归因风险比例	false	保留 FAR 以及其公式和比较情景。
+compound event	复合事件	true	可涉及同时或先后发生的多个驱动、危险或影响。
+compound extreme event	复合极端事件	true	按原文给出组合条件及阈值。
+compound drought and heatwave event	复合干旱热浪事件	false	分别保留旱端与热浪识别定义。
+compound drought and heat wave event	复合干旱热浪事件	false	与 heatwave 拼写等价，分别保留干旱和热浪判据。
+compound heat and drought event	复合干热事件	false	按原文区分高温或热浪及各类干旱的定义。
+concurrent hot and dry extremes	同期干热极端	false	保留同期窗口及热、旱各自的阈值。
+concurrent drought and heatwave	同期干旱和热浪	false	仅在原文已定义时称为复合事件。
+preconditioned compound event	有前置条件的复合事件	false	前置因素改变后续危险的影响。保留原分类名称或并列英文。
+multivariate compound event	多变量复合事件	false	多个驱动或因子共同造成影响。
+temporally compounding event	时间复合事件	false	多个危险接续发生并产生复合影响。
+spatially compounding event	空间复合事件	false	关联地点的危险影响叠加。
+climatic impact-driver	气候影响驱动因子	false	保留 CID 和原文定义。术语在本处涵盖对社会或生态系统有影响的气候条件。
+heat wave	热浪	true	保留原文的温度指标、阈值及连续性要求。
+heatwave	热浪	true	与 heat wave 同义。
+warm spell duration index	暖期持续指数	false	保留 WSDI 及该研究采用的定义。
+cold spell duration index	冷期持续指数	false	保留 CSDI 及该研究采用的定义。
+warm spell	暖期	false	参照原文事件定义，也可译作暖事件。
+cold spell	冷期	false	参照原文事件定义，也可译作冷事件。
+consecutive dry days	连续干日	false	保留 CDD，干日判据按原文。
+consecutive wet days	连续湿日	false	保留 CWD，湿日判据按原文。
+wet day	湿日	false	降水达到指定阈值的日，阈值、含边界与否按原文。
+dry day	干日	false	按原文给出的降水或其他变量阈值定义。
+meteorological drought	气象干旱	true	气象量与时间尺度按原文，参照 GB/T 20481。
+agricultural drought	农业干旱	true	保留作物、水分状态或指标定义。
+hydrological drought	水文干旱	true	保留径流、水位、地下水等变量定义。
+ecological drought	生态干旱	true	保留生态响应和水分亏缺的描述。
+flash drought	骤旱	false	亦称快速发展的干旱，关注快速发生或强化，判据依原文。
+snow drought	雪旱	false	可涉及积雪量、雪水当量及其分位阈值。
+drought propagation	干旱传播	false	指在不同类型、区域或过程间的传播，保留起点与终点。
+drought onset	干旱开始	false	日期、起始条件及统计尺度按原文。
+drought severity	干旱严重度	false	事件严重度常是累计量，应依原文定义并与强度区分。
+drought intensity	干旱强度	true	保留峰值、均值或其他强度定义。
+drought duration	干旱持续时间	false	保留事件边界及天、月等单位。
+standardized precipitation index	标准化降水指数	true	GB/T 20481，保留 SPI 及累积时间尺度。
+standardised precipitation index	标准化降水指数	true	英式拼写，保留 SPI。
+standardized precipitation evapotranspiration index	标准化降水蒸散指数	false	亦称标准化降水蒸散发指数。保留 SPEI、累积尺度和蒸散需求估算方法。
+standardised precipitation evapotranspiration index	标准化降水蒸散指数	false	英式拼写，保留 SPEI。
+Palmer drought severity index	帕尔默干旱严重度指数	false	保留 PDSI，另有帕尔默旱度指数等译法。
+self-calibrating Palmer drought severity index	自校准帕尔默干旱严重度指数	false	保留 scPDSI，区别于原版 PDSI。
+evaporative demand drought index	蒸发需求干旱指数	false	保留 EDDI、时间尺度及所用需求变量。
+standardized soil moisture index	标准化土壤湿度指数	false	保留 SSMI 及其取样深度和基准期。
+standardized runoff index	标准化径流指数	true	保留 SRI。
+standardized streamflow index	标准化河川流量指数	false	保留 SSI，与土壤湿度类指数的同名缩写按原文区分。
+climatic water balance	气候水分平衡	false	干旱指数中常指降水减蒸散需求，以方法定义为准。
+soil moisture anomaly	土壤湿度异常	false	保留层深、参考期与原单位或标准化方式。
+root-zone soil moisture	根区土壤湿度	false	亦可译为根区土壤水分，保留深度。
+volumetric soil water content	土壤体积含水量	false	保留体积分数，与质量含水量区分。
+volumetric soil moisture	土壤体积含水量	false	保留土层深度和体积分数，亦可译体积土壤湿度。
+gravimetric soil water content	土壤质量含水量	false	保留湿基或干基及质量分数。
+freeze-thaw cycle	冻融循环	false	保留温度阈值、监测深度及冻融次数的判定标准。
+soil water potential	土壤水势	true	保留单位和符号。
+field capacity	田间持水量	false	土壤水分语境，保留测定方法。
+permanent wilting point	永久萎蔫点	true	保留阈值定义及土壤水势条件。
+water holding capacity	持水能力	false	依语境可写持水量，区分储量和性质。
+hydraulic conductivity	导水率	false	根据学科可译水力传导度，保留饱和与否及单位。
+surface runoff	地表径流	true	与地下径流、总径流区分。
+baseflow	基流	false	保留分割方法及贡献定义。
+runoff coefficient	径流系数	true	明确分子分母、面积和时段。
+land surface model	陆面模式	false	保留 LSM 或模型名与版本。
+land-atmosphere coupling	陆气耦合	true	区分相互作用、反馈与耦合强度。
+soil moisture feedback	土壤湿度反馈	false	保留反馈作用对象、方向和证据。
+soil moisture memory	土壤湿度记忆	false	保留分析尺度和持续性定义。
+evapotranspiration	蒸散发	false	ET 表示蒸发与蒸腾之和。地表通量语境可写地表蒸散发，毫米累计量可写蒸散量。
+land surface evapotranspiration	地表蒸散发	true	保留 ET 及率或累积量的单位。
+actual evapotranspiration	实际蒸散发	false	可按量纲写实际蒸散量，与潜在值区分。
+reference evapotranspiration	参考蒸散量	false	FAO-56 参考面对应 ET₀，参考作物蒸散量也是常用译法。
+reference crop evapotranspiration	参考作物蒸散量	false	保留 ET₀ 及假定参考面的说明。
+crop evapotranspiration	作物蒸散量	false	FAO-56 中保留 ETc，区分标准与非标准条件。
+atmospheric evaporative demand	大气蒸发需求	false	取用于表征需求的变量以原文为准。
+surface evaporation	地表蒸发	false	与陆面蒸散发、蒸腾区分。
+plant transpiration	植物蒸腾	true	保留通量或累计量的单位。
+canopy interception	冠层截留	true	保留截留对象和时段。
+canopy conductance	冠层导度	true	保留所指变量与单位。
+stomatal conductance	气孔导度	true	区分叶片与冠层，保留气体和单位。
+stomatal closure	气孔关闭	true	保留水分、温度等触发条件及因果强度。
+vapour pressure deficit	饱和水汽压差	false	保留 VPD。水汽压亏缺也是常见译法，核对饱和与实际水汽压之差。
+vapor pressure deficit	饱和水汽压差	false	保留 VPD。水汽压亏缺也是常见译法。
+specific humidity deficit	比湿亏缺	false	核对变量及其单位，不等同于 VPD。
+Penman-Monteith equation	彭曼–蒙特斯方程	false	保留原模型、参数化和 FAO-56 等限定。蒙蒂思亦为常见译名。
+Priestley-Taylor equation	普里斯特利–泰勒方程	false	保留系数和适用条件。
+evaporative fraction	蒸发分数	false	保留分子分母，常以潜热通量占可用能量的比例定义。
+Bowen ratio	鲍恩比	true	通常为感热通量除以潜热通量，按原文保留符号与计算。
+surface energy balance	地表能量平衡	true	保留辐射、热通量和储热等项及其符号。
+energy balance closure	能量平衡闭合	true	保留所用闭合比定义以及校正方法。
+soil heat flux	土壤热通量	true	保留深度和通量正方向。
+carbon flux	碳通量	true	核对是碳质量还是 CO₂ 质量及原文单位。
+net primary production	净初级生产量	false	保留 NPP，按量纲决定净初级生产量或净初级生产力。
+net primary productivity	净初级生产力	false	保留 NPP 及统计时段。
+gross primary production	总初级生产力	false	保留 GPP，按量纲和原文也可写总初级生产量。
+ecosystem respiration	生态系统呼吸	true	保留 RECO 或原文缩写及正方向。
+autotrophic respiration	自养呼吸	true	区分异养呼吸。
+heterotrophic respiration	异养呼吸	true	区分自养呼吸。
+net ecosystem production	净生态系统生产量	false	保留 NEP 及符号约定。勿与 NEE 直接等同。
+net biome production	净生物群系生产量	false	保留 NBP 和是否计入扰动及横向输移。
+eddy covariance	涡度协方差	false	方法语境可写涡度协方差法，保留 EC。
+flux partitioning	通量分割	false	在碳通量处理中保留输入、具体分割方法及输出组分。
+daytime partitioning	日间分割	false	保留方法名、字段和版本。拟合可用日夜数据，勿暗示仅用白天数据。
+nighttime partitioning	夜间分割	false	保留方法名、字段和版本。全天 GPP 估计不可译为仅夜间 GPP。
+gap filling	缺测填补	false	保留填补变量、来源、质量代码及原文方法。
+marginal distribution sampling	边际分布采样	false	保留 MDS 和实现设置。
+flux footprint	通量足迹	true	表示对通量观测有贡献的源区或权重分布。
+photosynthetically active radiation	光合有效辐射	true	保留 PAR 及辐射量单位，与 PPFD 区分。
+photosynthetic photon flux density	光合光子通量密度	true	保留 PPFD 及所用单位。
+light use efficiency	光能利用效率	false	保留 LUE、分子和分母。
+water use efficiency	水分利用效率	true	保留 WUE 及所定义的碳吸收和耗水量。
+intrinsic water use efficiency	内在水分利用效率	false	保留 iWUE 和具体定义。
+leaf area index	叶面积指数	true	保留 LAI 及叶面积口径。
+solar-induced chlorophyll fluorescence	太阳诱导叶绿素荧光	true	保留 SIF，勿将信号直接等同于 GPP。
+solar-induced fluorescence	太阳诱导荧光	false	植被遥感中通常指太阳诱导叶绿素荧光，按原文全称。
+normalized difference vegetation index	归一化植被指数	false	保留 NDVI，亦有归一化差值植被指数。
+enhanced vegetation index	增强植被指数	true	保留 EVI。
+growing season	生长季	false	保留定季规则，区分温度阈值法和物候判定。
+phenology	物候	false	保留阶段、观测类型和提取规则。
+vegetation greening	植被变绿	false	保留观测指标及其变化，勿直接替代为生产力增长。
+reference distribution	参考分布	false	明确拟合样本、样本窗口与分布类型。
+empirical cumulative distribution function	经验累积分布函数	true	保留 ECDF、并列秩和概率计算约定。
+cumulative distribution function	累积分布函数	true	保留 CDF 及边缘或联合的限定。
+probability density function	概率密度函数	true	保留 PDF，勿与文档文件格式混同。
+joint probability	联合概率	true	保留联合事件的交集、并集及阈值。
+conditional probability	条件概率	true	保留条件事件和统计分母。
+joint return period	联合重现期	true	保留 AND、OR 或条件重现期等定义。
+return level	重现水平	false	也可译作重现值。保留重现期和置信范围。
+return period	重现期	false	也可译作再现期。保留年、季或其他计数单位。
+tail dependence	尾部依赖	true	保留上尾、下尾或不对称的定义。
+copula function	Copula 函数	false	用来连接边缘分布和依赖结构。亦称连接函数，保留族名称。
+run theory	游程理论	true	保留阈值、最小历时、合并间隔和缺测处理。
+quantile mapping	分位数映射	true	保留所用分布、时段以及面向校准的变量。
+climate normal	气候常年值	false	保留气候基准期及统计时段。
+percentage point	百分点	true	用于百分率之间的绝对差。
+confidence interval	置信区间	true	保留置信水平和区间估计方法。
+credible interval	可信区间	false	贝叶斯语境，也称可信度区间。
+confidence level	置信水平	false	统计区间语境。评估报告的信心水平按原文。
+statistical significance	统计显著性	true	保留检验水准与原文的判定。
+multiple testing correction	多重检验校正	false	保留所用校正算法与检验集合。
+false discovery rate	错误发现率	false	保留 FDR，亦称假发现率。
+block bootstrap	分块自助法	false	保留分块长度、重抽样单位和重复次数。
+bootstrap confidence interval	自助法置信区间	false	保留取样方法与置信水平。
+cross validation	交叉验证	true	保留划分对象、折数、验证顺序与数据泄漏限制。
+leave-one-year-out cross-validation	留一年交叉验证	false	明确每轮删去的完整年份与可用样本。
+Mann-Kendall test	Mann–Kendall 检验	false	保留原文修正、自相关处理和检验水准。
+Sen's slope	Sen 斜率	false	保留估计对象与时间单位。
+change point	变点	false	统计序列语境可写突变点，按检测对象与算法消歧。
+stationarity	平稳性	false	统计假设，保留整体、弱平稳或条件平稳的限定。
+sampling uncertainty	抽样不确定性	true	区分结构、参数和观测不确定性。
+structural uncertainty	结构不确定性	true	保留所指模型或指标结构。
+ensemble spread	集合离散度	false	保留离散度定义，勿将其直接解释为置信区间。
+ensemble mean	集合平均	false	保留成员范围及权重。
+weighted average	加权平均	true	保留权重和归一化分母。
+pressure gradient force	气压梯度力	true	大气动力学中的力项，保留矢量方向和坐标约定。
+Coriolis force	科里奥利力	false	科氏力是常用简称。
+Coriolis parameter	科里奥利参数	false	亦称科氏参数，区分其与科氏力。
+beta effect	β效应	false	保留原文对科氏参数经向变化的定义，β与beta按原符号处理。
+geostrophic balance	地转平衡	true	指水平气压梯度力和科里奥利力的平衡。
+geostrophic wind	地转风	true	保留分量、风向和参考气压层，与真实风区分。
+ageostrophic wind	非地转风	true	常指实际风减去地转风，保留定义和方向。
+geostrophic adjustment	地转调整	false	保留初始扰动条件、波动传播和调整时间尺度。
+gradient wind	梯度风	true	考虑曲率项的平衡风，区别于地转风。
+cyclostrophic wind	旋衡风	true	主要由水平气压梯度力与曲率相关的惯性效应平衡。
+thermal wind	热成风	true	指与水平温度梯度相联系的地转风垂直切变。
+hydrostatic balance	静力平衡	true	保留垂直动量方程的近似与所用坐标。
+hydrostatic equation	静力方程	true	核对密度、重力和垂直坐标。
+nonhydrostatic dynamics	非静力动力学	false	视句法可译为非静力过程。
+primitive equations	原始方程	true	核对是否采用静力近似及所用垂直坐标。
+shallow-water equations	浅水方程	true	保留层数、深度假设和重力参数。
+continuity equation	连续方程	true	保留原文使用的质量连续性和坐标形式。
+material derivative	物质导数	false	流体动力学亦称随体导数，气象学文献也用个别导数。
+quasi-geostrophic approximation	准地转近似	true	保留原文中的近似假设。
+quasi-geostrophic omega equation	准地转ω方程	false	亦常写作准地转垂直运动方程，保留原符号和垂直速度的坐标定义。
+Rossby number	罗斯贝数	true	原文已有 Ro 时保留并区分数字零与字母 o。
+Rossby wave	罗斯贝波	true	行星尺度时亦常讨论行星波，保留原文尺度和传播类型。
+Rossby wave breaking	罗斯贝波破碎	true	区分反气旋式与气旋式破碎。
+Rossby radius of deformation	罗斯贝变形半径	true	区分内模态、外模态与赤道定义。
+Rossby deformation radius	罗斯贝变形半径	true	同 Rossby radius of deformation。
+planetary vorticity	行星涡度	false	亦称地转涡度或牵连涡度，核对原文符号。
+absolute vorticity	绝对涡度	true	在常用局地气象定义下包含相对涡度与行星涡度。
+relative vorticity	相对涡度	true	保留涡度分量、坐标和符号约定。
+potential vorticity	位涡	false	亦称位势涡度，原文已有 PV 时保留。
+Ertel potential vorticity	埃特尔位涡	false	Ertel 可保留英文姓氏，注意与准地转位涡区分。
+vorticity advection	涡度平流	true	保留平流项正负号及坐标约定。
+positive vorticity advection	正涡度平流	true	按原文动力诊断定义理解正号。
+warm advection	暖平流	true	指暖空气的平流或温度平流的增温效应，按方程语境区分。
+cold advection	冷平流	true	指冷空气的平流或温度平流的降温效应，按方程语境区分。
+horizontal convergence	水平辐合	true	核对是否用散度的负值表示。
+upper-level divergence	高层辐散	false	亦用高空辐散，保留对应等压面或高度层。
+vortex stretching	涡管伸展	false	依语境也可用涡度伸展、涡旋伸展或涡量拉伸。
+baroclinic instability	斜压不稳定	true	保留垂直风切变、层结及原文给出的不稳定判据。
+barotropic instability	正压不稳定	true	保留流场结构及原文给出的不稳定判据。
+baroclinic zone	斜压带	true	保留水平温度梯度、高度或气压层范围。
+baroclinic wave	斜压波	true	保留扰动尺度、垂直结构和传播类型。
+equivalent barotropic structure	相当正压结构	false	亦用等效正压结构，区分严格正压假定。
+inertial instability	惯性不稳定	true	按原文保留绝对涡度、惯性稳定度或其他诊断条件。
+symmetric instability	对称不稳定	true	根据原文保留饱和条件及稳定度判据。
+conditional symmetric instability	条件性对称不稳定	true	保留原文诊断条件及已有缩写 CSI。
+gravity wave	重力波	false	大气动力学中指重力或浮力参与恢复的波动，和引力波区分。
+internal gravity wave	内重力波	true	浮力提供恢复作用，区分外重力波和广义引力波。
+inertia-gravity wave	惯性重力波	true	同时涉及旋转与浮力。
+mountain wave	山岳波	false	亦称地形波，实际所指以原文为准。
+lee wave	背风波	true	核对原文是否特指某类背风重力波。
+mixed Rossby-gravity wave	混合罗斯贝–重力波	false	亦称混合罗斯贝重力波或 Yanai 波。
+equivalent depth	等效深度	false	大气波动中亦称相当深度，依原文模式定义理解。
+geopotential height	位势高度	true	区别于几何高度，保留位势米及对应气压面。
+geopotential	位势	false	地球流体语境可用重力位势，注意与位势高度区分。
+streamfunction	流函数	true	保留原文符号、分量与坐标定义。
+velocity potential	速度势	true	依原文说明散度风分量的符号约定。
+atmospheric angular momentum	大气角动量	true	保留参考轴及质量项、风场项的定义。
+eddy momentum flux	涡动动量通量	false	按雷诺分解区分平均流与扰动，亦可用涡旋动量通量。
+eddy heat flux	涡动热通量	false	保留平均和异常定义，亦可用涡旋热通量。
+general circulation of the atmosphere	大气环流	false	强调全球平均结构时，可随语境写大气一般环流。
+meridional overturning circulation	经向翻转环流	false	大气研究中亦见经向翻转流，保留大气或海洋对象。
+Hadley circulation	哈德莱环流	false	亦见哈德利环流，与 Hadley cell 共用人名译法。
+Hadley cell	哈德莱环流圈	false	亦称哈德利环流圈，保留半球、强度及边界定义。
+Ferrel cell	费雷尔环流圈	false	亦称费雷尔环流，注意辨别中纬度单元。
+polar cell	极地环流圈	false	亦称极地环流，注意与极涡区分。
+Walker circulation	沃克环流	true	保留热带纬向垂直环流对应的经度范围和诊断变量。
+Brewer-Dobson circulation	布鲁尔–多布森环流	false	亦见布鲁尔-多布森环流，原文已有 BDC 时保留。
+intertropical convergence zone	热带辐合带	true	原文已有 ITCZ 时保留。
+South Pacific convergence zone	南太平洋辐合带	true	原文已有 SPCZ 时保留。
+South Atlantic convergence zone	南大西洋辐合带	true	原文已有 SACZ 时保留。
+monsoon trough	季风槽	true	保留气压层、区域及槽轴位置。
+East Asian summer monsoon	东亚夏季风	true	原文已有 EASM 时保留。
+East Asian winter monsoon	东亚冬季风	true	原文已有 EAWM 时保留。
+Meiyu front	梅雨锋	true	同一文献若并列 Baiu 或 Changma，保留区域对应关系。
+western Pacific subtropical high	西太平洋副热带高压	false	可简称西太副高，保持原文海域范围。
+western North Pacific subtropical high	西北太平洋副热带高压	false	亦见西太平洋副热带高压，保留原文研究范围。
+South Asian high	南亚高压	true	常指亚洲夏季上层高压系统。
+East Asian trough	东亚大槽	true	核对东亚大槽的季节、诊断高度和范围。
+subtropical jet stream	副热带急流	false	若原文指西风急流，也可译为副热带西风急流。
+polar-front jet stream	极锋急流	true	保留高度、锋区及与其他急流的区分。
+tropical easterly jet	热带东风急流	true	常指夏季热带高层东风急流，按原文保留时空范围。
+low-level jet	低空急流	true	原文已有 LLJ 时保留，并保留气压层或高度。
+jet streak	急流核	false	亦见急流轴上风速极大区，区分整个急流系统。
+storm track	风暴路径带	false	气候学指风暴活动带时适用，个例追踪可译作风暴路径。
+atmospheric blocking	大气阻塞	true	气候或天气过程的诊断阈值按原文保留。
+blocking high	阻塞高压	true	保留高压中心与原文诊断阻塞的判据。
+cutoff low	切断低压	true	保留原文对闭合与切离西风带的判据。
+persistent anticyclone	持续性反气旋	false	按原文的持续日数或识别标准理解。
+polar vortex	极涡	false	亦见极地涡旋，保留平流层或对流层等高度限定。
+sudden stratospheric warming	平流层突然增温	false	亦常用平流层爆发性增温，原文已有 SSW 时保留。
+cold front	冷锋	true	冷空气一侧推进时形成冷锋，保留位置和移速。
+warm front	暖锋	true	暖空气一侧推进时形成暖锋，保留位置和移速。
+occluded front	锢囚锋	true	保留原文的冷式或暖式锢囚分类。
+quasi-stationary front	准静止锋	true	按原文保留准静止条件和区域性锋名。
+frontal zone	锋区	true	指有一定宽度的锋区，区分锋面与地图上的锋线。
+frontogenesis	锋生	true	注意原文是否特指动力诊断的锋生函数。
+frontolysis	锋消	true	指锋的减弱或消散，诊断量及正负约定以原文为准。
+dryline	干线	true	气象锋线语境指明显的湿度梯度边界。
+gust front	阵风锋	true	区别于阵风本身。
+cold surge	冷空气爆发	false	可按地区、定义译为寒潮、冷涌等，勿擅自套用预警标准。
+warm conveyor belt	暖输送带	true	原文已有 WCB 时保留。
+cold conveyor belt	冷输送带	true	原文已有 CCB 时保留。
+extratropical cyclone	温带气旋	false	亦有热带外气旋，按原文统计分类一致使用。
+extratropical transition	温带变性	false	亦见温带转化，指热带气旋向温带系统的转变。
+explosive cyclogenesis	爆发性气旋生成	false	亦见气旋爆发性发展，保留降压率和纬度修正定义。
+tropical cyclone	热带气旋	true	通称，等级和海域按原文保留。
+tropical depression	热带低压	true	保留分级标准及风速平均时段。
+tropical storm	热带风暴	true	保留分级标准及风速平均时段。
+severe tropical storm	强热带风暴	true	按原文使用的区域等级定义。
+typhoon	台风	true	在西北太平洋和南海业务分级中使用相应标准。
+hurricane	飓风	true	保留海域和分级，勿将各海域气旋一律写成台风。
+rapid intensification	快速增强	false	热带气旋也用快速加强，保留原文阈值和时段。
+eyewall replacement cycle	眼墙置换循环	false	亦常见眼墙替换过程，阶段和时间按原文。
+storm surge	风暴潮	false	单指气象驱动的异常增水量时也可译为风暴增水，区别于含天文潮的总水位。
+storm tide	风暴潮总水位	false	当与 storm surge 对比时，明确其包含原文定义的天文潮分量。
+tornado	龙卷风	false	亦用龙卷，保留分类标准。
+waterspout	水龙卷	true	指发生在水面上的龙卷状涡旋，保留形成条件。
+downburst	下击暴流	true	保留区域尺度、风速定义及微下击暴流等分类。
+microburst	微下击暴流	false	亦见微爆流，保留原文的尺度和观测条件。
+mesocyclone	中尺度气旋	true	风暴内旋转诊断中，区分中尺度气旋与地面龙卷。
+squall line	飑线	true	保留线状对流系统的判据和持续时间。
+supercell thunderstorm	超级单体雷暴	false	亦称超级单体，保留原文的风暴类型及识别标准。
+mesoscale convective system	中尺度对流系统	true	原文已有 MCS 时保留，识别标准按文献。
+mesoscale convective complex	中尺度对流复合体	true	原文已有 MCC 时保留，区分系统的一般概念和特定分类。
+severe convective weather	强对流天气	true	按原文保留纳入的现象及各自强度标准。
+freezing rain	冻雨	true	区别于冰粒、冰雹及其在物体表面形成的雨凇。
+blizzard	暴风雪	true	保留原文风速、能见度和持续时间判据。
+dust storm	沙尘暴	true	区别于扬沙、浮尘及区域性天气等级。
+flash flood	骤发洪水	false	山地小流域常译为山洪，具体阈值与场景按原文。
+atmospheric boundary layer	大气边界层	true	原文已有 ABL 时保留。
+planetary boundary layer	行星边界层	false	常与大气边界层同义，保留原文 PBL 缩写。
+boundary layer height	边界层高度	true	保留按再分析诊断、探空或遥感反演的具体定义。
+convective boundary layer	对流边界层	true	原文已有 CBL 时保留。
+stable boundary layer	稳定边界层	true	保留原文稳定条件和已有缩写 SBL。
+neutrally stratified boundary layer	中性层结边界层	true	保留判别中性层结时采用的梯度或稳定度阈值。
+nocturnal boundary layer	夜间边界层	true	时间区分不自动等同于动力稳定条件。
+surface layer	近地层	false	在大气边界层语境亦称接地层，海洋或土壤语境另判。
+mixed layer	混合层	true	区分海洋混合层与大气混合层，保留上下界定义。
+residual layer	残余层	false	大气边界层语境也见残留层。
+Ekman layer	埃克曼层	false	亦见艾克曼层，统一人名写法。
+Ekman pumping	埃克曼抽吸	false	亦见埃克曼泵吸，保留原文垂直速度与符号约定。
+capping inversion	盖帽逆温	false	亦见盖帽逆温层或顶盖逆温，区分逆温和其他抑制层。
+temperature inversion	逆温	false	描述层结时可写逆温层，保留高度范围和温度梯度。
+surface roughness length	地表粗糙度长度	false	亦见地表粗糙长度，保留原文参数和单位。
+displacement height	零平面位移高度	false	湍流与冠层语境适用，其他语境按定义判断。
+friction velocity	摩擦速度	false	亦称摩阻速度或摩阻风速，保留原文 u* 等符号。
+Monin-Obukhov similarity theory	莫宁–奥布霍夫相似理论	false	人名亦写作莫宁-奥布霍夫，原文已有 MOST 时保留。
+Obukhov length	奥布霍夫长度	false	保留原文 L 的符号约定。
+gradient Richardson number	梯度理查森数	true	区分通量理查森数与整体理查森数。
+bulk Richardson number	整体理查森数	false	亦见体积理查森数或总体理查森数，区分梯度定义。
+turbulent kinetic energy	湍流动能	true	原文已有 TKE 时保留，核对是否为单位质量的动能。
+turbulent kinetic energy dissipation rate	湍流动能耗散率	true	保留符号 ε 和单位。
+eddy diffusivity	涡动扩散系数	false	亦见湍流扩散系数，注意扩散对象和符号。
+eddy viscosity	涡动黏性	false	亦见湍流黏性，若原文指系数则按实际单位表述。
+entrainment zone	卷夹区	false	边界层语境亦可译作卷入区或夹卷区。
+entrainment flux	卷夹通量	false	亦见卷入通量，保留通量正负号定义。
+vertical wind shear	垂直风切变	true	区分切变矢量、风速差及垂直梯度。
+clear-air turbulence	晴空湍流	true	原文已有 CAT 时保留。
+convective available potential energy	对流有效位能	false	亦称对流有效势能。保留 CAPE、所用气块和积分范围。
+convective inhibition	对流抑制能	false	亦见对流抑制或对流抑制能量，保留 CIN 的符号约定。
+lifting condensation level	抬升凝结高度	false	以层或气压表示时可译抬升凝结层。保留 LCL 和坐标类型。
+level of free convection	自由对流高度	false	以层或气压表示时可译自由对流层。保留 LFC 和坐标类型。
+equilibrium level	平衡高度	false	这里指对流热力诊断量，按原文保留气块浮力及已有缩写 EL。
+equivalent potential temperature	相当位温	false	亦见等效位温，保留 θe 及公式定义。
+virtual potential temperature	虚位温	false	亦见虚温位温。保留符号和定义，与虚温、位温区分。
+dry adiabatic lapse rate	干绝热递减率	false	亦写作干绝热直减率，保留原文的温度梯度符号与单位。
+moist adiabatic lapse rate	湿绝热递减率	false	亦写作湿绝热直减率，保留饱和条件和温度梯度单位。
+wave activity flux	波作用通量	false	亦称波活动通量，保留原文所用诊断公式及缩写 WAF。
+momentum budget	动量收支	true	各项正负号及坐标定义以原文为准。
+ridge line	脊线	false	气压或位势高度场中可译为脊线，地形语境可指山脊线。
+trough line	槽线	true	保留原文所在高度层或等压面。
+lee cyclogenesis	背风气旋生成	false	亦见背风气旋发生或背风坡气旋发展。
+tropical cyclogenesis	热带气旋生成	false	亦见热带气旋发生，保留原文定义的生成阈值。
+tropical cyclone landfall	热带气旋登陆	true	保留登陆时刻、位置与原文采用的等级。
+wind gust	阵风	true	保留时段和最大值的定义，避免与持续风速混用。
+wind chill index	风寒指数	true	保留原文公式、测量高度和适用区域。
+radiation inversion	辐射逆温	true	保留辐射冷却发生的高度和时间范围。
+zero-plane displacement height	零平面位移高度	false	亦称零平面位移量，保留参数定义和单位。
+atmospheric thermodynamics	大气热力学	false	热力状态、过程和能量关系的表述保留原文假设。
+air parcel	气块	false	拉格朗日描述中的理想气块
+potential temperature	位温	true	保留参考气压和符号 θ
+virtual temperature	虚温	true	等压同密度条件下干空气的等效温度
+wet-bulb potential temperature	湿球位温	true	保留湿绝热过程定义
+liquid water potential temperature	液水位温	false	也称液态水位温
+equivalent temperature	相当温度	false	热力学量，按原文区分与相当位温
+dew point temperature	露点温度	false	可简称露点，核对饱和参考相
+frost point temperature	霜点温度	false	相对于冰面饱和，可简称霜点
+wet-bulb temperature	湿球温度	true	区分干球温度、露点和湿球黑球温度，保留计算或观测方法。
+dry-bulb temperature	干球温度	true	区分湿球温度和露点，保留单位。
+wet-bulb depression	干湿球温度差	false	干球温度减湿球温度
+specific humidity	比湿	true	核对质量分母为湿空气
+water vapor mixing ratio	水汽混合比	false	核对质量分母为干空气，水蒸气混合比为同义表达
+water vapour mixing ratio	水汽混合比	false	英式拼写，核对质量分母
+saturation mixing ratio	饱和混合比	false	按气压、温度和参考相计算
+relative humidity	相对湿度	true	保留相对于水面或冰面的计算约定
+absolute humidity	绝对湿度	false	按文中定义核对体积基准
+water vapor pressure	水汽压	false	可译水蒸气分压，核对与饱和水汽压的区别
+water vapour pressure	水汽压	false	英式拼写，可译水蒸气分压
+saturation vapor pressure	饱和水汽压	false	可译饱和水蒸气压，保留水面或冰面约定
+saturation vapour pressure	饱和水汽压	false	英式拼写，保留水面或冰面约定
+water vapor	水汽	false	水蒸气亦可，具体产品变量名原样保留
+water vapour	水汽	false	英式拼写，水蒸气亦可
+supersaturation	过饱和	false	明确相对于液水还是冰
+moist static energy	湿静力能	false	保留位能、显热和潜热各项及其近似
+dry static energy	干静力能	false	保留原文所用参考与定义
+lapse rate	温度递减率	false	可译气温直减率，核对符号和垂直坐标
+pseudoadiabatic process	假绝热过程	false	按文中定义处理凝结物移除
+static stability	静力稳定度	false	亦作静力稳定性，保留判据和符号
+conditional instability	条件性不稳定	false	气块饱和前后稳定性判据不同
+potential instability	潜在不稳定	false	注意层结整体抬升饱和后的不稳定判据
+latent heat of vaporization	汽化潜热	false	可译蒸发潜热，核对质量基准
+latent heat of fusion	熔化潜热	false	按过程区分正负及与凝固潜热的对应
+adiabatic cooling	绝热冷却	false	保留抬升或膨胀等条件
+radiative transfer	辐射传输	true	辐射在吸收、散射及发射介质中的传播
+radiative transfer equation	辐射传输方程	true	保留边界条件、传播方向及吸收、散射、发射项。
+radiative flux density	辐射通量密度	false	核对单位及正方向
+radiance	辐亮度	false	亦称辐射亮度，核对投影面积和立体角
+irradiance	辐照度	false	辐射通量除以受照面积，保留方向和波段
+spectral radiance	光谱辐亮度	false	亦称光谱辐射亮度。保留按波长、波数或频率表示的单位。
+brightness temperature	亮度温度	false	简称亮温。保留波段或频率，与空气温度和地表热力学温度区分。
+thermal infrared radiation	热红外辐射	true	按传感器和原文定义保留波段范围。
+shortwave radiation	短波辐射	true	核对太阳辐射的波段与方向
+longwave radiation	长波辐射	true	核对地表、大气或向外方向
+outgoing longwave radiation	向外长波辐射	false	保留 OLR，在大气顶语境也可译射出长波辐射
+downward shortwave radiation	向下短波辐射	false	地面观测中可译下行短波辐射
+upward shortwave radiation	向上短波辐射	false	亦作上行短波辐射
+downward longwave radiation	向下长波辐射	false	亦作下行长波辐射
+upward longwave radiation	向上长波辐射	false	亦作上行长波辐射
+net shortwave radiation	净短波辐射	true	保留净值差分方向
+net longwave radiation	净长波辐射	true	保留净值差分方向
+net radiation	净辐射	true	保留净辐射的符号、单位、上下行分量和短波／长波范围。
+surface radiation budget	地表辐射收支	false	地表辐射平衡亦可，核对包含的分量和时间尺度
+atmospheric radiation budget	大气辐射收支	false	核对空气柱上下边界和符号
+top of the atmosphere	大气顶	false	保留 TOA，可作大气层顶部
+direct solar radiation	太阳直接辐射	false	可简称直接辐射，区分水平面与法向
+diffuse solar radiation	太阳散射辐射	false	可简称散射辐射，区分直射分量
+global solar radiation	太阳总辐射	false	地面辐射观测语境指半球入射总量，核对几何条件
+surface albedo	地表反照率	false	海面或材料表面语境使用对应对象的反照率，保留波段或权重
+cloud albedo	云反照率	false	亦译云的反照率
+single scattering albedo	单次散射反照率	false	保留 SSA，定义为散射与消光之比
+emissivity	发射率	false	可译比辐射率，核对波段和角度
+absorptivity	吸收率	false	核对无量纲比例与吸收系数
+transmittance	透射率	false	可作透过率，保留路径与波段条件
+absorption coefficient	吸收系数	true	维度随质量或路径长度基准而异
+scattering coefficient	散射系数	true	保留体积或质量基准以及相应单位。
+extinction coefficient	消光系数	true	保留与散射和吸收分量的关系
+optical depth	光学厚度	false	也称光学深度，保留波段和路径几何
+phase function	相函数	false	散射语境保留角分布与归一化约定
+asymmetry parameter	不对称因子	false	散射语境可译不对称参数，核对平均散射角余弦定义
+Rayleigh scattering	瑞利散射	true	适用于散射体远小于波长的条件，保留相关波段。
+Mie scattering	米散射	false	亦译米氏散射或米氏理论相关表述
+multiple scattering	多次散射	true	区分单次与多次散射近似。
+radiative heating rate	辐射加热率	false	核对辐射通量散度的符号、温度变化率及计量单位
+radiative cooling	辐射冷却	false	按语境可译辐射降温，保留温度变化方向
+cloud radiative effect	云辐射效应	false	保留 CRE，区分全天空与晴空通量差及符号
+clear-sky radiation	晴空辐射	false	保留全天空和晴空的筛选或模式定义
+all-sky radiation	全天空辐射	false	指含各种云况的天空条件
+cloud microphysics	云微物理	false	可译云微物理过程，保留参数化方案名
+hydrometeor	水凝物	false	包括大气中多种液态或固态水粒子，按观测分类处理
+cloud condensation nucleus	云凝结核	false	保留 CCN，注意英语不规则复数 nuclei
+cloud condensation nuclei	云凝结核	false	保留 CCN 与激活条件
+ice-nucleating particle	冰核粒子	false	保留 INP，亦称成冰核粒子，按原文区分广义冰核。
+cloud droplet	云滴	false	保留与雨滴的粒径分界或诊断约定
+cloud droplet number concentration	云滴数浓度	false	可作云滴数目浓度，区分质量浓度
+ice crystal number concentration	冰晶数浓度	false	保留体积或质量基准
+liquid water content	液态水含量	false	保留 LWC，核对体积或质量基准，云语境可译液水含量
+ice water content	冰水含量	false	保留 IWC，亦译冰含量，按定义核对质量量纲
+liquid water path	液态水路径	false	保留 LWP，液态水含量的垂直积分，可译液水路径
+ice water path	冰水路径	false	保留 IWP，冰水含量的垂直积分
+cloud water path	云水路径	false	核对是否仅指液态或合计液态与冰相
+mixed-phase cloud	混合相云	false	可译冰水混合云，保留液滴与冰晶共存条件
+supercooled liquid water	过冷液态水	false	可简称过冷水，区分低于冰点的温度条件
+warm rain	暖雨	false	液相云中的降雨过程，保留原文使用条件
+condensational growth	凝结增长	false	指水汽凝结使云滴增大
+depositional growth	凝华增长	false	指水汽在冰相粒子上沉积使其增长
+collision-coalescence	碰并	false	也可译碰撞合并，核对碰撞与并合过程
+riming	撞冻	false	过冷滴碰上冰相粒子并冻结，可按领域译凇附
+autoconversion	自动转化	false	云微物理参数化中的非降水粒子向降水粒子转换
+accretion	碰并增长	false	云微物理中按参与的雨滴、云滴、冰晶或雪粒具体表达，天体物理语境另译
+ice nucleation	冰成核	false	亦译冰晶成核
+homogeneous freezing	均质冻结	false	亦作均相冻结，区分有无冰核粒子参与
+heterogeneous freezing	非均质冻结	false	亦作异相冻结，保留冻结模式
+immersion freezing	浸没冻结	false	亦译浸入冻结，成冰粒子位于液滴内
+contact freezing	接触冻结	false	颗粒接触过冷液滴后诱发冻结
+secondary ice production	次生冰生成	false	亦称二次冰生成，保留 SIP
+Wegener–Bergeron–Findeisen process	韦格纳–伯杰龙–芬德森过程	false	保留 WBF 或原文人名形式，伯杰龙译名有变体
+droplet size distribution	液滴粒径分布	false	云滴语境可译云滴谱，核对半径或直径
+raindrop size distribution	雨滴粒径分布	false	也称雨滴谱，保留 DSD 及分箱参数
+effective radius	有效半径	false	核对粒径谱不同矩的比值定义和液相或冰相
+terminal fall velocity	终端下落速度	false	可作末速度，保留粒子种类与空气参考
+cloud fraction	云量比例	false	可译云覆盖率或云量，区分面积、体积与时间
+cloud cover	云量	false	可作云覆盖，保留百分比、十分量或八分量
+cloud optical thickness	云光学厚度	false	光学深度亦可，保留波段与 COT
+cloud base height	云底高度	false	可简称云底高，核对海拔或离地基准
+cloud top height	云顶高度	false	可简称云顶高，核对海拔或离地基准
+cloud top temperature	云顶温度	true	保留卫星反演、探空或其他测量定义。
+cirrus	卷云	false	WMO 云属，保留 Ci 时注意大小写
+cirrocumulus	卷积云	false	WMO 云属，保留 Cc
+cirrostratus	卷层云	false	WMO 云属，保留 Cs
+altocumulus	高积云	false	WMO 云属，保留 Ac
+altostratus	高层云	false	WMO 云属，保留 As
+nimbostratus	雨层云	false	WMO 云属，保留 Ns
+stratocumulus	层积云	false	WMO 云属，保留 Sc
+stratus	层云	false	WMO 云属，保留 St
+cumulus	积云	false	WMO 云属，保留 Cu
+cumulonimbus	积雨云	false	WMO 云属，保留 Cb
+drizzle	毛毛雨	false	亦可译细雨，保留与小雨的现象区分
+freezing drizzle	冻毛毛雨	false	WMO 云图可见过冷却毛毛雨，按文中的观测分类
+graupel	霰	false	云滴碰冻形成的松软冰相粒子，WMO 云图相关条目亦见雪丸
+ice pellets	冰粒	false	WMO 云图所用冰丸亦可，区别仅泛指冰相粒子的语境
+hail	冰雹	false	云降水语境亦可简称雹
+virga	幡状降水	false	亦作降水幡，降水粒子在到达地面前蒸发或升华
+precipitation phase	降水相态	true	区分液态、固态和混合相
+precipitation rate	降水率	false	按单位保留时间基准，可译降水强度
+precipitation efficiency	降水效率	true	保留研究采用的分子和分母
+atmospheric chemistry	大气化学	true	保留所涉气相、液相或多相反应的范围。
+trace gas	痕量气体	false	保留摩尔分数、体积混合比等定义
+aerosol	气溶胶	false	按上下文区分粒子、总体及具体组分
+aerosol optical depth	气溶胶光学厚度	false	保留 AOD、波长和无量纲属性，亦译气溶胶光学深度
+aerosol optical thickness	气溶胶光学厚度	false	保留原文缩写与波长
+aerosol absorption optical depth	气溶胶吸收光学厚度	false	保留 AAOD，区分总消光光学厚度
+aerosol-cloud interaction	气溶胶与云的相互作用	false	保留 ACI，也可译气溶胶–云相互作用
+aerosol-radiation interaction	气溶胶与辐射的相互作用	false	保留 ARI，也可译气溶胶–辐射相互作用
+aerosol activation	气溶胶活化	false	云语境可译气溶胶粒子激活，保留过饱和条件
+aerosol number concentration	气溶胶数浓度	false	保留粒径范围和体积基准
+aerosol size distribution	气溶胶粒径分布	false	核对数谱、面积谱、体积谱及半径或直径
+hygroscopic growth	吸湿增长	false	注明相对湿度以及干湿粒径或光学量的参比
+Ångström exponent	昂斯特朗指数	false	亦作 Ångström 指数，注明消光、吸收或散射的谱指数
+black carbon	黑碳	true	保留 BC 与观测定义，区分元素碳
+brown carbon	棕碳	true	保留 BrC，注意按波段定义吸收
+elemental carbon	元素碳	true	保留 EC，注意按分析方法定义，区别黑碳
+organic carbon	有机碳	true	保留 OC，区分有机物总质量
+secondary organic aerosol	二次有机气溶胶	true	保留 SOA 与质量或生成率的定义
+primary organic aerosol	一次有机气溶胶	false	保留 POA，亦译初级有机气溶胶
+secondary inorganic aerosol	二次无机气溶胶	false	保留 SIA，按原文范围列出硫酸盐、硝酸盐、铵盐等组分
+sulfate aerosol	硫酸盐气溶胶	false	英式 sulphate aerosol 同义，区分硫酸和各类硫酸盐。
+sulphate aerosol	硫酸盐气溶胶	false	保留硫酸盐浓度口径及原文组分。
+nitrate aerosol	硝酸盐气溶胶	false	区分颗粒态硝酸盐与气态硝酸，保留粒径和单位。
+atmospheric oxidation capacity	大气氧化能力	false	保留表征量、时段和参与的氧化剂。
+particulate matter	颗粒物	true	保留 PM2.5、PM10 等粒径切割和原始格式
+fine particulate matter	细颗粒物	false	保留原文空气动力学粒径和监测定义
+mineral dust	矿物尘	false	可译矿尘，按组分和来源处理
+sea salt aerosol	海盐气溶胶	false	区分海盐组分与海洋飞沫总体
+volatile organic compound	挥发性有机化合物	false	环境管理语境可译挥发性有机物，保留 VOC
+nitrogen oxides	氮氧化物	true	保留 NOx，具体组成以原文为准
+tropospheric ozone	对流层臭氧	true	区分地面臭氧和对流层整层臭氧
+stratospheric ozone	平流层臭氧	true	按原文区分浓度、混合比和柱总量。
+photochemical smog	光化学烟雾	true	保留参与物种、形成条件与原文污染范围。
+photolysis rate	光解速率	false	按公式区分光解频率或单位体积反应速率
+hydroxyl radical	羟基自由基	false	保留 OH 自由基的原始记号
+peroxyacetyl nitrate	过氧乙酰硝酸酯	false	保留 PAN，也称硝酸过氧乙酰酯
+heterogeneous chemistry	多相化学	false	亦译非均相化学，关注粒子或液滴界面的反应
+aqueous-phase chemistry	液相化学	false	亦可译水相化学，核对云水或颗粒水条件
+gas-phase chemistry	气相化学	true	区分气相反应、液相反应与表面非均相过程。
+ozone precursor	臭氧前体物	false	亦称臭氧前体，保留原文物种
+dry deposition	干沉降	true	如涉及沉降速度或通量，保留单位和方向
+wet deposition	湿沉降	true	按原文区分云内、云下清除或雨雪过程
+wet scavenging	湿清除	false	亦称湿沉降清除，按过程区分云内和云下
+deposition velocity	沉降速度	false	保留质量或数浓度通量所用参考高度
+emission inventory	排放清单	true	保留分部门、物种、时间、空间或版本信息
+chemical transport model	化学传输模式	false	化学输送模式亦可，保留 CTM 与模式名
+surface meteorological observation	地面气象观测	false	区别于高空气象探测
+upper-air observation	高空气象观测	false	保留气压层、高度或升空时刻
+in situ observation	原位观测	false	与遥感观测区分，地面现场观测也可按上下文表述
+automatic weather station	自动气象站	true	保留原文缩写 AWS
+radiosonde	无线电探空仪	false	也称无线电探空仪器或探空仪，区别于探空气球及探空观测
+dropsonde	下投式探空仪	false	从飞机等平台投放，区别于上升探空仪
+wind profiler radar	风廓线雷达	true	输出随高度变化的风场
+radar wind profiler	风廓线雷达	true	有些文献使用 RWP
+wind vane	风向标	false	测风向，保留来向约定
+cup anemometer	风杯风速计	false	也称杯式风速仪
+sonic anemometer	超声波风速仪	false	保留测量分量和采样频率
+tipping-bucket rain gauge	翻斗式雨量计	false	区别于称重式雨量计
+weighing rain gauge	称重式雨量计	false	保留雨量和采样间隔
+disdrometer	雨滴谱仪	false	综合固液态降水观测时也可依原文称降水粒子谱仪
+ceilometer	云高仪	false	常测云底高度，区别于云顶高度
+forward-scatter visibility sensor	前向散射式能见度仪	false	区别于透射式能见度仪
+sunshine recorder	日照计	false	常用于记录日照时数
+Stevenson screen	百叶箱	false	也称史蒂文森百叶箱
+sampling interval	采样间隔	false	区别于报告间隔、平均窗口和累计窗口
+instrument calibration	仪器校准	false	遥感器或辐射计的 calibration 常译定标
+measurement uncertainty	测量不确定度	false	保留评定口径及置信水平
+quality control flag	质量控制标志	false	标志位含义以数据来源为准
+missing value	缺测值	false	模拟资料或非观测表中也可译为缺失值
+homogenization	均一化	false	气候记录中指处理非气候因素造成的非均一性，也见均质化
+station relocation	台站迁移	false	保留新旧位置和变更时间
+observation network	观测网	false	也可译观测网络
+station metadata	站点元数据	false	保留坐标、高程、仪器和站史的变化
+meteorological satellite	气象卫星	false	核心概念见 GB/T 39094
+geostationary meteorological satellite	静止气象卫星	false	也可表述为地球静止轨道气象卫星
+polar-orbiting meteorological satellite	极轨气象卫星	false	保留轨道和过境时刻
+geostationary orbit	地球静止轨道	false	地球同步轨道的特例
+geosynchronous orbit	地球同步轨道	false	区别于地球静止轨道
+sun-synchronous orbit	太阳同步轨道	false	保留地方太阳时和升降轨信息
+satellite overpass	卫星过境	false	有时用于特定站点的匹配时刻
+satellite payload	卫星有效载荷	false	保留具体仪器或传感器名称
+passive remote sensing	被动遥感	false	接收自然辐射或反射信号
+active remote sensing	主动遥感	false	仪器主动发射探测信号
+microwave radiometer	微波辐射计	true	区别于主动微波雷达
+microwave sounder	微波探测仪	false	仪器又称微波探测器，具体型号依原文
+infrared sounder	红外探测仪	false	可按仪器全称细化为红外大气探测仪
+hyperspectral sounder	高光谱探测仪	false	保留传感器名和光谱范围
+synthetic aperture radar	合成孔径雷达	true	保留原文缩写 SAR
+global navigation satellite system radio occultation	全球导航卫星系统掩星	false	也可含无线电掩星一词，保留原文缩写 GNSS-RO
+lidar backscatter	激光雷达后向散射	false	保留通道和有关物理量单位
+radiometric calibration	辐射定标	true	卫星仪器语境中区别于定位与几何校正
+cross-calibration	交叉定标	false	卫星辐射观测语境，其他仪器可译交叉校准
+vicarious calibration	替代定标	false	利用外部地面场或目标等完成在轨定标
+geolocation	地理定位	false	区别于几何校正与重投影
+geometric correction	几何校正	false	保留参考坐标系和所用控制信息
+atmospheric correction	大气校正	true	遥感处理中用于处理大气对观测信号的影响
+spectral response function	光谱响应函数	true	是通道对各波长的响应，区别于大气廓线的权重函数
+weighting function	权重函数	false	遥感中常指不同高度对通道信号的相对贡献；其他语境也译加权函数
+field of view	视场	false	保留视场是角范围还是空间足迹的原文定义
+instantaneous field of view	瞬时视场	true	保留原文缩写 IFOV，勿等同于整条扫描幅宽
+satellite swath	卫星扫描条带	false	覆盖范围译扫描条带，宽度译扫描幅宽
+ground footprint	地面足迹	false	也可译地面投影或地面覆盖区，注意与通量源区的区别
+nadir viewing	天底观测	false	也称星下点方向观测，区别于临边观测
+limb sounding	临边探测	false	也称边缘探测，注意保留观测几何
+view zenith angle	观测天顶角	false	也见视天顶角，区别于太阳天顶角
+cloud mask	云掩膜	false	也称云掩码，保留产品类别编码
+cloud screening	云筛选	false	可按上下文译云检测或去云筛选
+land surface temperature	地表温度	false	也称陆表温度，区别于近地面气温
+sea surface temperature	海表温度	false	也称海面温度，保留表皮或测量深度定义
+atmospheric motion vector	大气运动矢量	false	云或水汽示踪观测常用，保留原文缩写 AMV
+vertical profile retrieval	垂直廓线反演	false	识别反演变量，避免把反演结果表述成直接观测
+retrieval algorithm	反演算法	false	指由观测信号估计目标量，资料查找语境可译检索算法
+satellite precipitation estimate	卫星降水估计	false	区别于雨量站或雷达直接探测得到的变量
+precipitation radar	降水雷达	false	星载和地基用途按原文说明
+radar reflectivity factor	雷达反射率因子	true	区分线性 Z 与对数表示 dBZ
+radar reflectivity	雷达反射率	false	源文以 dBZ 表示时通常指雷达反射率因子
+Doppler weather radar	多普勒天气雷达	true	可观测散射体的径向运动
+dual-polarization radar	双偏振雷达	false	也称双极化雷达，保留原文极化方式
+radial velocity	径向速度	false	雷达语境是视线方向分量，保留正负号约定
+Doppler spectrum width	多普勒谱宽	false	指回波径向速度谱的展宽
+differential reflectivity	差分反射率因子	false	也称差分反射率或差分反射率比，保留 ZDR
+differential phase shift	差分相移	false	保留相位符号及角度单位
+specific differential phase	差分相移率	false	也称比差分相移，保留 KDP 和单位
+copolar correlation coefficient	同偏振相关系数	false	也见共极化相关系数，保留相关系数符号
+radar attenuation correction	雷达衰减订正	false	也称雷达衰减校正，保留所用方法
+ground clutter	地物杂波	true	天气雷达语境常见，区别于气象回波
+beam blockage	波束遮挡	false	保留部分或全部遮挡及其比例
+velocity aliasing	速度模糊	false	也称速度折叠，雷达中与奈奎斯特速度有关
+Nyquist velocity	奈奎斯特速度	false	也称奈奎斯特径向速度，保留无模糊速度范围
+radar range gate	雷达距离库	false	也见距离门，指径向采样单元
+plan position indicator	平面位置显示	false	保留原文缩写 PPI，产品语境可含显示图
+range height indicator	距离高度显示	false	保留原文缩写 RHI，产品语境可含显示图
+constant altitude plan position indicator	等高平面位置显示	false	保留原文缩写 CAPPI
+composite reflectivity	组合反射率因子	false	天气雷达标准术语，应用论文也常称组合反射率
+echo top height	回波顶高	false	保留回波顶对应的反射率阈值
+vertically integrated liquid water	垂直累积液态水含量	false	雷达产品也见垂直积分液态水，保留 VIL
+quantitative precipitation estimation	定量降水估计	true	保留原文缩写 QPE，区别于定量降水预报
+quantitative precipitation forecast	定量降水预报	true	保留原文缩写 QPF，区别于定量降水估计
+data assimilation	资料同化	false	也见数据同化，区别于偏差订正或简单插值
+variational data assimilation	变分资料同化	false	也见变分同化，保留同化窗口和约束
+three-dimensional variational assimilation	三维变分同化	false	保留原文缩写 3D-Var
+four-dimensional variational assimilation	四维变分同化	false	保留原文缩写 4D-Var
+ensemble Kalman filter	集合卡尔曼滤波	true	保留原文缩写 EnKF
+ensemble transform Kalman filter	集合变换卡尔曼滤波	false	保留原文缩写 ETKF
+ensemble of data assimilations	集合资料同化	false	ECMWF 中 EDA 指多成员的资料同化系统，区别于单次集合滤波步骤
+hybrid ensemble-variational data assimilation	混合集合变分资料同化	false	也称混合集合变分同化，保留方案名称
+assimilation window	同化窗口	false	保留观测纳入的时段
+observation operator	观测算子	true	将模式状态映射为可与观测比较的量
+tangent linear model	切线性模式	false	也见切线性模型或切线线性模型
+adjoint model	伴随模式	false	也称伴随模型
+background field	背景场	false	同化语境常由短期模式预报获得，具体按原文
+first guess	初猜场	false	数据同化中也可译初猜或第一猜测
+analysis field	分析场	false	不是原始观测量，保留同化产品信息
+analysis increment	分析增量	true	在常规定义中为分析场减背景场
+innovation vector	创新向量	false	也称新息向量，常定义为观测减背景场映射到观测空间的值
+background error covariance	背景误差协方差	true	保留协方差矩阵及其估计方法
+observation error covariance	观测误差协方差	true	区别于背景误差协方差
+representativeness error	代表性误差	false	也见代表误差，区别于仪器误差
+observation thinning	观测抽稀	false	减少近邻冗余观测，区别于稀疏区插值
+superobbing	超级观测构建	false	也可称构造超观测或观测聚合，按论文定义
+variational bias correction	变分偏差订正	false	也见变分偏差校正，保留 VarBC
+covariance localization	协方差局地化	false	也称协方差局域化
+covariance inflation	协方差膨胀	false	也见协方差放大，区分乘性与加性方法
+numerical weather prediction	数值天气预报	true	保留原文缩写 NWP
+deterministic forecast	确定性预报	false	根据原文区分单一确定性模式与集合成员
+ensemble forecast	集合预报	true	保留成员数量、分布统计及集合方案
+ensemble member	集合成员	true	保留控制成员、扰动成员等身份
+control forecast	控制预报	false	区别于集合成员的初值或模式扰动试验
+initial condition perturbation	初始条件扰动	false	也称初值扰动，区别于模式扰动
+lateral boundary condition	侧边界条件	false	也见侧向边界条件或横向边界条件，常用于区域模式
+limited-area model	有限区域模式	false	保留模式名和区域
+dynamical core	动力框架	false	也称动力核心，区别于物理参数化方案
+terrain-following coordinate	地形追随坐标	false	也称随地形坐标，按原文区分高度、气压和混合坐标
+staggered grid	交错网格	false	也称交错格点，保留网格记号
+one-way nesting	单向嵌套	true	父域提供边界，具体反馈设定按原文
+two-way nesting	双向嵌套	true	子域与父域之间含双向信息传递
+grid spacing	网格间距	false	保留单位，区别于模式有效分辨率
+time step	时间步长	false	区别于模式输出间隔或同化周期
+spin-up period	模式启动调整期	false	也见预热期、起转期或自旋转期，原文规定哪些时段排除
+subgrid-scale parameterization	次网格尺度参数化	false	也见亚网格尺度参数化
+cumulus parameterization	积云参数化	true	区分积云方案与显式对流
+physics parameterization	物理参数化	false	保留模式方案名
+convection-permitting model	允许对流的模式	false	也称对流许可模式，勿将 permitting 与 fully resolving 混为同一等级
+forecast lead time	预报时效	false	表示起报至有效时刻的时间间隔
+forecast verification	预报检验	false	注意对照资料、计算时效和样本范围
+reforecast	回报	false	也称再预报或历史重预报，区别于再分析
+hindcast	后报	false	也见回报或历史回算，按模式和时间语境选择
+persistence forecast	持续性预报	false	以近期状态或异常持续作为基线时，保留具体定义
+anomaly correlation coefficient	距平相关系数	true	保留原文缩写 ACC 和用于计算距平的气候基准
+root mean square error	均方根误差	true	保留原文缩写 RMSE、有无加权和统计单位
+root mean squared error	均方根误差	true	root mean square error 的另一写法
+mean absolute error	平均绝对误差	true	保留原文缩写 MAE，勿混同于平均偏差
+Brier score	Brier 评分	false	也译布里尔评分，气象检验中常以二分类事件的均方概率误差计算
+Brier skill score	Brier 技巧评分	false	也译布里尔技巧评分，保留参考预报
+ranked probability score	分级概率评分	false	也见排序概率评分，适用于有序分类
+continuous ranked probability score	连续分级概率评分	false	也见连续排序概率评分，保留原文缩写 CRPS
+fractions skill score	邻域分数技巧评分	false	FSS 也见分数技巧评分或分数技巧得分，保留阈值和邻域尺度
+critical success index	临界成功指数	false	也称威胁评分，保留原文 CSI 并核对列联表口径
+equitable threat score	公平威胁评分	false	也称公平 TS 评分，保留原文缩写 ETS
+probability of detection	命中率	false	也称探测概率或查全率，气象检验通常以观测事件为分母
+false alarm ratio	空报比	false	分母通常为预报为事件的次数，文献中也称空报率
+false alarm rate	空报探测率	false	在 ROC 常以观测非事件次数为分母，也见虚警率，核对原文与 false alarm ratio 的定义
+reliability diagram	可靠性图	false	预报概率与对应的观测发生频率对照，也称可靠性曲线
+rank histogram	秩直方图	false	也称秩次直方图，集合检验中常称 Talagrand 图
+receiver operating characteristic curve	相对作用特征曲线	false	预报检验常用译法，其他领域也称受试者工作特征曲线，保留 ROC 和横纵轴口径
+sensible heat flux	感热通量	true	保留 H、单位及上下方向的符号约定。
+latent heat flux	潜热通量	true	保留 LE、单位及上下方向，与水汽质量通量区分。
+ground heat flux	地表热通量	false	平衡方程中可指土壤热通量，核对测量深度、表层储热订正和正方向。
+buoyancy flux	浮力通量	true	保留所采用的浮力变量、通量单位和符号。
+wet bulb globe temperature	湿球黑球温度	false	亦见湿球黑球温度指数，保留 WBGT 和观测条件。
+compound hot-dry condition	复合干热状况	true	用于描述条件或状态，保留与独立事件的区分。
+vapor pressure deficit at the leaf surface	叶面水汽压亏缺	false	依原文定义区分叶气水汽压差、近地层 VPD 及叶面边界层。
+soil water content	土壤含水量	false	核对体积或质量基准、单位和深度。同一数据量可按论文术语称土壤湿度。

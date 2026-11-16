@@ -13,11 +13,11 @@ from paperlocale.contracts import write_jsonl_atomic, read_jsonl
 from paperlocale.domains import load_domain_pack
 
 class CacheHandoffTest(unittest.TestCase):
-    def prepare_import(self, root):
+    def prepare_import(self, root, source_text='Soil moisture changed.', target_text='土壤湿度发生变化。'):
         old, new, source = root/'old', root/'new', root/'source.pdf'
         new.mkdir()
         with fitz.open() as doc:
-            p=doc.new_page();p.insert_text((40,80),'Soil moisture changed.')
+            p=doc.new_page();p.insert_text((40,80),source_text)
             doc.save(source)
         domain=load_domain_pack('atmospheric-science')
         plan=extract_layout(source,paragraph=True);units=units_from_plan(plan,paragraph=True)
@@ -26,7 +26,7 @@ class CacheHandoffTest(unittest.TestCase):
         m.update(layout_mode='paragraph',layout_plan_sha256=digest(old/'layout_plan.json'),
                  domain_sha256=domain.content_sha256,translation_provider={'provider':'old','model':'old'})
         save_manifest(old,m)
-        rows=[{'id':u['id'],'source':u['source'],'target':'土壤湿度发生变化。'} for u in units]
+        rows=[{'id':u['id'],'source':u['source'],'target':target_text} for u in units]
         write_jsonl_atomic(old/'translations.jsonl',rows)
         return old, new, source, domain, plan, units, rows
 
@@ -108,6 +108,25 @@ class CacheHandoffTest(unittest.TestCase):
                     import_cache(old,new,plan,units,domain)
                 self.assertFalse((new/'translations.jsonl').exists())
                 self.assertEqual(report_path.read_bytes(),report_before)
+
+    def test_builtin_atmospheric_upgrade_revalidates_old_cache(self):
+        for target, reusable in [('潜热通量上升。', True), ('热通量上升。', False)]:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                old, new, _, domain, plan, units, rows = self.prepare_import(
+                    Path(tmp), 'Latent heat flux increased.', target)
+                archived = load_domain_pack('atmospheric-science-1.1.0')
+                manifest = json.loads((old/'run_manifest.json').read_text())
+                manifest['domain_sha256'] = archived.content_sha256
+                save_manifest(old, manifest)
+
+                import_cache(old, new, plan, units, domain)
+                report = json.loads((new/'cache_handoff.json').read_text())
+                self.assertEqual(report['import_identity']['source_domain_sha256'], archived.content_sha256)
+                self.assertEqual(report['accepted_count'], int(reusable))
+                self.assertEqual(len(read_jsonl(new/'translations.jsonl')), int(reusable))
+                self.assertEqual(read_jsonl(old/'translations.jsonl'), rows)
+                if not reusable:
+                    self.assertIn('潜热通量', report['rejected'][0]['errors'][0])
 
     def test_legacy_report_is_rejected_even_when_translations_exist(self):
         for completed in (False, True):

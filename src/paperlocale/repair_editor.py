@@ -26,7 +26,7 @@ def check_edits(root: Path, error_id: str, edits: dict) -> list[dict]:
         raise ValueError('PDF 已生成；请先回到生成前断点，不能直接改动已验收缓存')
     if digest(Path(manifest['layout_plan'])) != context['layout_plan_sha256']:
         raise ValueError('版面计划已经变化，请重新分析后校验')
-    domain = load_domain_pack(context['domain'])
+    domain = load_domain_pack(context['domain'], recorded_sha256=context['domain_sha256'])
     if domain.content_sha256 != context['domain_sha256']:
         raise ValueError('领域包已变化，不能用另一套规则放行修订')
     segments = {r['id']: r['source'] for r in read_jsonl(root/'segments.jsonl')}

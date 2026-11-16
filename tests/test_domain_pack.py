@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from paperlocale.contracts import validate_translation
+from paperlocale.contracts import match_glossary, validate_translation
 from paperlocale.domains import load_domain_pack
 
 
@@ -15,8 +15,8 @@ class DomainPackTest(unittest.TestCase):
     def test_builtin_atmospheric_science_pack(self) -> None:
         pack = load_domain_pack("atmospheric-science")
         self.assertEqual(pack.pack_id, "atmospheric-science")
+        self.assertEqual(pack.version, "2.0.0")
         self.assertEqual(len(pack.content_sha256), 64)
-        self.assertGreaterEqual(len(pack.glossary), 15)
         self.assertGreaterEqual(len(pack.eval_cases), 5)
         for case in pack.eval_cases:
             self.assertEqual(
@@ -24,6 +24,51 @@ class DomainPackTest(unittest.TestCase):
                 [],
                 msg=case["source"],
             )
+
+    def test_atmospheric_runs_can_reload_the_original_pack(self) -> None:
+        # 本机 0.8.6 旧断点实际记录的哈希，避免归档内容被误改。
+        fingerprint = "c671514759de3829d1b180c165eae73e42e366e40c65cff1f797ef52e1514006"
+        old = load_domain_pack("atmospheric-science", recorded_sha256=fingerprint)
+        current = load_domain_pack("atmospheric-science", recorded_sha256="unknown")
+        self.assertEqual((old.version, old.content_sha256), ("1.1.0", fingerprint))
+        self.assertEqual(len(old.glossary), 18)
+        self.assertEqual(current.version, "2.0.0")
+        source, target = "Potential evapotranspiration was estimated.", "估算了潜在蒸散量。"
+        self.assertTrue(validate_translation(source, target, old))
+        self.assertEqual(validate_translation(source, target, current), [])
+
+    def test_matching_uses_surface_variants_and_full_terms(self) -> None:
+        pack = load_domain_pack("atmospheric-science")
+        source = (
+            "Compound hot–dry events, conditional probabilities, and\n"
+            "wet‑bulb temperature; spatiotemporal resolution; "
+            "https://example.test/soil-moisture"
+        )
+        matches = {surface: entry.target for surface, entry in match_glossary(source, pack)}
+        self.assertEqual(matches, {
+            "Compound hot–dry events": "复合干热事件",
+            "conditional probabilities": "条件概率",
+            "wet‑bulb temperature": "湿球温度",
+            "spatiotemporal resolution": "时空分辨率",
+        })
+        source = "Virtual potential temperature and potential temperature were estimated."
+        target = "估算了虚温位温。"
+        # 长词中的“位温”不改变匹配范围，独立出现的英文短词也须生效。
+        self.assertEqual([entry.source for _, entry in match_glossary(source, pack)],
+                         ["virtual potential temperature", "potential temperature"])
+        self.assertTrue(validate_translation(source, "估算了虚温。", pack))
+        self.assertEqual(validate_translation(source, target, pack), [])
+        errors = validate_translation("Compound hot–dry events occurred.", "发生了高温事件。", pack)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("复合干热事件", errors[0])
+
+    def test_uppercase_heading_terms_do_not_become_abbreviations(self) -> None:
+        pack = load_domain_pack("atmospheric-science")
+        source = "GROSS PRIMARY PRODUCTIVITY (GPP) AND SOIL MOISTURE"
+        self.assertEqual(validate_translation(source, "总初级生产力（GPP）与土壤湿度", pack), [])
+        errors = validate_translation(source, "总初级生产力与土壤湿度", pack)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("GPP", errors[0])
 
     def test_builtin_ecology_pack(self) -> None:
         pack = load_domain_pack("ecology")

@@ -71,15 +71,15 @@ v0.4.0 网页桥接的操作与额度边界见
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.8.3"
+python -m pip install "paperlocale[layout]==0.8.4"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-0.8.3 改进密集图片页、科学上下标、嵌入字体回读和链接保留。改动及验收边界见
-[发布说明](docs/releases/v0.8.3.md)与[发布前鲁棒性验证记录](docs/robustness-20261027.md)。
+0.8.4 开始，新翻译默认使用内置大气科学术语库 2.0.0。macOS 下载包附带同版本
+CLI 和安装脚本。参见[发布说明](docs/releases/v0.8.4.md)和[macOS 安装步骤](macos/README.md)。
 从当前源码安装时，使用 `python -m pip install ".[layout]"`。
 
 ## 开始翻译

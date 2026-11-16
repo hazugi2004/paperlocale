@@ -7,6 +7,7 @@ from collections import Counter
 from pathlib import Path
 
 from .contracts import read_jsonl, validate_translation, write_jsonl_atomic
+from .domains import load_domain_pack
 from .pipeline import restored_content_errors
 from .source_layout import digest, save_json, units_from_plan
 from .workflow import load_manifest, _verify_source_pdf
@@ -29,8 +30,15 @@ def import_cache(old_root: Path, root: Path, plan: dict, units: list, domain) ->
     _verify_source_pdf(manifest)
     if manifest['source_sha256'] != plan['source_sha256'] or manifest.get('layout_mode') != 'paragraph':
         raise ValueError('导入仅支持同一源 PDF 的段落模式')
-    if manifest.get('domain_sha256') != domain.content_sha256:
-        raise ValueError('缓存领域包不一致')
+    source_domain_hash = manifest.get('domain_sha256')
+    migrating_atmospheric_pack = source_domain_hash != domain.content_sha256
+    if migrating_atmospheric_pack:
+        # 仅支持已知的内置包升级。下方逐段用新合同重验，旧版合格但缺少
+        # 新术语的段落只进入拒收记录，留给正常翻译流程重新处理。
+        if (domain.pack_id != 'atmospheric-science' or domain.version != '2.0.0'
+                or domain.content_sha256 != load_domain_pack('atmospheric-science').content_sha256
+                or source_domain_hash != load_domain_pack('atmospheric-science-1.1.0').content_sha256):
+            raise ValueError('缓存领域包不一致')
     path = old_root / 'layout_plan.json'
     if digest(path) != manifest.get('layout_plan_sha256'):
         raise ValueError('旧版面计划哈希不一致')
@@ -51,6 +59,8 @@ def import_cache(old_root: Path, root: Path, plan: dict, units: list, domain) ->
                     {'id': u['id'], 'source': u['source'], 'characters': characters(u),
                      'anchors': [a['text'] for a in u['anchors']]} for u in units]),
                 'domain_sha256': domain.content_sha256}
+    if migrating_atmospheric_pack:
+        identity['source_domain_sha256'] = source_domain_hash
     if report_path.exists():
         report = json.loads(report_path.read_text())
         if report['from_run'] != str(old_root):

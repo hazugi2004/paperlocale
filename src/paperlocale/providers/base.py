@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from ..contracts import protected_counts, scientific_quantities, scientific_literal_spans
+from ..contracts import match_glossary, protected_counts, scientific_quantities, scientific_literal_spans
 from ..domains import DomainPack
 
 
@@ -104,18 +104,15 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
 
     if not segments:
         raise ValueError("Provider 批次不能为空")
-    glossary = "\n".join(
-        f"- {entry.source} => {entry.target}"
-        for entry in context.domain.glossary
-    )
     payload: list[dict[str, object]] = []
     for segment in segments:
-        counts = protected_counts(segment.source)
+        is_reference = segment.id in context.reference_segment_ids
+        counts = protected_counts(segment.source, domain=None if is_reference else context.domain)
         item: dict[str, object] = {
             "id": segment.id,
             "kind": (
                 "reference"
-                if segment.id in context.reference_segment_ids
+                if is_reference
                 else "body"
             ),
             "source": segment.source,
@@ -127,6 +124,14 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
                 if values
             },
         }
+        # 逐段传实际命中的词形。放在所属片段内，避免大词表挤占请求上下文，
+        # 或将某一段的多义推荐译名误套到其他段落和书目信息中。
+        if not is_reference:
+            item["terminology"] = [
+                {"source": surface, "target": entry.target, "required": entry.required,
+                 **({"note": entry.note} if entry.note else {})}
+                for surface, entry in match_glossary(segment.source, context.domain)
+            ]
         item["scientific_literals"] = [segment.source[a:b] for a,b in scientific_literal_spans(segment.source)]
         quantities = scientific_quantities(segment.source)
         if quantities:
@@ -172,8 +177,8 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
 {anchor_instruction}{reference_instruction}
 {repair_instruction}
 
-固定术语（仅适用于 kind=body）：
-{glossary}
+每段 terminology 仅列原文命中的术语。required=true 时使用给定译名；
+required=false 时参考推荐译名及备注，按原句语境消歧。保留源文限定语与缩写。
 
 源语言：{context.source_language}
 目标语言：{context.target_language}

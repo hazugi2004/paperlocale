@@ -108,15 +108,25 @@ def _read_pack(root: Path) -> DomainPack:
     )
 
 
-def load_domain_pack(identifier: str | Path) -> DomainPack:
+def load_domain_pack(identifier: str | Path, *, recorded_sha256: object = None) -> DomainPack:
     """加载内置包 ID 或外部目录；两者严格使用同一文件合同。"""
 
     candidate = Path(identifier).expanduser()
     if candidate.is_dir():
         return _read_pack(candidate.resolve())
 
-    package_root = resources.files("paperlocale").joinpath("packs", str(identifier))
+    packs_root = resources.files("paperlocale").joinpath("packs")
+    package_root = packs_root.joinpath(str(identifier))
     if not package_root.is_dir():
         raise FileNotFoundError(f"未找到领域包：{identifier}")
     with resources.as_file(package_root) as root:
-        return _read_pack(root)
+        current = _read_pack(root)
+    if str(identifier) == "atmospheric-science" and recorded_sha256 not in (None, current.content_sha256):
+        # 真实旧断点仅记录哈希（保版）或完整包身份（旧引擎）。按记录的
+        # 字节身份选择随程序发布的旧包，未经确认的哈希仍由原有门禁拒绝。
+        archived = packs_root.joinpath("atmospheric-science-1.1.0")
+        with resources.as_file(archived) as root:
+            previous = _read_pack(root)
+        if previous.content_sha256 == recorded_sha256:
+            return previous
+    return current

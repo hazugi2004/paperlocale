@@ -105,14 +105,17 @@ class TranslationContractTest(unittest.TestCase):
             {},
         )
 
-    def test_glossary_term_requires_left_word_boundary(self) -> None:
-        """temporal 不能从 spatiotemporal 或 spatio-temporal 尾部误命中。"""
+    def test_glossary_term_requires_word_boundaries(self) -> None:
+        """匹配完整词，拒绝连接号前缀和普通单词后缀造成的误命中。"""
 
         self.assertFalse(
             source_term_is_present("high spatiotemporal resolution", "temporal resolution")
         )
         self.assertFalse(
             source_term_is_present("high spatio-temporal resolution", "temporal resolution")
+        )
+        self.assertFalse(
+            source_term_is_present("soil moistureless conditions", "soil moisture")
         )
         self.assertEqual(
             validate_translation(
@@ -127,7 +130,7 @@ class TranslationContractTest(unittest.TestCase):
         """术语表单数词形继续约束原文中的复数形式。"""
 
         self.assertTrue(
-            source_term_is_present("compound hot-dry events", "compound hot-dry event")
+            source_term_is_present("compound hot–dry events", "compound hot-dry event")
         )
         self.assertTrue(
             any(

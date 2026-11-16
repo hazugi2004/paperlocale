@@ -26,6 +26,7 @@ from .source_layout import (digest, extract_layout, fit_unit, load_plan, save_js
                             verify_unchanged, anchor_errors)
 from .workflow import (load_manifest, save_manifest, _verify_source_pdf,
                        _verify_rendered_pdf, _provider_resume_identity,
+                       _verify_domain_languages, _domain_provenance,
                        _subset_repair_font, qa_run, _missing_source_vector_drawings,
                        _replay_vector_drawing)
 
@@ -157,6 +158,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     if manifest.get('layout_plan_sha256') not in (None, plan_hash):
         raise ValueError('翻译开始后的版面计划已改变，请使用新的运行目录避免混用缓存')
     if not preflight_only:
+        _verify_domain_languages(manifest, domain)
         if provider is None:
             raise ValueError('源版面翻译需要提供原 Provider、模型和推理档位')
         identity = _provider_resume_identity(provider.provenance())
@@ -178,6 +180,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         return preflight
     manifest.update(layout_mode='paragraph' if paragraph else 'preserved', layout_plan=str(plan_path),
                     layout_plan_sha256=plan_hash, translation_provider=provider.provenance(),
+                    domain_pack=_domain_provenance(domain),
                     domain_sha256=domain.content_sha256, status='collected')
     save_manifest(root, manifest)
     # 相同全文可复用翻译，物理位置仍逐组保存，不能按源哈希丢掉重复出现位置。

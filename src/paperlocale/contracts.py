@@ -11,9 +11,10 @@ import hashlib
 import json
 import re
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
-from .domains import DomainPack
+from .domains import DomainPack, GlossaryEntry
 from .quantities import find_quantities, hide_spans, standalone_units
 
 FORMULA_RE = re.compile(r"\{v\d+\}")
@@ -149,7 +150,7 @@ def _clean_identifiers(values: list[str]) -> Counter[str]:
     return Counter(value.rstrip(TRAILING_PUNCTUATION) for value in values)
 
 
-def protected_counts(text: str) -> dict[str, Counter[str]]:
+def protected_counts(text: str, *, domain: DomainPack | None = None) -> dict[str, Counter[str]]:
     """提取必须保留的标记及出现次数。"""
 
     # DOI 链接常在列宽边界被拆成 ``https://doi.org/ 10.x/...``；先只合并
@@ -168,7 +169,7 @@ def protected_counts(text: str) -> dict[str, Counter[str]]:
     abbreviation_text = re.sub(
         r"(?<![A-Za-z0-9])([a-z]+)(?=[A-Z]{2})",
         r"\1 ",
-        text,
+        glossary_abbreviation_text(text, domain),
     )
     abbreviation_text = re.sub(
         r"(?<=[A-Z0-9])-\s+(?=[A-Z0-9])",
@@ -197,16 +198,93 @@ def protected_counts(text: str) -> dict[str, Counter[str]]:
     }
 
 
+_TERM_SEPARATOR = r"[\s\u2010\u2011\u2012\u2013-]+"
+
+
+@lru_cache(maxsize=4096)
+def _term_pattern(term: str, legacy: bool) -> re.Pattern[str]:
+    # 使用实际词边界排除 spatio-temporal 等复合词的后半截。保留原词形，
+    # 允许 PDF 文本层的空白和连接号变体，以及明确可复核的末词复数。
+    left_boundary = r"(?<![A-Za-z0-9_\u2010\u2011\u2012\u2013-])"
+    if legacy:
+        # 已记录 1.1.0 的旧运行沿用原先的命中条件，避免补跑时新增术语要求。
+        return re.compile(r"(?<![A-Za-z0-9\-\u2010\u2011])" + re.escape(term), re.IGNORECASE)
+    words = re.split(_TERM_SEPARATOR, term)
+    last = words[-1]
+    plural = {"analysis": "analyses", "index": "indices", "matrix": "matrices"}.get(last.lower())
+    if plural:
+        tail = rf"(?:{re.escape(last)}|{plural})"
+    elif last.islower() and last.isalpha() and re.search(r"[^aeiou]y$", last):
+        tail = re.escape(last[:-1]) + r"(?:y|ies)"
+    elif last.islower() and last.isalpha() and not last.endswith("s"):
+        suffix = "es" if last.endswith(("x", "ch", "sh")) else "s"
+        tail = re.escape(last) + rf"(?:{suffix})?"
+    else:
+        tail = re.escape(last)
+    pattern = _TERM_SEPARATOR.join([*(re.escape(word) for word in words[:-1]), tail])
+    return re.compile(left_boundary + pattern + r"(?![A-Za-z0-9_])", re.IGNORECASE)
+
+
 def source_term_is_present(text: str, term: str) -> bool:
-    """按左侧词边界判断领域术语是否真实出现。
+    """判断原文是否出现给定词形或受支持的复数。"""
 
-    术语表使用单数词形时仍允许命中复数，例如 ``event`` 命中
-    ``events``；但 ``temporal resolution`` 不能从 ``spatiotemporal`` 或
-    ``spatio-temporal`` 的词尾截取出来。
-    """
+    return _term_pattern(term, False).search(text) is not None
 
-    left_boundary = r"(?<![A-Za-z0-9\-\u2010\u2011])"
-    return re.search(left_boundary + re.escape(term), text, re.IGNORECASE) is not None
+
+def _legacy_glossary(domain: DomainPack) -> bool:
+    return domain.pack_id == "atmospheric-science" and domain.version == "1.1.0"
+
+
+def _glossary_hits(text: str, domain: DomainPack) -> list[tuple[re.Match[str], GlossaryEntry]]:
+    legacy = _legacy_glossary(domain)
+    if not legacy:
+        # 屏蔽网址内部，并保留坐标，供保护原文缩写时定位大小写来源。
+        def hide_address(match: re.Match[str]) -> str:
+            return "|" * len(match.group())
+
+        text = DOI_RE.sub(hide_address, _VALIDATION_URL_RE.sub(hide_address, text))
+    matches = [
+        (match, entry)
+        for entry in domain.glossary
+        for match in _term_pattern(entry.source, legacy).finditer(text)
+    ]
+    matched = []
+    end = 0
+    # 同一处「reference crop evapotranspiration」使用完整词条。短词在同段
+    # 的其他位置独立出现时仍检查，词库顺序不决定长短词的适用范围。
+    for match, entry in sorted(matches, key=lambda item: (item[0].start(), -item[0].end())):
+        if legacy or match.start() >= end:
+            matched.append((match, entry))
+            end = match.end()
+    return matched
+
+
+def match_glossary(text: str, domain: DomainPack) -> list[tuple[str, GlossaryEntry]]:
+    """按首次出现顺序返回不重复的实际词形和词条，供请求与验收共用。"""
+
+    return list(dict.fromkeys((match.group(), entry) for match, entry in _glossary_hits(text, domain)))
+
+
+def glossary_abbreviation_text(text: str, domain: DomainPack | None) -> str:
+    """为缩写识别调整已知术语中的排版大写，保持原文字符坐标。"""
+
+    if domain is None or _legacy_glossary(domain) or ABBREVIATION_RE.search(text) is None:
+        return text
+    pieces = []
+    start = 0
+    for match, entry in _glossary_hits(text, domain):
+        # 全大写图题中的 SOIL MOISTURE 是术语。词条内显式登记的缩写、
+        # 词条之外出现的缩写及所有数字仍按各自的原规则保护。
+        known_abbreviations = set(ABBREVIATION_RE.findall(entry.source))
+
+        def normalize_token(token: re.Match[str]) -> str:
+            value = token.group()
+            return value if value in known_abbreviations else value.lower()
+
+        pieces.extend((text[start:match.start()], ABBREVIATION_RE.sub(normalize_token, match.group())))
+        start = match.end()
+    pieces.append(text[start:])
+    return "".join(pieces)
 
 
 def scientific_quantities(text: str):
@@ -324,7 +402,7 @@ def validate_translation(
             target_spans.append((quantity.start, quantity.end))
             matched[quantity.signature] -= 1
     target_free = hide_spans(quantity_target, target_spans)
-    source_remaining = protected_counts(source_free)
+    source_remaining = protected_counts(source_free, domain=domain)
     target_remaining = protected_counts(target_free)
     source_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(source_free))
     target_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(target_free))
@@ -354,8 +432,10 @@ def validate_translation(
 
     if domain is not None:
         target_folded = target.casefold()
-        for entry in domain.glossary:
-            if entry.required and source_term_is_present(source, entry.source):
+        checked_terms = set()
+        for _, entry in match_glossary(source, domain):
+            if entry.required and entry.source not in checked_terms:
+                checked_terms.add(entry.source)
                 if entry.target.casefold() not in target_folded:
                     errors.append(
                         f"领域术语缺失：{entry.source!r} 必须译为包含 {entry.target!r}"

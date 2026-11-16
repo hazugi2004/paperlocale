@@ -17,6 +17,7 @@ from paperlocale.providers import (
     Segment,
     TranslationContext,
 )
+from paperlocale.providers.base import build_prompt
 
 
 class _Response:
@@ -97,6 +98,27 @@ class ProviderTest(unittest.TestCase):
                 },
             )
 
+    def test_shared_prompt_matches_terms_by_segment_on_repair(self) -> None:
+        context = replace(
+            self.context, repair_feedback={"a": ("高温事件。", ("术语缺失",))},
+        )
+        prompt = build_prompt([
+            Segment("a", "COMPOUND HOT–DRY EVENTS (CDHE)"),
+            Segment("b", "Brightness temperature increased."),
+        ], context)
+        a, b = json.loads(prompt.split("待翻译 JSON：\n", 1)[1])
+        self.assertEqual(a["validation_errors"], ["术语缺失"])
+        self.assertEqual(
+            [(term["source"], term["target"], term["required"]) for term in a["terminology"]],
+            [("COMPOUND HOT–DRY EVENTS", "复合干热事件", True)],
+        )
+        self.assertEqual(a["must_preserve"]["abbreviation"], {"CDHE": 1})
+        self.assertEqual(
+            [(term["source"], term["target"], term["required"]) for term in b["terminology"]],
+            [("Brightness temperature", "亮度温度", False)],
+        )
+        self.assertNotIn("大气边界层", prompt)
+
     def test_openai_compatible_provider_keeps_key_out_of_body(self) -> None:
         api_payload = {
             "choices": [
@@ -170,7 +192,7 @@ class ProviderTest(unittest.TestCase):
                 self.context.domain.prompt,
             )
             self.assertIn(
-                {"source": "soil moisture", "target": "土壤湿度"},
+                {"source": "Soil moisture", "target": "土壤湿度"},
                 body["translation_options"]["terms"],
             )
             self.assertIn(
@@ -202,8 +224,8 @@ class ProviderTest(unittest.TestCase):
 
         def fake_urlopen(request, timeout: int):
             body = json.loads(request.data.decode("utf-8"))
-            sources = {entry["source"] for entry in body["translation_options"]["terms"]}
-            self.assertNotIn("temporal resolution", sources)
+            self.assertEqual(body["translation_options"]["terms"],
+                             [{"source": "spatiotemporal resolution", "target": "时空分辨率"}])
             return _Response(
                 {"choices": [{"message": {"content": "高时空分辨率资料。"}}]}
             )
@@ -333,6 +355,31 @@ class ProviderTest(unittest.TestCase):
             target = provider.translate([Segment("anchor-id", "{v0} and SST.")], context)[0].target
         self.assertEqual(target, "{v0} 和 SST .")
         self.assertEqual(len(calls), 2)
+
+    def test_qwen_recovery_uses_only_terms_in_the_current_fragment(self) -> None:
+        provider = QwenMTProvider(base_url="https://example.test/v1", api_key="test",
+                                  model="qwen-mt-plus", min_request_interval_seconds=0)
+        replies = iter(["[PLPROTECTED9999]", "复合干热事件", "之后测量了亮温。"])
+        calls = []
+
+        def respond(request, timeout):
+            calls.append(json.loads(request.data))
+            return _Response({"choices": [{"message": {"content": next(replies)}}]})
+
+        source = "COMPOUND HOT–DRY EVENTS {v1} were followed by brightness temperature measurements."
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond):
+            result = provider.translate([Segment("a", source)], self.context)
+        self.assertEqual(result[0].target, "复合干热事件 {v1} 之后测量了亮温。")
+        whole, before, after = [call["translation_options"] for call in calls]
+        term = {"source": "COMPOUND HOT–DRY EVENTS", "target": "复合干热事件"}
+        example = {"source": "brightness temperature", "target": "亮度温度"}
+        self.assertIn(term, whole["terms"])
+        self.assertEqual(whole["tm_list"], [example])
+        self.assertEqual(before["terms"], [term])
+        self.assertNotIn("tm_list", before)
+        self.assertEqual(after["terms"], [])
+        self.assertEqual(after["tm_list"], [example])
+        self.assertEqual(after["domains"], self.context.domain.prompt)
 
     def test_qwen_mt_rejects_markers_from_recovery_without_recursing(self) -> None:
         """恢复请求再次幻化标记时必须停止；不能吞掉异常标记或无限分段。"""

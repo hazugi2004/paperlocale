@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.4 — 2026-11-16
+
+- Use atmospheric-science glossary 2.0.0 by default for new translations, with 760 entries and per-segment guidance.
+- Preserve the recorded 1.1.0 pack for existing checkpoints and revalidate translations explicitly imported into new runs.
+- Include the exact release wheel and a version-specific CLI setup command in the macOS download.
+- See [installation and release details](docs/releases/v0.8.4.md).
+
 ## 0.8.3 — 2026-10-28
 
 - Keep the layout extra on bitstring 4.x because BabelDOC 0.6.x imports the `BitStream` interface removed in bitstring 5.

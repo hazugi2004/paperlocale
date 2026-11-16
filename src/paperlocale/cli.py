@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from .chatgpt_web import (
+    _load_existing_batch_manifest,
     export_chatgpt_web_batches,
     import_chatgpt_web_responses,
 )
@@ -502,6 +503,14 @@ def _apply_run_provider_defaults(args: argparse.Namespace, manifest: dict, is_ne
         args.reasoning_effort = args.reasoning_effort or recorded.get("reasoning_effort")
 
 
+def _run_domain(identifier: str, manifest: dict, *, web_batch: dict | None = None):
+    """按已绑定的词库内容续跑。尚未翻译的新运行选用当前版本。"""
+    recorded = manifest.get("domain_pack") or {}
+    fingerprint = (manifest.get("domain_sha256") or recorded.get("content_sha256")
+                   or (web_batch or {}).get("domain_pack_sha256"))
+    return load_domain_pack(identifier, recorded_sha256=fingerprint)
+
+
 def _execute(args: argparse.Namespace) -> int:
     if args.command == "journal-info":
         import json
@@ -597,13 +606,14 @@ def _execute(args: argparse.Namespace) -> int:
             manifest["output_pdf"] = str(output)
         manifest["layout_mode"] = mode
         save_manifest(root, manifest)
+        domain = _run_domain(args.domain, manifest)
         if mode in {"paragraph", "preserved"}:
             from .preserved_workflow import run_preserved
             if args.reference_policy != "preserve":
                 raise ValueError("源版面模式固定保留参考文献，不能翻译标题")
             result = run_preserved(
                 root, provider=_provider_from_args(args) if args.provider and manifest["status"] not in {"rendered", "qa_generated", "accepted"} else None,
-                domain=load_domain_pack(args.domain), plan_path=None,
+                domain=domain, plan_path=None,
                 font_file=args.font_file, paragraph=mode == "paragraph",
                 import_cache_from=args.import_cache_from,
                 min_font_size=args.min_font_size, contract_repair=args.contract_repair,
@@ -639,7 +649,7 @@ def _execute(args: argparse.Namespace) -> int:
         final_manifest = run_to_qa(
             run_dir=root,
             provider=_provider_from_args(args) if needs_provider else None,
-            domain=load_domain_pack(args.domain),
+            domain=domain,
             pdf2zh_bin=args.pdf2zh_bin,
             dpi=args.dpi,
             pdftoppm_bin=args.pdftoppm_bin,
@@ -697,9 +707,11 @@ def _execute(args: argparse.Namespace) -> int:
         print(f"人工透传映射已确认：{len(mapping['entries'])} 个片段")
         return 0
     if args.command == "chatgpt-web-export":
+        root = args.run_dir.expanduser().resolve()
+        manifest = load_manifest(root)
         batch_manifest = export_chatgpt_web_batches(
-            run_dir=args.run_dir,
-            domain=load_domain_pack(args.domain),
+            run_dir=root,
+            domain=_run_domain(args.domain, manifest, web_batch=_load_existing_batch_manifest(root, manifest)),
             max_segments=args.max_segments,
             max_characters=args.max_characters,
             reference_policy=args.reference_policy,
@@ -710,16 +722,18 @@ def _execute(args: argparse.Namespace) -> int:
         )
         return 0
     if args.command == "chatgpt-web-import":
+        root = args.run_dir.expanduser().resolve()
+        manifest = load_manifest(root)
         reused, translated = import_chatgpt_web_responses(
-            run_dir=args.run_dir,
-            domain=load_domain_pack(args.domain),
+            run_dir=root,
+            domain=_run_domain(args.domain, manifest, web_batch=_load_existing_batch_manifest(root, manifest)),
             model_label=args.model_label,
             reference_policy=args.reference_policy,
         )
         print(f"ChatGPT Web 回复导入完成：复用 {reused}，新译 {translated}")
         return 0
     if args.command == "translate":
-        pack = load_domain_pack(args.domain)
+        pack = _run_domain(args.domain, load_manifest(args.run_dir.expanduser().resolve()))
         reused, translated = translate_run(
             run_dir=args.run_dir,
             provider=_provider_from_args(args),
@@ -732,7 +746,8 @@ def _execute(args: argparse.Namespace) -> int:
         print(f"运行翻译完成：复用 {reused}，新译 {translated}")
         return 0
     if args.command == "validate":
-        validate_run(args.run_dir, load_domain_pack(args.domain))
+        pack = _run_domain(args.domain, load_manifest(args.run_dir.expanduser().resolve()))
+        validate_run(args.run_dir, pack)
         print("运行译文全量门禁通过")
         return 0
     if args.command == "render":

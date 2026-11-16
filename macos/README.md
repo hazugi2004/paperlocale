@@ -1,12 +1,13 @@
 # PaperLocale for macOS（测试版）
 
-这是 PaperLocale 0.8.3 的原生窗口前端，支持选择 PDF、选择翻译服务、模型和适用的推理强度、开始/继续、显示日志和打开结果目录。支持 `codex-local`、`openai-compatible` 与 `qwen-mt`，目前使用英译中 atmospheric-science 领域包。
+这是 PaperLocale 0.8.4 的原生窗口前端，支持选择 PDF、选择翻译服务、模型和适用的推理强度、开始/继续、显示日志和打开结果目录。支持 `codex-local`、`openai-compatible` 与 `qwen-mt`，新翻译默认使用英译中大气科学术语库（`atmospheric-science` 2.0.0）。
 
 ## 安装
 
-1. 从 [v0.8.3 GitHub Release](https://github.com/hazugi2004/paperlocale/releases/tag/v0.8.3) 下载 `PaperLocale-0.8.3-macOS-universal2.zip`，解压并将 `PaperLocale.app` 放入“应用程序”。也可按下方“构建”说明从源码生成。需要 macOS 13 或更新版本。
-2. **它不是包含全部运行环境的独立安装包。** 先安装 Python 3.10–3.13、Poppler（`brew install poppler`）、所选服务的登录或 API 密钥，以及同版本 CLI。在虚拟环境执行 `python -m pip install "paperlocale[layout]==0.8.3"`；从源码安装时使用 `python -m pip install ".[layout]"`。对应 wheel 名为 `paperlocale-0.8.3-py3-none-any.whl`。安装后在窗口的“本地安装与运行目录”选择该环境的 `bin/paperlocale`。默认读取 `~/.local/bin/paperlocale`。
-3. 选择论文，确认模型与推理强度，点击“开始 / 继续”。账户不支持所选模型时，程序报错，不会自动改用另一模型。
+1. 在 macOS 13 或更新版本上安装 Python 3.10–3.13（推荐 3.12）和 Poppler（`brew install poppler`）。准备所选翻译服务的登录或 API 密钥。
+2. 从 [v0.8.4 GitHub Release](https://github.com/hazugi2004/paperlocale/releases/tag/v0.8.4) 下载 `PaperLocale-0.8.4-macOS-universal2.zip` 并完整解压。双击 `Install PaperLocale CLI.command`，或在解压目录运行 `bash "./Install PaperLocale CLI.command"`。脚本从随附的 `paperlocale-0.8.4-py3-none-any.whl` 安装 CLI，从 Python 包索引下载所需依赖，并检查新版术语库。
+3. 安装成功后将 `PaperLocale.app` 放入“应用程序”并打开。应用默认使用 `~/Library/Application Support/PaperLocale/cli/0.8.4/bin/paperlocale`，无需手动选择。CLI 安装完成后也可直接从终端运行该路径，或把附带的 wheel 安装到已有的 Python 虚拟环境。
+4. 选择论文，确认模型与推理强度，点击“开始 / 继续”。账户不支持所选模型时，程序报错，不会自动改用另一模型。
 
 应用不读取或复制 Codex 登录材料，也不包含用户的论文、翻译缓存或 Python 环境。首次字体/版面模型下载由现有 CLI 负责，需要联网。
 
@@ -26,7 +27,7 @@
 
 ## 构建
 
-在 macOS 安装 Xcode Command Line Tools，安装 Pillow 后，用 Python 3.11+ 执行 `python3 scripts/build_macos_app.py`。脚本从当前源码编译 arm64 和 x86_64，使用 ad-hoc 签名，并生成可下载 ZIP。许可证见仓库 AGPL-3.0-only。
+在 macOS 安装 Xcode Command Line Tools，安装 Pillow 后，用 Python 3.11+ 执行 `python3 scripts/build_macos_app.py`。脚本从当前源码编译 arm64 和 x86_64，使用 ad-hoc 签名，并生成 ZIP。发行构建使用 `python3 scripts/build_macos_app.py --wheel dist/paperlocale-0.8.4-py3-none-any.whl`，将同版本 wheel 和 CLI 安装命令一起放入 ZIP。仅构建应用时，默认 CLI 路径仍为 `~/.local/bin/paperlocale`。可在虚拟环境运行 `python -m pip install ".[layout]"`，然后在“本地安装与运行目录”选择该环境的 `bin/paperlocale`。应用可执行文件支持 `--cli-path`，用于查看默认 CLI 路径。许可证见仓库 AGPL-3.0-only。
 
 ## 模型与保存位置
 

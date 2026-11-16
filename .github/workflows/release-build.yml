@@ -10,8 +10,9 @@ permissions:
 
 jobs:
   build-macos-app:
+    needs: build-distributions
     runs-on: macos-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -19,12 +20,36 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Build the exact tagged macOS frontend
+      - uses: actions/download-artifact@v8
+        with:
+          name: paperlocale-${{ github.ref_name }}
+          path: release-distributions
+      - name: Build and install the exact tagged macOS bundle
         run: |
+          set -euo pipefail
+          expected_version="${GITHUB_REF_NAME#v}"
+          domain_version="$(python -c 'import json; from pathlib import Path; print(json.loads(Path("src/paperlocale/packs/atmospheric-science/manifest.json").read_text())["version"])')"
+          wheel_name="paperlocale-${expected_version}-py3-none-any.whl"
           python -m pip install "Pillow>=10"
-          python scripts/build_macos_app.py
-          dist/PaperLocale.app/Contents/MacOS/PaperLocale --version
-          lipo -info dist/PaperLocale.app/Contents/MacOS/PaperLocale
+          python scripts/build_macos_app.py --wheel "release-distributions/$wheel_name"
+          extracted="$(mktemp -d)"
+          ditto -x -k "dist/PaperLocale-$expected_version-macOS-universal2.zip" "$extracted"
+          # 校验对外下载的 ZIP，而非构建目录里的中间文件。
+          cmp "release-distributions/$wheel_name" "$extracted/$wheel_name"
+          app="$extracted/PaperLocale.app"
+          codesign --verify --deep --strict "$app"
+          lipo -archs "$app/Contents/MacOS/PaperLocale"
+          "$app/Contents/MacOS/PaperLocale" --version | grep -Fx "PaperLocale macOS $expected_version"
+          # 给安装脚本空的家目录，防止验证意外借用预装 CLI 或缓存环境。
+          install_home="$(mktemp -d)"
+          HOME="$install_home" "$extracted/Install PaperLocale CLI.command"
+          cli="$install_home/Library/Application Support/PaperLocale/cli/$expected_version/bin/paperlocale"
+          "$cli" --version | grep -Fx "paperlocale $expected_version"
+          "$cli" domain-check atmospheric-science | grep -F "atmospheric-science ${domain_version}，"
+          # Foundation 可以规范化 /private/var，比较实际文件身份以核对 App 绑定。
+          app_cli="$(HOME="$install_home" CFFIXED_USER_HOME="$install_home" "$app/Contents/MacOS/PaperLocale" --cli-path)"
+          test "$app_cli" -ef "$cli"
+          "$app_cli" domain-check atmospheric-science | grep -F "atmospheric-science ${domain_version}，"
       - uses: actions/upload-artifact@v7
         with:
           name: paperlocale-macos-${{ github.ref_name }}
@@ -54,7 +79,8 @@ jobs:
           expected_version="${GITHUB_REF_NAME#v}"
           EXPECTED_VERSION="$expected_version" python -c 'import importlib.metadata, os, paperlocale; expected = os.environ["EXPECTED_VERSION"]; assert importlib.metadata.version("paperlocale") == paperlocale.__version__ == expected'
           paperlocale --version | grep -Fx "paperlocale $expected_version"
-          paperlocale domain-check atmospheric-science
+          domain_version="$(python -c 'import json; from pathlib import Path; print(json.loads(Path("src/paperlocale/packs/atmospheric-science/manifest.json").read_text())["version"])')"
+          paperlocale domain-check atmospheric-science | grep -F "atmospheric-science ${domain_version}，"
       - name: Resolve layout extra from the exact built wheel
         run: |
           # 从标签实际构建的 wheel 读取 extra 元数据，避免只验证源码目录而漏掉

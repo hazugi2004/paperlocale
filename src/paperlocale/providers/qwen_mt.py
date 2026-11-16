@@ -11,13 +11,38 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from ..contracts import ABBREVIATION_RE, NUMBER_RE, FORMULA_RE, STYLE_RE, protected_counts, source_term_is_present, validate_translation, scientific_quantities, scientific_literal_spans
+from ..contracts import (
+    ABBREVIATION_RE, NUMBER_RE, FORMULA_RE, STYLE_RE, glossary_abbreviation_text, match_glossary,
+    protected_counts, validate_translation, scientific_quantities, scientific_literal_spans,
+)
+from ..domains import DomainPack
 from ..quantities import standalone_units
 from .base import Segment, Translation, TranslationContext, TranslationProvider
 
 
 class QwenRequestError(RuntimeError):
     """Provider 已完成其有界处理；外层工作流不得再次自动重放 HTTP 请求。"""
+
+
+def _translation_terms(text: str, domain: DomainPack | None, prompt: str, protected: dict[str, str]) -> dict:
+    """按当前请求的原文生成精准干预和语境建议，分段恢复时也重新匹配。"""
+    terms = dict(protected)
+    suggestions = {}
+    matches = match_glossary(text, domain) if domain is not None else []
+    for surface, entry in matches:
+        if entry.required:
+            terms.setdefault(surface, entry.target)
+        else:
+            suggestions[surface] = entry.target
+    options = {"domains": prompt, "terms": [
+        {"source": source, "target": target} for source, target in terms.items()
+    ]}
+    if suggestions:
+        # 术语干预用于必用译名，双语参考译例用于可按上下文调整的推荐译法。
+        options["tm_list"] = [
+            {"source": source, "target": target} for source, target in suggestions.items()
+        ]
+    return options
 
 
 class QwenMTProvider(TranslationProvider):
@@ -120,7 +145,8 @@ class QwenMTProvider(TranslationProvider):
                 ]
                 + STYLE_RE.findall(segment.source)
             )
-            counts = protected_counts(segment.source)
+            domain = None if segment.id in context.reference_segment_ids else context.domain
+            counts = protected_counts(segment.source, domain=domain)
             sentinels: dict[str, str] = {}
             # 与原文里的字面标记隔离；每次出现都使用独立标识，避免重复缩写
             # 被专用翻译模型合并后仍被误判为完整。只做原位置替换，禁止事后补词。
@@ -150,9 +176,10 @@ class QwenMTProvider(TranslationProvider):
             spans.extend(literal_spans)
             for value in dict.fromkeys(protected_markup):
                 spans.extend(match.span() for match in re.finditer(re.escape(value), segment.source))
-            for pattern, values in ((ABBREVIATION_RE, counts["abbreviation"]),
-                                    (NUMBER_RE, counts["number"])):
-                spans.extend(match.span() for match in pattern.finditer(segment.source)
+            abbreviation_text = glossary_abbreviation_text(segment.source, domain)
+            for pattern, text, values in ((ABBREVIATION_RE, abbreviation_text, counts["abbreviation"]),
+                                          (NUMBER_RE, segment.source, counts["number"])):
+                spans.extend(match.span() for match in pattern.finditer(text)
                              if match.group() in values)
             def protect_ranges(ranges) -> str:
                 # 正常翻译和有界恢复共用同一原文坐标合并过程；坏候选被丢弃后
@@ -180,18 +207,13 @@ class QwenMTProvider(TranslationProvider):
                              if not any(a < d and b > c for c, d in quantity_ranges)]
             source_for_translation = protect_ranges(normal_ranges)
 
-            # 官方术语干预同时承担两项职责：固定领域译法，并强制模型原样保留
-            # 公式占位符、缩写、单位、URL 与 DOI。重复源词只保留第一条映射。
-            terms_by_source: dict[str, str] = {}
-            for entry in context.domain.glossary:
-                if source_term_is_present(segment.source, entry.source):
-                    terms_by_source.setdefault(entry.source, entry.target)
+            # 固定标识符优先。在保护后的实际请求文本中重新匹配，确保发给
+            # API 的 source 确实存在于输入（如复数、大小写和长短划线）。
+            protected_terms: dict[str, str] = {}
             for category in ("url", "doi", "number", "abbreviation", "unit"):
                 for value in counts[category]:
                     if value in source_for_translation:
-                        terms_by_source.setdefault(value, value)
-            for sentinel in sentinels:
-                terms_by_source.setdefault(sentinel, sentinel)
+                        protected_terms.setdefault(value, value)
 
             # Qwen-MT 不支持 system message；领域说明必须放在 translation_options。
             body = {
@@ -202,11 +224,8 @@ class QwenMTProvider(TranslationProvider):
                     "target_lang": self._language_code(context.target_language),
                     # 领域说明来自当前 DomainPack，Provider 不再内置任何
                     # 学科、论文或目标语言特例。
-                    "domains": context.domain.prompt,
-                    "terms": [
-                        {"source": source, "target": target}
-                        for source, target in terms_by_source.items()
-                    ],
+                    **_translation_terms(source_for_translation, domain, context.domain.prompt,
+                                         {**protected_terms, **{marker: marker for marker in sentinels}}),
                 },
             }
             if segment.id in context.anchor_text:
@@ -234,7 +253,6 @@ class QwenMTProvider(TranslationProvider):
             if valid_markers:
                 for marker, value in sentinels.items():
                     restored_target = restored_target.replace(marker, value)
-            domain = None if segment.id in context.reference_segment_ids else context.domain
             def restored_anchor_errors(candidate):
                 # 通用合同只检查占位符本身；有原文锚点时还须代回其括号，
                 # 避免把“1990)”外再加右括号的译文保存成合格断点。
@@ -270,24 +288,22 @@ class QwenMTProvider(TranslationProvider):
                     if part in sentinels:
                         repaired.append(sentinels[part])
                     elif re.search(r"[A-Za-z]{2,}", part):
-                        options = body["translation_options"]
-                        fragment_terms = [entry for entry in options["terms"]
-                                          if entry["source"] in part
-                                          and not re.fullmatch(marker_pattern, entry["source"])]
                         fragment_body = {
                             **body, "messages": [{"role": "user", "content": part.strip()}],
                             # 分段输入已移除全部保护标记；整段的标记映射及修正反馈
                             # 不再适用，沿用它们会诱导模型凭空输出标记。仅保留领域
                             # 基础说明和本片段实际出现的术语，标记仍由本地原位恢复。
                             "translation_options": {
-                                **options, "domains": context.domain.prompt,
-                                "terms": fragment_terms,
+                                "source_lang": self._language_code(context.source_language),
+                                "target_lang": self._language_code(context.target_language),
+                                **_translation_terms(part, domain, context.domain.prompt,
+                                                     {word: word for word in protected_terms if word in part}),
                             },
                         }
                         translated_part = self._request_translation(fragment_body)
                         if re.search(returned_marker_pattern, translated_part):
                             raise ValueError("Qwen-MT 分段译文包含意外保护标记")
-                        fragment_errors = validate_translation(part, translated_part, None)
+                        fragment_errors = validate_translation(part, translated_part, domain)
                         if fragment_errors:
                             raise ValueError(f"Qwen-MT 分段译文未通过门禁：{fragment_errors}")
                         repaired.append(" " + translated_part.strip() + " ")

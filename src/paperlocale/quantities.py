@@ -43,6 +43,32 @@ _NON_CJK_LETTER = re.compile(r'[^\W\d_\u3400-\u9fff]')
 _BARE = {'m', 'km', 'cm', 'mm', 'kg', 'Pa', 'hPa', 'kPa', 'K', '°C', '°F', '°', '%', 'ppm', 'ppb'}
 
 
+# 这里只匹配带明确图标签的子图号。裸写的 3 d 仍是三天，图号中的 3 继续走数字检查。
+_FIGURE_REFERENCE = re.compile(
+    r'(?<![A-Za-z])(?:fig(?:ure)?\.?\s*|图\s*)\d+[a-z](?:[ \t]*[-‐‑–—][ \t]*[a-z])?(?![A-Za-z\d])',
+    re.IGNORECASE,
+)
+_EVENT_COMPOUND = re.compile(r'[-‐‑\u00ad][ \t\r\n]*[A-Za-z]')
+_EVENT_SUMMER = 'event-occurring summer'
+_EN_STATISTICAL_DENOMINATOR = re.compile(
+    r'[ \t]*(?:per\b|[/／])[ \t]*(?:each[ \t]+)?(?P<phrase>'
+    r'events?[-‐‑\u00ad][ \t\r\n]*[A-Za-z]+[ \t\r\n]+'
+    r'(?:summer|winter|spring|autumn|fall|season|year|month|week|day|period|phase)s?)\b',
+    re.IGNORECASE,
+)
+_ZH_EVENT_SUMMER = r'(?:(?:曾)?(?:发生|出现)(?:过|了)?(?:该类|此类)?事件|有(?:该类|此类)?事件发生)的夏季'
+_ZH_STATISTICAL_SUFFIX = re.compile(
+    r'[ \t]*(?:[/／][ \t]*(?:每(?:个)?)?|每(?:个)?)' + _ZH_EVENT_SUMMER
+    + r'(?=$|[\s,，。;；、!！?？()（）\[\]【】{}])'
+)
+_ZH_STATISTICAL_PREFIX = re.compile(
+    r'(?:每(?:个)?|(?<!不)在)' + _ZH_EVENT_SUMMER
+    + r'(?:中|内)?[ \t]*(?:平均(?:为)?|[，,][ \t]*平均(?:为)?|有|为)?[ \t]*$'
+)
+_ZH_EVENT_COUNT_PREFIX = re.compile(r'每(?:次|起|个)事件[ \t]*(?:平均(?:为)?|为)?[ \t]*$')
+_ZH_EVENT_COUNT_SUFFIX = re.compile(r'[ \t]*[/／][ \t]*每(?:次|起|个)事件')
+
+
 def _unit_at(text: str, start: int):
     match = _ATOM.match(text, start)
     if not match:
@@ -60,7 +86,7 @@ def _unit_at(text: str, start: int):
     return end, base, power
 
 
-def _unit_expression(text: str, start: int):
+def _unit_expression(text: str, start: int, *, complete_denominators: bool = False):
     first = _unit_at(text, start)
     if first is None:
         return None
@@ -77,6 +103,10 @@ def _unit_expression(text: str, start: int):
             break
         next_end, name, exponent = following
         divide = separator.group(1) in ('/', '每', 'per')
+        # event-occurring 是修饰语。连字符后接英文字母时，不截成独立的 event；
+        # event-1 / event−1 已作为整数指数读入，真正的 per event 也继续处理。
+        if complete_denominators and divide and name == 'event' and _EVENT_COMPOUND.match(text, next_end):
+            break
         factors[name] += -exponent if divide else exponent
         end = next_end
         count += 1
@@ -101,14 +131,22 @@ class Quantity:
     end: int
     values: tuple[str, ...]
     unit: tuple[tuple[str, int], ...]
+    denominator: str | None = None
+    unknown_denominator: str | None = None
 
     @property
     def signature(self) -> str:
-        return '–'.join(self.values) + ' ' + unit_label(self.unit)
+        label = '–'.join(self.values) + ' ' + unit_label(self.unit)
+        return label if self.denominator is None else label + ' / ' + self.denominator
 
 
-def find_quantities(text: str, excluded: list[tuple[int, int]] = ()) -> list[Quantity]:
-    """提取明确数值+单位（含范围和850-hPa写法）；不在URL/公式标记内猜测。"""
+def find_quantities(
+    text: str, excluded: list[tuple[int, int]] = (), *, statistics: bool = False,
+) -> list[Quantity]:
+    """识别物理量；翻译校验可一并解析统计分母，保版字形范围仅使用物理量。"""
+    if statistics:
+        # 采用语义校验边界的范围与旧版面计划无关，旧计划复验仍使用原字形范围。
+        excluded = (*excluded, *(match.span() for match in _FIGURE_REFERENCE.finditer(text)))
     result = []
     occupied_end = -1
     for match in _VALUES.finditer(text):
@@ -123,7 +161,7 @@ def find_quantities(text: str, excluded: list[tuple[int, int]] = ()) -> list[Qua
         if period and re.search('[-‑]', separator.group()):
             parsed = (unit_start + period.end(), (('yr', 1),), 1)
         else:
-            parsed = _unit_expression(text, unit_start)
+            parsed = _unit_expression(text, unit_start, complete_denominators=statistics)
         if parsed is None:
             continue
         end, signature, _count = parsed
@@ -145,10 +183,44 @@ def find_quantities(text: str, excluded: list[tuple[int, int]] = ()) -> list[Qua
                      and re.match(r'\s+of\s+(?:the\s+)?[A-Za-z][A-Za-z -]{0,60}\s+(?:region|zone)\b', text[end:], re.I)
                      or re.search(r'\bthe\s+(?:18|19|20)\d{2}(?:,\s*(?:18|19|20)\d{2})*\s+and\s+$', text[:match.start()], re.I))):
             continue
-        if any(match.start() < b and end > a for a, b in excluded):
+        start = match.start()
+        denominator = None
+        unknown_denominator = None
+        if statistics and signature == (('d', 1),):
+            # 已明确核实的统计对象须与同一分句内的数值绑定。分母整体只供翻译
+            # 和校验使用，不能被版面保护路径扩大成一个不可翻译的英文锚点。
+            english = _EN_STATISTICAL_DENOMINATOR.match(text, end)
+            chinese_suffix = _ZH_STATISTICAL_SUFFIX.match(text, end)
+            chinese_prefix = _ZH_STATISTICAL_PREFIX.search(text, max(occupied_end, start - 48, 0), start)
+            if english:
+                end = english.end()
+                phrase = english['phrase']
+                if re.fullmatch(r'event[-‐‑\u00ad][ \t\r\n]*occurring[ \t\r\n]+summers?', phrase, re.I):
+                    denominator = _EVENT_SUMMER
+                else:
+                    unknown_denominator = phrase
+            elif chinese_suffix:
+                end = chinese_suffix.end()
+                denominator = _EVENT_SUMMER
+            elif chinese_prefix:
+                start = chinese_prefix.start()
+                denominator = _EVENT_SUMMER
+            else:
+                # 保留真正的每事件单位，包含自然中文中分母前置的表达。
+                event_count_suffix = _ZH_EVENT_COUNT_SUFFIX.match(text, end)
+                event_count_prefix = _ZH_EVENT_COUNT_PREFIX.search(
+                    text, max(occupied_end, start - 24, 0), start
+                )
+                if event_count_suffix:
+                    end = event_count_suffix.end()
+                    signature = (('d', 1), ('event', -1))
+                elif event_count_prefix:
+                    start = event_count_prefix.start()
+                    signature = (('d', 1), ('event', -1))
+        if any(start < b and end > a for a, b in excluded):
             continue
         values = tuple(_value(x) for x in (match.group('a'), match.group('b')) if x is not None)
-        result.append(Quantity(match.start(), end, values, signature))
+        result.append(Quantity(start, end, values, signature, denominator, unknown_denominator))
         occupied_end = end
     return result
 

@@ -78,6 +78,7 @@ def translate_segment_file(
     passthrough_segment_ids: set[str] | frozenset[str] = frozenset(),
     contract_repair: bool = True,
     anchor_text: dict[str, dict[str, str]] | None = None,
+    manually_covered: frozenset[str] = frozenset(),
     progress=None,
 ) -> tuple[int, int]:
     """翻译尚未通过门禁的片段，并在每批成功后原子写入断点。
@@ -107,6 +108,8 @@ def translate_segment_file(
     unknown_passthrough_ids = set(passthrough_segment_ids) - seen
     if unknown_passthrough_ids:
         raise ValueError(f"透传映射包含未知片段 ID：{sorted(unknown_passthrough_ids)}")
+    if manually_covered - seen:
+        raise ValueError('人工修订包含当前文档没有的片段')
     overlap = set(reference_segment_ids) & set(passthrough_segment_ids)
     if overlap:
         raise ValueError(f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}")
@@ -129,6 +132,11 @@ def translate_segment_file(
         target = str(row.get("target", ""))
         if sid not in seen or source != next(item.source for item in segments if item.id == sid):
             raise ValueError(f"既有译文不属于当前片段集合：{sid}")
+        if sid in manually_covered:
+            # 保留以前的自动译文供历史追溯。当前全部位置均使用另外验证的
+            # 人工文字，不用旧自动结果判断这一段是否需要再调用模型。
+            existing[sid] = row
+            continue
         if sid in passthrough_segment_ids:
             errors = [] if target == source else ["人工透传片段必须与原文完全相同"]
         elif sid in reference_segment_ids and reference_policy == "preserve":
@@ -174,9 +182,10 @@ def translate_segment_file(
     if preserved_count:
         write_jsonl_atomic(translations_path, ordered)
 
-    pending = [segment for segment in segments if segment.id not in existing]
+    pending = [segment for segment in segments if segment.id not in existing and segment.id not in manually_covered]
+    manual_only_count = len(manually_covered - existing.keys())
     if progress:
-        progress(len(ordered), len(segments))
+        progress(len(ordered) + manual_only_count, len(segments))
     context = TranslationContext(
         source_language=domain.source_language,
         target_language=domain.target_language,
@@ -312,7 +321,7 @@ def translate_segment_file(
                 )
             rejected_path.unlink()
         if progress:
-            progress(len(ordered), len(segments))
+            progress(len(ordered) + manual_only_count, len(segments))
         if rejected_path.exists():
             # 成功重试后清除已经解决的诊断文件，避免把旧失败误认为当前状态。
             rejected_path.unlink()

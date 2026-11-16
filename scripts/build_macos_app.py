@@ -45,13 +45,13 @@ def main():
     build = root / "build" / "macos"
     build.mkdir(parents=True, exist_ok=True)
     # 两种 CPU 均由同一源码编译；运行验证仍需分别报告实际测试过的架构。
+    sources = sorted(str(path) for path in (root / "macos").glob("*.swift"))
     binaries = []
     for arch in ("arm64", "x86_64"):
         binary = build / f"PaperLocale-{arch}"
         subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-parse-as-library",
                         "-O", "-target", f"{arch}-apple-macosx13.0",
-                        str(root / "macos" / "PaperLocaleApp.swift"),
-                        str(root / "macos" / "TranslationOptions.swift"), "-o", str(binary)], check=True)
+                        *sources, "-o", str(binary)], check=True)
         binaries.append(str(binary))
     subprocess.run(["lipo", "-create", *binaries, "-output", str(binary_dir / "PaperLocale")], check=True)
     # 直接核对实际 Mach-O 架构，避免不同 Xcode 的 -verify_arch 参数解析差异。

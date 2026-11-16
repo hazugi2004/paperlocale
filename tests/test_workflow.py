@@ -17,6 +17,7 @@ import pymupdf as fitz
 import reportlab
 from reportlab.pdfgen import canvas
 
+from paperlocale import __version__, cli
 from paperlocale.contracts import segment_id, write_jsonl_atomic
 from paperlocale.domains import load_domain_pack
 from paperlocale.providers import (
@@ -145,7 +146,7 @@ class WorkflowTest(unittest.TestCase):
             source_language="en",
             target_language="zh-CN",
         )
-        self.assertEqual(manifest["paperlocale_version"], "0.8.4")
+        self.assertEqual(manifest["paperlocale_version"], __version__)
         translated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
         report_path = run_dir / "qa" / "qa_report.json"
         report_path.parent.mkdir(parents=True)
@@ -1348,6 +1349,113 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(manifest["accepted_by"], "reviewer")
             self.assertTrue(report["visual_accepted"])
             self.assertEqual(report["visual_reviewed_by"], "reviewer")
+
+    def test_accept_cli_refuses_a_candidate_replaced_and_checked_since_review(self) -> None:
+        """即使新候选已经通过机器检查，仍须复核者重新确认其内容。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, translated = self._make_qa_ready_run(root)
+            manifest = load_manifest(run_dir)
+            reviewed_hash = str(manifest["rendered_sha256"])
+            translated.write_bytes(b"another-candidate-with-new-qa")
+            updated_hash = hashlib.sha256(translated.read_bytes()).hexdigest()
+            manifest["rendered_sha256"] = updated_hash
+            save_manifest(run_dir, manifest)
+            report_path = Path(str(manifest["qa_report"]))
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["translated_sha256"] = updated_hash
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            output = root / "confirmed.pdf"
+            args = cli.build_parser().parse_args([
+                "accept", "--run-dir", str(run_dir), "--reviewed-by", "复核者",
+                "--expected-rendered-sha256", reviewed_hash, "--output-pdf", str(output),
+            ])
+            with self.assertRaisesRegex(ValueError, "与复核者刚审阅的版本不同"):
+                cli._execute(args)
+            self.assertFalse(output.exists())
+            self.assertEqual(load_manifest(run_dir), manifest)
+            self.assertEqual(json.loads(report_path.read_text(encoding="utf-8")), report)
+
+    def test_accept_cli_can_change_conflicting_output_without_rechecking_candidate(self) -> None:
+        """确认同一份候选可重选导出位置，原目标和源文件均保留。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, translated = self._make_qa_ready_run(root)
+            manifest = load_manifest(run_dir)
+            old = root / "source_translated_by_paperlocale.pdf"
+            old.write_bytes(b"unrelated-pdf")
+            args = ["accept", "--run-dir", str(run_dir), "--reviewed-by", "复核者",
+                    "--expected-rendered-sha256", str(manifest["rendered_sha256"])]
+            with self.assertRaises(FileExistsError):
+                cli._execute(cli.build_parser().parse_args(args))
+            self.assertEqual(load_manifest(run_dir), manifest)
+            self.assertEqual(old.read_bytes(), b"unrelated-pdf")
+
+            output = root / "复核 译文.pdf"
+            with patch("builtins.print"):
+                self.assertEqual(cli._execute(cli.build_parser().parse_args(
+                    args + ["--output-pdf", str(output)])), 0)
+            current = load_manifest(run_dir)
+            self.assertEqual(current["status"], "accepted")
+            self.assertEqual(current["accepted_by"], "复核者")
+            self.assertEqual(current["output_pdf"], str(output))
+            self.assertEqual(current["exported_pdf"], str(output))
+            self.assertEqual(output.read_bytes(), translated.read_bytes())
+            self.assertEqual(old.read_bytes(), b"unrelated-pdf")
+
+    def test_accept_cli_checks_preservation_before_copying_candidate(self) -> None:
+        """已通过的机器检查不能代替保版报告。报告过期时不能写入正式路径。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, _ = self._make_qa_ready_run(root)
+            manifest = load_manifest(run_dir)
+            manifest.update(layout_mode="paragraph", layout_plan_sha256="current-plan")
+            save_manifest(run_dir, manifest)
+            (run_dir / "preservation_report.json").write_text(json.dumps({
+                "source_sha256": manifest["source_sha256"],
+                "translated_sha256": manifest["rendered_sha256"],
+                "layout_plan_sha256": "previous-plan",
+            }), encoding="utf-8")
+            output = root / "revise.pdf"
+            args = cli.build_parser().parse_args([
+                "accept", "--run-dir", str(run_dir), "--reviewed-by", "复核者",
+                "--expected-rendered-sha256", manifest["rendered_sha256"], "--output-pdf", str(output),
+            ])
+            with self.assertRaisesRegex(ValueError, "源版面保护报告"):
+                cli._execute(args)
+            self.assertFalse(output.exists())
+            self.assertEqual(load_manifest(run_dir), manifest)
+
+    def test_export_cli_resolves_output_conflict_without_accepting_or_retranslating(self) -> None:
+        """另存冲突后的同一份候选，仍须人工验收，原有输出与机器证据保留。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, translated = self._make_qa_ready_run(root)
+            manifest = load_manifest(run_dir)
+            qa_report = Path(manifest["qa_report"])
+            report_before = qa_report.read_bytes()
+            occupied = root / "existing.pdf"
+            occupied.write_bytes(b"unrelated-pdf")
+            diagnostic = run_dir / "error_report.json"
+            diagnostic.write_text(json.dumps({"classification": {"code": "file.output_conflict"}}))
+            base = ["export", "--run-dir", str(run_dir),
+                    "--expected-rendered-sha256", manifest["rendered_sha256"], "--output-pdf"]
+            with self.assertRaises(FileExistsError):
+                cli._execute(cli.build_parser().parse_args(base + [str(occupied)]))
+            self.assertTrue(diagnostic.exists())
+            output = root / "重选的候选.pdf"
+            with patch("builtins.print"):
+                self.assertEqual(cli._execute(cli.build_parser().parse_args(base + [str(output)])), 0)
+            current = load_manifest(run_dir)
+            self.assertEqual(current["status"], "qa_generated")
+            self.assertNotIn("accepted_by", current)
+            self.assertEqual(current["exported_sha256"], manifest["rendered_sha256"])
+            self.assertEqual(output.read_bytes(), translated.read_bytes())
+            self.assertEqual(occupied.read_bytes(), b"unrelated-pdf")
+            self.assertEqual(qa_report.read_bytes(), report_before)
+            self.assertFalse(diagnostic.exists())
 
     def test_apply_vector_repair_records_history_and_resets_qa(self) -> None:
         """修复导入必须保留旧 PDF，并强制重新执行机器和人工 QA。"""

@@ -19,11 +19,81 @@ def read_choices(root: Path, source_hash: str) -> dict:
     return choices
 
 
+def preservation_skip_blocks(root: Path, manifest: dict, items: list) -> set[str]:
+    """将源层删除失败绑定到尚未翻译的源版面块；旧报告可用字形证据定位。"""
+    mode = manifest.get('layout_mode')
+    if (manifest.get('status') != 'initialized' or mode not in {'paragraph', 'preserved'}
+            or manifest.get('translation_provider') or not items):
+        return set()
+    source_hash = manifest['source_sha256']
+    if digest(Path(manifest['source_pdf'])) != source_hash:
+        return set()
+    path = Path(manifest.get('layout_plan') or root / 'layout_plan.json')
+    if not path.is_file():
+        return set()
+    plan = json.loads(path.read_text(encoding='utf-8'))
+    if (plan.get('source_sha256') != source_hash or plan.get('schema') != (2 if mode == 'paragraph' else 1)
+            or manifest.get('layout_plan_sha256') not in (None, digest(path))):
+        return set()
+    translated = {'body', 'caption'} if mode == 'paragraph' else {'body'}
+    skipped = set(read_choices(root, source_hash).get('skip_blocks', []))
+    found = set()
+    for item in items:
+        locations = item.get('regions', [])
+        if len(locations) != 1 or not item.get('character') or not item.get('origin'):
+            return set()
+        # 旧的几何失败项无 id。旧的删除后回读包括固定字形，也有字符坐标，
+        # 但不能单凭这些证据把消失的保护字形认作正文。
+        if 'source_block' not in item and 'id' in item:
+            return set()
+        # 同字可重复出现，必须同时匹配页号、原点和原字框。图表、公式和
+        # 已明确保留的区块保持原身份；没有可靠位置时不给出跳过按钮。
+        location = locations[0]
+        matches = [block['id'] for block in plan['blocks']
+                   if block['kind'] in translated and block['id'] not in skipped
+                   and block['page'] == location.get('page')
+                   and any(char['text'] == item['character'] and char['origin'] == item['origin']
+                           and char['rect'] == location.get('rect')
+                           for part in block['parts'] for char in part['chars'])]
+        if len(matches) != 1 or item.get('source_block', matches[0]) != matches[0]:
+            return set()
+        found.add(matches[0])
+    return found
+
+
+def snapshot_run(root: Path) -> None:
+    """建立现有修复菜单与区块修订共用的可核验回退点。"""
+    stamp = str(time.time_ns())
+    backup = root / 'recovery_backups' / stamp
+    backup.mkdir(parents=True)
+    for path in root.iterdir():
+        if path.name in {'recovery_backups', 'repair_audit.jsonl'}:
+            continue
+        if path.is_symlink():
+            raise ValueError('运行目录包含符号链接，不能建立可靠的修复快照')
+        if path.is_dir():
+            shutil.copytree(path, backup/path.name)
+        else:
+            shutil.copy2(path, backup/path.name)
+    snapshot_files = {str(p.relative_to(backup)): digest(p) for p in backup.rglob('*') if p.is_file()}
+    _save(root / 'recovery_undo.json', {'backup': stamp, 'files': snapshot_files})
+
+
 def apply_choice(root: Path, key: str, error_id: str, edits: dict | None = None) -> None:
     """一次选择只改变明确失败片段；重试仍走原流程，绝不把失败设为成功。"""
     root = root.expanduser().resolve()
     report = json.loads((root / 'error_report.json').read_text())
-    if report['error_id'] != error_id or key not in {a['key'] for a in report['actions']}:
+    if report['error_id'] != error_id:
+        raise ValueError('诊断已更新或选项不适用于当前错误，请重新打开诊断')
+    preservation_blocks = set()
+    if key == 's' and report['category'] == 'preservation':
+        manifest = json.loads((root / 'run_manifest.json').read_text(encoding='utf-8'))
+        if any(report.get(field) != manifest.get(field) for field in ('source_pdf', 'source_sha256')):
+            raise ValueError('诊断的源 PDF 与当前运行不一致')
+        preservation_blocks = preservation_skip_blocks(root, manifest, report['items'])
+        if not preservation_blocks:
+            raise ValueError('无法可靠定位要保留原文的区块，请重新检查源 PDF')
+    elif key not in {a['key'] for a in report['actions']}:
         raise ValueError('诊断已更新或选项不适用于当前错误，请重新打开诊断')
     if key == 'q':
         return
@@ -74,28 +144,15 @@ def apply_choice(root: Path, key: str, error_id: str, edits: dict | None = None)
             if key != 'r':
                 raise ValueError('已生成 PDF 的断点不能改变翻译选项')
             return
-        stamp = str(time.time_ns())
-        backup = root / 'recovery_backups' / stamp
-        backup.mkdir(parents=True)
-        for path in root.iterdir():
-            if path.name in {'recovery_backups', 'repair_audit.jsonl'}:
-                continue
-            if path.is_symlink():
-                raise ValueError('运行目录包含符号链接，不能建立可靠的修复快照')
-            if path.is_dir():
-                shutil.copytree(path, backup/path.name)
-            else:
-                shutil.copy2(path, backup/path.name)
-        snapshot_files = {str(p.relative_to(backup)): digest(p) for p in backup.rglob('*') if p.is_file()}
-        _save(root / 'recovery_undo.json', {'backup': stamp, 'files': snapshot_files})
+        snapshot_run(root)
         ids = {item['id'] for item in report['items'] if item.get('id')}
         choices = read_choices(root, report['source_sha256'])
         if key == 'e':
             from .repair_editor import save_edits
             save_edits(root, checked, error_id)
         elif key == 's':
-            field = 'skip_blocks' if report['category'] == 'extraction' else 'skip'
-            choices[field] = sorted(set(choices.get(field, [])) | ids)
+            field = 'skip_blocks' if report['category'] in {'extraction', 'preservation'} else 'skip'
+            choices[field] = sorted(set(choices.get(field, [])) | (preservation_blocks or ids))
         elif key == 'f':
             # 相同原句可能出现于多页并共用译文 ID，一次选择只缩小一次。
             # 多种原字号共用同一译文时取最小下限，避免超过较小原字号。

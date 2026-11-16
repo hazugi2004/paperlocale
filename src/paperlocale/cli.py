@@ -175,6 +175,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="错误时显示字母修复菜单；默认仅交互终端启用，无人值守不启用")
     run.add_argument("--no-qa", action="store_true",
                      help="源版面模式：省略输出后机器 QA，保留 rendered 状态，PDF 留在运行目录")
+    run.add_argument("--no-export", action="store_true",
+                     help="候选只保存在运行目录，检查通过后可另行验收导出")
     run.add_argument("--domain", default="atmospheric-science")
     run.add_argument("--layout-mode", choices=("paragraph", "preserved", "legacy"),
                      help="新运行默认段落框模式；既有运行保持原模式")
@@ -410,12 +412,29 @@ def build_parser() -> argparse.ArgumentParser:
     accept = subparsers.add_parser("accept", help="记录人工逐页视觉验收")
     accept.add_argument("--run-dir", type=Path, required=True)
     accept.add_argument("--reviewed-by", required=True)
+    accept.add_argument("--expected-rendered-sha256", help="复核者实际审阅的候选 PDF 的 SHA-256")
+    accept.add_argument("--output-pdf", type=Path, help="验收时将这份候选保存到指定的 PDF 文件")
+    export = subparsers.add_parser("export", help="另存当前机器检查已通过的候选，不重新翻译或验收")
+    export.add_argument("--run-dir", type=Path, required=True)
+    export.add_argument("--expected-rendered-sha256", required=True)
+    export.add_argument("--output-pdf", type=Path, required=True)
+    inspect = subparsers.add_parser("repair-inspect", help="读取当前诊断和可用的修复操作")
+    inspect.add_argument("--run-dir", type=Path, required=True)
+    inspect.add_argument("--error-id", required=True)
     repair = subparsers.add_parser("repair-choice", help="应用当前错误的修复选项或回退（不自动启动模型）")
     repair.add_argument("--run-dir", type=Path, required=True)
     repair.add_argument("--error-id", required=True)
     repair.add_argument("--choice", choices=("r", "t", "f", "s", "b", "q", "e"), required=True)
     repair.add_argument("--edits-file", type=Path, help="人工修订的片段 ID 到译文 JSON 映射")
     repair.add_argument("--check-only", action="store_true", help="仅校验修订，不写缓存或调用模型")
+    revision = subparsers.add_parser("manual-revision", help="定位、检查或采用已选版面区块的人工译文")
+    revision.add_argument("--run-dir", type=Path, required=True)
+    revision.add_argument("--page", type=int, required=True)
+    revision_version = revision.add_mutually_exclusive_group(required=True)
+    revision_version.add_argument("--error-id")
+    revision_version.add_argument("--expected-rendered-sha256")
+    revision.add_argument("--edit-file", type=Path, help="不提供时仅列出本页对应版面区块")
+    revision.add_argument("--check-only", action="store_true", help="仅检查输入，并显示将采用的译文")
     journal = subparsers.add_parser("journal-info", help="显示 PDF 期刊归属及识别证据")
     journal.add_argument("source_pdf", type=Path)
     resume = subparsers.add_parser("resume-waiting", help="修正问题后通知等待进程继续")
@@ -483,10 +502,10 @@ def main() -> int:
     except Exception as error:
         root = getattr(args, "run_dir", None)
         print_error(error, root)
-        if root is not None and args.command != "repair-choice":
+        if root is not None and args.command not in {"repair-inspect", "repair-choice", "manual-revision"}:
             from .diagnostics import record_error, print_context
             import json
-            report = record_error(error, root)
+            report = record_error(error, root, command=args.command)
             print_context(report)
             print('PAPERLOCALE_ERROR ' + json.dumps(report, ensure_ascii=False), flush=True)
         return 1
@@ -517,6 +536,11 @@ def _execute(args: argparse.Namespace) -> int:
         from .journals import identify_journal
         print(json.dumps(identify_journal(args.source_pdf.expanduser().resolve()), ensure_ascii=False, indent=2))
         return 0
+    if args.command == "repair-inspect":
+        import json
+        from .diagnostics import inspect_repair
+        print(json.dumps(inspect_repair(args.run_dir, args.error_id), ensure_ascii=False))
+        return 0
     if args.command == "repair-choice":
         import json
         from .repair_choices import apply_choice
@@ -530,6 +554,18 @@ def _execute(args: argparse.Namespace) -> int:
         apply_choice(args.run_dir, args.choice, args.error_id, edits)
         print("修复选项已应用；回退不会自动重启模型，其他选项可从原断点继续。")
         return 0
+    if args.command == "manual-revision":
+        import json
+        from .manual_revision import manual_revision
+        if args.page < 1 or args.check_only and not args.edit_file:
+            raise ValueError('请输入有效页码，预检还需提供待采用的译文。')
+        edit = json.loads(args.edit_file.read_text(encoding="utf-8")) if args.edit_file else None
+        if args.edit_file and edit is None:
+            raise ValueError('修订文件缺少待采用的译文。')
+        result = manual_revision(args.run_dir, page=args.page, error_id=args.error_id,
+                                 expected_hash=args.expected_rendered_sha256, edit=edit, check_only=args.check_only)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get('valid', True) else 1
     if args.command == "resume-waiting":
         from .recovery import resume_waiting
         resume_waiting(args.run_dir)
@@ -627,12 +663,19 @@ def _execute(args: argparse.Namespace) -> int:
                 skipped = coverage.get('user_skipped_segments', []) + coverage.get('user_skipped_blocks', [])
                 if skipped:
                     print(f"注意：用户选择保留原文的片段有 {len(skipped)} 个；这是部分翻译，详见 translation_coverage.json。")
+            # 用户改稿属于新版候选。保留之前的正式导出，直到复核者明确
+            # 验收这版并选择保存位置；关闭 App 后再继续也遵守同一边界。
+            keep_local = args.no_export or bool(result.get('manual_revisions'))
             if result["status"] == "rendered" and args.no_qa:
                 from .workflow import _verify_rendered_pdf
-                rendered = (export_run_pdf(root, require_qa=False) if manifest.get("output_pdf")
+                rendered = (export_run_pdf(root, require_qa=False) if manifest.get("output_pdf") and not keep_local
                             else _verify_rendered_pdf(result))
                 print(f"候选 PDF：{rendered}；按明确选择未运行输出后机器 QA，尚未验收")
                 emit_progress("完成（未运行 QA）", 1)
+                return 0
+            if keep_local:
+                print(f'候选 PDF 保存在运行目录：{result["rendered_pdf"]}')
+                emit_progress("完成（待人工验收）", 1)
                 return 0
             exported = export_run_pdf(root)
             if result["status"] == "accepted":
@@ -660,7 +703,7 @@ def _execute(args: argparse.Namespace) -> int:
             restore_vectors=args.restore_source_vectors,
             contract_repair=args.contract_repair,
         )
-        if final_manifest["status"] == "qa_generated":
+        if final_manifest["status"] == "qa_generated" and not args.no_export:
             exported = export_run_pdf(root)
             comparisons = Path(str(final_manifest["qa_output_dir"])) / "comparisons"
             if args.unattended:
@@ -797,8 +840,7 @@ def _execute(args: argparse.Namespace) -> int:
             page_number=args.page,
             rectangle=tuple(args.rect),
             replacement=args.replacement,
-            font_file=args.font_file, paragraph=mode == "paragraph",
-                import_cache_from=args.import_cache_from,
+            font_file=args.font_file,
             font_size=args.font_size,
             description=args.description,
             single_line=args.single_line,
@@ -813,9 +855,20 @@ def _execute(args: argparse.Namespace) -> int:
         print(f"参考文献版面处理完成：{restore_reference_layout(args.run_dir, regions_file=args.regions_file)}；请重新 QA")
         return 0
     if args.command == "accept":
-        exported = export_run_pdf(args.run_dir)
-        accept_run(args.run_dir, reviewed_by=args.reviewed_by)
+        from .diagnostics import clear_save_conflict
+        exported = accept_run(
+            args.run_dir, reviewed_by=args.reviewed_by, expected_rendered_sha256=args.expected_rendered_sha256,
+            export=True, output_pdf=args.output_pdf,
+        )
+        clear_save_conflict(args.run_dir)
         print(f"人工视觉验收已记录：{exported}")
+        return 0
+    if args.command == "export":
+        from .diagnostics import clear_save_conflict
+        exported = export_run_pdf(args.run_dir, expected_rendered_sha256=args.expected_rendered_sha256,
+                                  output_pdf=args.output_pdf)
+        clear_save_conflict(args.run_dir)
+        print(f"当前候选已保存到：{exported}")
         return 0
     pack = load_domain_pack(args.domain) if args.domain else None
     validate_translation_files(

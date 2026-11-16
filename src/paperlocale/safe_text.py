@@ -300,6 +300,7 @@ def safe_erase_rectangles(editable, protected, source=None):
                 from .diagnostics import LocatedError
                 raise LocatedError(f'第{part["page"]}页正文字符没有安全删除范围：{char["text"]!r}',
                     [{'source': part.get('text', char['text']), 'pages': [part['page']],
+                      **({'source_block': part['source_block']} if 'source_block' in part else {}),
                       'character': char['text'], 'origin': char['origin'],
                       'regions': [{'page': part['page'], 'rect': char['rect']}]}], 'preservation')
         result.extend({'page': part['page'], 'rect': list(r)} for r in patches)
@@ -331,7 +332,7 @@ def verify_text_erased(page, editable, protected):
                 'pages': [page.number + 1], 'character': char['text'],
                 'origin': char['origin'],
                 'regions': [{'page': page.number + 1, 'rect': char['rect']}]}
-    remaining = [evidence(p, c) for p in editable for c in p['chars']
+    remaining = [{**evidence(p, c), 'source_block': p.get('source_block')} for p in editable for c in p['chars']
                  if c['text'].strip() and present(c)]
     if remaining:
         raise LocatedError(f'第{page.number + 1}页仍有未删除的待译原文', remaining, 'preservation')

@@ -19,18 +19,67 @@ class LocatedError(ValueError):
 
 
 def unit_location(unit: dict) -> dict:
+    anchors = {'{v'+str(i)+'}': anchor['text'] for i, anchor in enumerate(unit.get('anchors', []))}
     text = unit['source']
-    for i, anchor in enumerate(unit.get('anchors', [])):
-        text = text.replace('{v'+str(i)+'}', anchor['text'])
+    for marker, anchor in anchors.items():
+        text = text.replace(marker, anchor)
     regions = unit.get('frames') or [p for slot in unit['slots'] for p in slot]
     sizes = [p['size'] for p in regions]
     default_floor = median(sizes) * (.8 if unit.get('frames') else 1)
     return {'id': unit['id'], 'source': text, 'pages': sorted({p['page'] for p in regions}),
             'regions': [{'page': p['page'], 'rect': p['rect']} for p in regions],
-            'font_size': unit.get('_repair_font_floor', default_floor)}
+            'font_size': unit.get('_repair_font_floor', default_floor), 'anchors': anchors}
 
 
-def record_error(error: Exception, root: Path) -> dict:
+def _offer_preservation_skip(root: Path, report: dict, manifest: dict) -> None:
+    """旧版字符诊断与当前诊断共用区块定位，不以页号或文字猜测跳过对象。"""
+    if report['category'] != 'preservation' or not report['items']:
+        return
+    report['actions'] = [action for action in report['actions'] if action['key'] != 's']
+    from .repair_choices import preservation_skip_blocks
+    try:
+        blocks = preservation_skip_blocks(root, manifest, report['items'])
+    except (OSError, ValueError, KeyError):
+        return
+    if blocks:
+        index = next((i for i, action in enumerate(report['actions']) if action['key'] == 'q'), len(report['actions']))
+        report['actions'].insert(index, {'key': 's', 'label': '保留标出的原文区块并继续（部分翻译）'})
+
+
+def inspect_repair(root: Path, error_id: str) -> dict:
+    """读取当前报告并补充新版支持的操作。查看不会写回旧报告或运行。"""
+    from .error_categories import classify
+    root = root.expanduser().resolve()
+    report = json.loads((root / 'error_report.json').read_text())
+    if report['error_id'] != error_id:
+        raise ValueError('当前错误已更新，请重新打开诊断。')
+    if report.get('classification', {}).get('code', 'operation.other') == 'operation.other':
+        classification = classify(ValueError(report['message']), report['category'])
+        report.update(classification=classification, solution=classification['guidance'])
+    if report['category'] == 'preservation':
+        manifest = json.loads((root / 'run_manifest.json').read_text())
+        if report.get('source_sha256') != manifest.get('source_sha256'):
+            raise ValueError('诊断与当前源 PDF 不一致，请重新打开当前运行。')
+        _offer_preservation_skip(root, report, manifest)
+    return report
+
+
+def clear_save_conflict(root: Path) -> None:
+    """仅在候选成功保存后清除该运行已解决的保存诊断。"""
+    path = root.expanduser().resolve() / 'error_report.json'
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    code = report.get('classification', {}).get('code')
+    command = report.get('command')
+    if (code == 'file.output_conflict'
+            or (code == 'file.permission' and command in {'run', 'export', 'accept'})
+            or (code == 'candidate.changed' and command == 'export')):
+        path.unlink(missing_ok=True)
+
+
+def record_error(error: Exception, root: Path, *, command: str | None = None) -> dict:
     """诊断固定绑定源文件及本次错误，防止 App 用上一次弹窗修改新断点。"""
     root = root.expanduser().resolve()
     items = getattr(error, 'items', [])
@@ -55,6 +104,11 @@ def record_error(error: Exception, root: Path) -> dict:
     resolved = []
     for item in items:
         matches = [loc for loc in locations if loc['id'] == item.get('id')]
+        # 排版故障若已附有完整区块坐标，按出现位置显示；仅有片段文字 ID
+        # 的自动翻译故障仍需给出该源段在文中的所有位置。
+        exact_matches = [loc for loc in matches if loc.get('regions') == item.get('regions')]
+        if exact_matches:
+            matches = exact_matches
         for candidate in ([{**item, **loc} for loc in matches] or [item]):
             # 定位表中的 source 是代回公式后的可读原文；同时保留实际参与
             # 门禁的占位符文本，以便与失败候选逐项核对，不猜测跨语言句子对齐。
@@ -65,7 +119,7 @@ def record_error(error: Exception, root: Path) -> dict:
     from .error_categories import classify, rule_detail
     classification = classify(error, category)
     for item in resolved:
-        item['anchors'] = context.get('anchors', {}).get(item.get('id'), {})
+        item.setdefault('anchors', context.get('anchors', {}).get(item.get('id'), {}))
         item['rule_details'] = [rule_detail(reason) for reason in item.get('errors', [])]
     page_context = []
     if not resolved and manifest.get('source_pdf'):
@@ -82,7 +136,9 @@ def record_error(error: Exception, root: Path) -> dict:
     actions = [{'key': 'r', 'label': '从断点重试一次（模型请求可能计费）'}]
     # 只有唯一定位到待译单元才能保留原文；错误期间不改版面计划或科学合同。
     if category in {'translation', 'layout'} and resolved and all(i.get('pages') for i in resolved):
-        actions.append({'key': 't', 'label': '仅清除失败片段缓存并重新翻译（可能计费）'})
+        # 区块人工稿没有可清除的模型缓存。提示调整或回退，避免表面重译仍使用同一稿。
+        if not any(item.get('manual_revision') for item in resolved):
+            actions.append({'key': 't', 'label': '仅清除失败片段缓存并重新翻译（可能计费）'})
         if classification['code'] == 'layout.capacity' and all(i.get('font_size', 0) > 6 for i in resolved):
             floors = sorted({round(float(i['font_size']), 2) for i in resolved})
             actions.append({'key': 'f', 'label': f'仅降低失败段落字号下限 10%（当前 {floors} pt，最低 6 pt）'})
@@ -102,6 +158,9 @@ def record_error(error: Exception, root: Path) -> dict:
     record = {'error_id': str(time.time_ns()), 'category': category, 'message': _message(error),
               'classification': classification, 'location': location, 'solution': classification['guidance'], 'diagnostic_warnings': warnings, 'items': resolved, 'page_context': page_context, 'actions': actions,
               'source_pdf': manifest.get('source_pdf'), 'source_sha256': manifest.get('source_sha256')}
+    if command is not None:
+        record['command'] = command
+    _offer_preservation_skip(root, record, manifest)
     try:
         _save(root / 'error_report.json', record)
     except OSError as failure:

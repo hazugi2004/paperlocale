@@ -588,6 +588,25 @@ class ProviderTest(unittest.TestCase):
         self.assertIn("50千米", target)
         self.assertEqual(call.call_count, 1)
 
+    def test_qwen_translates_the_complete_statistical_denominator(self) -> None:
+        provider = QwenMTProvider(
+            base_url="https://example.test/v1", api_key="secret",
+            model="qwen-mt-plus", min_request_interval_seconds=0,
+        )
+        source = "The mean is 10.43 days per event-occurring summer."
+        expected = "每个发生过事件的夏季平均为10.43天。"
+
+        def respond(request, timeout):
+            body = json.loads(request.data)
+            self.assertEqual(body["messages"][0]["content"], source)
+            self.assertIn("event-occurring summer", body["translation_options"]["domains"])
+            return _Response({"choices": [{"message": {"content": expected}}]})
+
+        with patch("paperlocale.providers.qwen_mt.urllib.request.urlopen", side_effect=respond) as call:
+            target = provider.translate([Segment("id-statistics", source)], self.context)[0].target
+        self.assertEqual(target, expected)
+        self.assertEqual(call.call_count, 1)
+
     def test_qwen_recovers_whole_quantity_after_unit_omission(self) -> None:
         provider = QwenMTProvider(base_url="https://example.test/v1", api_key="secret", model="qwen-mt-plus", min_request_interval_seconds=0)
         calls = []

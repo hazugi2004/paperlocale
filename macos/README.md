@@ -1,44 +1,52 @@
-# PaperLocale for macOS（测试版）
+# PaperLocale 0.8.6 for macOS
 
-这是 PaperLocale 0.8.4 的原生窗口前端，支持选择 PDF、选择翻译服务、模型和适用的推理强度、开始/继续、显示日志和打开结果目录。支持 `codex-local`、`openai-compatible` 与 `qwen-mt`，新翻译默认使用英译中大气科学术语库（`atmospheric-science` 2.0.0）。
+打开论文后可以立即浏览原 PDF。有候选译文时，同一窗口可切换原文、译文和双栏对照。翻译和机器检查使用配套 CLI，人工验收由复核者在 App 中确认。
 
 ## 安装
 
-1. 在 macOS 13 或更新版本上安装 Python 3.10–3.13（推荐 3.12）和 Poppler（`brew install poppler`）。准备所选翻译服务的登录或 API 密钥。
-2. 从 [v0.8.4 GitHub Release](https://github.com/hazugi2004/paperlocale/releases/tag/v0.8.4) 下载 `PaperLocale-0.8.4-macOS-universal2.zip` 并完整解压。双击 `Install PaperLocale CLI.command`，或在解压目录运行 `bash "./Install PaperLocale CLI.command"`。脚本从随附的 `paperlocale-0.8.4-py3-none-any.whl` 安装 CLI，从 Python 包索引下载所需依赖，并检查新版术语库。
-3. 安装成功后将 `PaperLocale.app` 放入“应用程序”并打开。应用默认使用 `~/Library/Application Support/PaperLocale/cli/0.8.4/bin/paperlocale`，无需手动选择。CLI 安装完成后也可直接从终端运行该路径，或把附带的 wheel 安装到已有的 Python 虚拟环境。
-4. 选择论文，确认模型与推理强度，点击“开始 / 继续”。账户不支持所选模型时，程序报错，不会自动改用另一模型。
+1. 在 macOS 13 或更新版本上，从 [v0.8.6 GitHub Release](https://github.com/hazugi2004/paperlocale/releases/tag/v0.8.6) 下载并完整解压 `PaperLocale-0.8.6-macOS-universal2.zip`。可立即用随附的 `PaperLocale.app` 阅读 PDF。
+2. 使用翻译前，先安装 Python 3.10–3.13（推荐 3.12）与 Poppler（`brew install poppler`），准备所选服务的登录或 API 密钥。双击 `Install PaperLocale CLI.command`，或在解压目录运行 `bash "./Install PaperLocale CLI.command"`。脚本安装随附的 `paperlocale-0.8.6-py3-none-any.whl`，联网下载排版依赖并检查大气科学术语库。
+3. 安装后可将 `PaperLocale.app` 放入“应用程序”。应用默认使用 `~/Library/Application Support/PaperLocale/cli/0.8.6/bin/paperlocale`，终端也可直接调用此路径。若在“翻译设置”手动选择了其他 CLI，该选择只对当前发行版本有效。也可把随附的 wheel 安装到已有 Python 虚拟环境。
 
-应用不读取或复制 Codex 登录材料，也不包含用户的论文、翻译缓存或 Python 环境。首次字体/版面模型下载由现有 CLI 负责，需要联网。
+App 使用 ad-hoc 签名。若 macOS 阻止打开，先核对发行来源与 SHA-256，再使用系统“隐私与安全性”的“仍要打开”。[Apple 的首次打开说明](https://support.apple.com/102445)
 
-发行仅有 **ad-hoc 签名，没有 Apple Developer ID 签名或公证**。首次打开可能被 Gatekeeper 阻止；核对发行来源与 SHA256 后，可使用系统“隐私与安全性”中的“仍要打开”。不建议关闭系统安全检查。参见 [Apple 的首次打开说明](https://support.apple.com/102445)。Universal 2 包含 Apple Silicon 和 Intel 二进制；本次实际运行验证在 Apple Silicon 上完成，Intel 未实机验证。
+## 阅读与联动
 
-## 断点与输出
+- 拖入单个 PDF、点击“打开 PDF…”或按 `⌘O`。原文预览可离线使用。
+- 阅读区足够宽时，候选默认在右栏显示。点击或滚动相应栏后，工具栏使用该栏的页码、缩放和搜索。可关闭联动，也可用 `⌘F` 搜索当前栏。旋转和裁切导致位置无法对应时，联动只对齐页码。
+- 窄窗口在原文和译文间切换并保留当前页。审校面板中标明页码的项目可直接跳转。
 
-新任务默认放在 `~/paperlocale/<文件名>-<源路径摘要>/`；“选择工作区…”可指定统一根目录并记住选择。同名不同路径的 PDF 不共用断点。“打开已有运行…”可打开含 `run_manifest.json` 的旧目录，恢复原服务、模型、输出位置和诊断，不迁移或删除旧文件。
+## 翻译与断点
 
-错误时打开“修复与继续”窗口：左侧直接浏览原 PDF 并定位报错页，右侧展示分类、规则差异、原文、失败译文和固定标记含义。可编辑失败译文，先“校验内容（不保存）”，再“保存修订并继续”；这两步不请求模型，后续排版确需精炼时仍可能调用模型。修订必须通过原有数字、单位、公式及领域门禁，保存前建立快照，失败不覆盖缓存，并可回退。
+新任务默认使用英译中大气科学术语库（`atmospheric-science` 2.0.0）和整篇保版。打开原 PDF 时，App 在默认工作区查找与源路径和文件哈希同时匹配的运行。新任务默认放在 `~/paperlocale/<文件名>-<源路径摘要>/`。也可以通过“打开已有运行…”选取包含 `run_manifest.json` 的目录。
 
-保留原文属于部分翻译，不能当作完整中文结果。字体缺字不会提供无效的缩字号选项；可返回设置选择字体、输出位置、工作区、请求批量大小或服务配置。更换模型不能直接污染旧断点，使用“重新分析版面并复用合格缓存”创建独立运行，导入时保留旧模型身份且逐条重新校验。未知 PDF 结构或服务不可用仍可能需要引擎更新或服务恢复，应用不会通过忽略保护门禁假装成功。
+继续运行会沿用清单记录的服务、模型和版面模式。支持 Codex 本机登录、兼容 API 和 Qwen-MT。兼容 API 填写含版本前缀的服务地址。API 密钥仅留在窗口内存，翻译子进程也可使用其启动环境中的 `PAPERLOCALE_API_KEY`。服务或模型变更需要新建运行。
 
-默认运行输出后机器 QA；只有明确取消勾选时才传入 `--no-qa`，此时 PDF 保存在运行目录中、状态为 `rendered`。界面不会把进程退出 0 当作人工验收。默认 QA 通过的 PDF 按 CLI 规则导出到原文件目录。
+运行时仍可阅读原文。“诊断”可展开查看日志。翻译失败时，可以从原文定位打开修订区块。审校已生成的候选时，也可以选择当前页的译文区块。
 
-首版没有取消整棵翻译子进程的功能，任务执行期间会阻止退出应用；关闭窗口不会停止翻译。不要用强制退出来暂停任务。
+在区块内修改有问题的译文，预览后点“采用我的修订”。图号、公式等固定内容用锁定文本显示。通过校验后，排版使用你确认的原文字串，续跑从保存的区块读取人工修订。同一句出现多次时，可按页和位置选择要修改的那一处。“诊断”提供已有的重试与回退操作。
+
+统计量校验会区分物理单位和原句里的统计分母。例如 `10.43 days per event-occurring summer` 对应“每个发生过事件的夏季平均 10.43 天”。遇到程序无法自动识别的分母，核对原文后可确认这一处，修订记录会保留确认依据。
+
+## 处理异常
+
+- 点“修复与继续”打开问题和原文。具有确定坐标的问题会在原文栏和修复窗口以荧光黄底标出。只有页码时可跳到对应页。高亮只在阅读窗口显示。
+- 如果正文与受保护的公式或字形重叠，可查看被定位的区域。当修复窗口提供“保留原文并继续…”时，明确确认后会保留相应区块并继续。候选显示“部分翻译”，审校面板列出所保留的内容。
+- 如果旧译文缓存和当前运行不兼容，选择“跳过旧缓存并继续”。当前运行里已通过校验的译文仍可复用。对无法唯一定位的源版面问题，可以重新分析版面。
+- 如果候选已通过机器检查，但同名文件占用了保存位置，选择“解决保存问题”，再点“另选位置保存候选…”。程序会按已核对的候选版本另存，人工验收仍可独立提交。
+
+## 检查与验收
+
+- 可在“翻译设置”关闭自动机器检查，先预览候选。使用“运行机器检查”检查当前候选与源 PDF。审校面板显示机器错误、警告和保留原文的记录。用户跳过的译文仍标记为“部分翻译”。
+- 对候选采用人工修订后，App 会生成新候选并重新进行机器检查。逐页对照后再提交这一版的人工验收。
+- 机器检查通过后，逐页对照原文和候选。点“记录人工验收”，填写复核者并确认已逐页检查。保存时，配套 CLI 核对原文、候选、检查记录及保版证据，并确认候选仍是复核者刚刚审阅的版本。
+- 默认导出在源 PDF 所在目录。若目标被其他文件占用，在验收窗口用“保存到…”改名或改位置，当前的机器检查结果可以继续使用。
 
 ## 构建
 
-在 macOS 安装 Xcode Command Line Tools，安装 Pillow 后，用 Python 3.11+ 执行 `python3 scripts/build_macos_app.py`。脚本从当前源码编译 arm64 和 x86_64，使用 ad-hoc 签名，并生成 ZIP。发行构建使用 `python3 scripts/build_macos_app.py --wheel dist/paperlocale-0.8.4-py3-none-any.whl`，将同版本 wheel 和 CLI 安装命令一起放入 ZIP。仅构建应用时，默认 CLI 路径仍为 `~/.local/bin/paperlocale`。可在虚拟环境运行 `python -m pip install ".[layout]"`，然后在“本地安装与运行目录”选择该环境的 `bin/paperlocale`。应用可执行文件支持 `--cli-path`，用于查看默认 CLI 路径。许可证见仓库 AGPL-3.0-only。
+在安装了 Xcode Command Line Tools 的 Mac 上，用 Python 3.11 或更新版本安装 Pillow，执行 `python3 scripts/build_macos_app.py`。脚本编译 arm64 和 x86_64，生成经过 ad-hoc 签名的 Universal 2 App 和 ZIP。若源码目录上的 FinderInfo 妨碍签名，可用 `--output-dir` 指定本地构建目录。
 
-## 模型与保存位置
-
-- Codex 使用本机登录，可选择推理强度。其他两种 API 服务不显示或传递此参数。
-- 兼容 API 填写服务地址（含版本前缀、不含 `/chat/completions`）、模型名和密钥。模型必须支持当前 CLI 的聊天翻译合同；不自动切换服务或模型。
-- Qwen-MT 提供百炼中国区地址与 `qwen-mt-plus` / `qwen-mt-flash` 选项，其他地区请使用账户对应地址与模型。
-- API 密钥仅保留在窗口内存并传入翻译子进程环境，不写日志或断点；留空时读取 app 启动环境的 `PAPERLOCALE_API_KEY`。
-- “保存到…”可指定完整 PDF 文件名。默认保存到原 PDF 目录；续跑沿用已记录选择。原论文、符号链接和无关现有文件不能覆盖。
-- 关闭机器 QA 时仍可指定保存位置，结果始终是未检查候选，不能视为 QA 或人工验收通过。
-
-界面顺序为“大模型 → 具体模型 → 推理强度（若支持）”。GPT 读取本机 Codex 模型目录与支持档位；只显示 CLI 支持的档位。其他兼容 API 可填写自定义模型。
+发行构建使用 `python3 scripts/build_macos_app.py --wheel dist/paperlocale-0.8.6-py3-none-any.whl`，在 ZIP 中加入该 wheel 和 CLI 安装命令。仅构建应用时，默认使用原有的 CLI 设置或 `~/.local/bin/paperlocale`。可在虚拟环境运行 `python -m pip install ".[layout]"`，然后在“翻译设置”选择该环境的 `bin/paperlocale`。运行 `PaperLocale.app/Contents/MacOS/PaperLocale --cli-path` 可查看应用当前使用的 CLI 路径。
 
 ## 0.8.3 鲁棒性修复
 

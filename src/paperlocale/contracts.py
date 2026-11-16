@@ -288,10 +288,25 @@ def glossary_abbreviation_text(text: str, domain: DomainPack | None) -> str:
 
 
 def scientific_quantities(text: str):
-    """共用既有标识符边界，物理量解析不消费URL、DOI或内部公式标记。"""
+    """在翻译链路统一读取数字、单位、完整统计分母及其原文位置。"""
     excluded = [match.span() for pattern in (URL_RE, DOI_RE, FORMULA_RE, STYLE_RE)
                 for match in pattern.finditer(text)]
-    return find_quantities(text, excluded)
+    return find_quantities(text, excluded, statistics=True)
+
+
+def unresolved_statistical_denominator(source: str) -> str | None:
+    """只有一处无法自动解释的分母时，才给出可在同一位置手工确认的源文短语。"""
+    unresolved = [quantity.unknown_denominator for quantity in scientific_quantities(source)
+                  if quantity.unknown_denominator is not None]
+    return unresolved[0] if len(unresolved) == 1 else None
+
+
+def _has_local_denominator(text: str, start: int, end: int) -> bool:
+    """确认只能解决分母含义不确定；译文必须在同一处明确写出统计对象。"""
+    before = text[max(0, start - 48):start]
+    after = text[end:end + 48]
+    return bool(re.search(r'每[\u3400-\u9fff \t]{2,32}$', before)
+                or re.match(r'[ \t]*[/／][ \t]*[^\W\d_]', after))
 
 
 def scientific_literal_spans(text: str) -> list[tuple[int, int]]:
@@ -350,6 +365,7 @@ def validate_translation(
     domain: DomainPack | None = None,
     *,
     require_cjk: bool = True,
+    confirmed_denominator: str | None = None,
 ) -> list[str]:
     """返回全部合同错误；空列表才允许译文进入渲染阶段。"""
 
@@ -393,6 +409,24 @@ def validate_translation(
     missing_quantities = required - available
     if missing_quantities:
         errors.append(f"quantity 数值/单位配对缺失或改变：{dict(missing_quantities)!r}；译文配对：{dict(available)!r}")
+    # 未掌握的分母可原样引用；若需中文改写，确认须绑定唯一的源文对象和该数值。
+    # 底层数值/单位配对、已识别的分母和其他内容检查始终照常执行。
+    unknown_source = [q for q in source_quantities if q.unknown_denominator is not None]
+    unknown_target = Counter((q.signature, q.unknown_denominator.casefold())
+                             for q in target_quantities if q.unknown_denominator is not None)
+    for quantity in unknown_source:
+        key = (quantity.signature, quantity.unknown_denominator.casefold())
+        if unknown_target[key]:
+            unknown_target[key] -= 1
+            continue
+        matches = [target for target in target_quantities if target.values == quantity.values]
+        if (len(unknown_source) == 1 and confirmed_denominator == quantity.unknown_denominator
+                and len(matches) == 1 and matches[0].signature == quantity.signature
+                and matches[0].unknown_denominator is None
+                and _has_local_denominator(quantity_target, matches[0].start, matches[0].end)):
+            continue
+        errors.append(f"quantity_review 统计分母待核对：原文“{quantity.unknown_denominator}”；"
+                      f"请核对对应的 {quantity.signature} 按什么对象统计。")
     source_free = hide_spans(quantity_source, [(q.start, q.end) for q in source_quantities])
     # 未匹配的目标物理量不能吞掉普通原文数字，例如15°N译成北纬15度。
     matched = required.copy()

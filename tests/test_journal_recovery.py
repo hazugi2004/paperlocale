@@ -8,8 +8,8 @@ import pymupdf as fitz
 from paperlocale.source_layout import extract_layout, save_json, load_plan, digest
 from paperlocale.journals import identify_journal
 from paperlocale.diagnostics import LocatedError, record_error, unit_location
-from paperlocale.repair_choices import apply_choice, interactive_run
-from paperlocale.workflow import initialize_run, load_manifest
+from paperlocale.repair_choices import apply_choice, interactive_run, preservation_skip_blocks
+from paperlocale.workflow import initialize_run, load_manifest, save_manifest
 from paperlocale.preserved_workflow import run_preserved
 from paperlocale.providers import TranslationProvider, Translation
 from paperlocale.domains import load_domain_pack
@@ -163,6 +163,64 @@ class JournalRecoveryTests(unittest.TestCase):
             self.assertTrue(units)
             self.assertTrue(any(b['preserve_reason']=='用户选择跳过，保留原文' for b in updated['blocks']))
             self.assertEqual(before,(run/'layout_plan.json').read_bytes())
+
+    def test_old_preservation_report_keeps_only_the_bound_source_block(self):
+        """旧断点只有重试。通过唯一字形证据恢复跳过，保留真实源字形且明确部分翻译。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self.make_source(root)
+            with fitz.open(source) as doc:
+                doc[0].draw_rect(fitz.Rect(40,350,280,500), color=(.4,.4,.4), fill=(.8,.8,.8))
+                doc.save(root/'graphic.pdf')
+            (root/'graphic.pdf').replace(source)
+            run = root/'run'
+            manifest = initialize_run(source_pdf=source, run_dir=run, source_language='en', target_language='zh-CN')
+            manifest['layout_mode'] = 'paragraph'
+            save_manifest(run, manifest)
+            plan = extract_layout(source, paragraph=True)
+            save_json(run/'layout_plan.json', plan)
+            original_plan = (run/'layout_plan.json').read_bytes()
+            source_hash = digest(source)
+            block = next(b for b in plan['blocks'] if 'experiment' in b['text'])
+            part = block['parts'][0]
+            char = part['chars'][0]
+            # 0.8.5 几何报错没有区块 ID；坐标比文本搜索更能区分重复字符。
+            region = {'page': block['page'], 'rect': char['rect']}
+            old_item = {'source': part['text'], 'pages': [block['page']], 'character': char['text'],
+                        'origin': char['origin'], 'regions': [region]}
+            report = record_error(LocatedError('第1页正文字符没有安全删除范围', [old_item], 'preservation'), run)
+            report['actions'] = [action for action in report['actions'] if action['key'] in {'r','q'}]
+            save_json(run/'error_report.json', report)
+            self.assertEqual(preservation_skip_blocks(run, manifest, [old_item]), {block['id']})
+            wrong = {**old_item, 'origin': [char['origin'][0]+.1, char['origin'][1]]}
+            self.assertEqual(preservation_skip_blocks(run, manifest, [wrong]), set())
+            self.assertEqual(preservation_skip_blocks(run, manifest, [{**old_item, 'id': None}]), set())
+            self.assertEqual(preservation_skip_blocks(run, {**manifest, 'status': 'collected'}, [old_item]), set())
+            apply_choice(run, 's', report['error_id'])
+
+            class LocalProvider(TranslationProvider):
+                def translate(self, segments, context):
+                    self.sources = [s.source for s in segments]
+                    return [Translation(s.id, '独立观测证实了此结果。') for s in segments]
+
+            font = root/'cjk.ttf'
+            font.write_bytes(fitz.Font('china-s').buffer)
+            provider = LocalProvider()
+            with patch('paperlocale.layout_detection.detect_regions', return_value=[]):
+                result = run_preserved(run, provider=provider, domain=load_domain_pack('ecology'),
+                                       plan_path=None, font_file=font, paragraph=True)
+            self.assertEqual(result['status'], 'qa_generated')
+            self.assertEqual(provider.sources, ['Independent observations confirm this result.'])
+            coverage = json.loads((run/'translation_coverage.json').read_text())
+            self.assertFalse(coverage['translation_complete'])
+            self.assertEqual(coverage['user_skipped_blocks'], [block['id']])
+            preserved = next(item for item in coverage['preserved_blocks'] if item['id'] == block['id'])
+            self.assertEqual(preserved['regions'], [{'page': block['page'], 'rect': block['rect']}])
+            self.assertEqual((run/'layout_plan.json').read_bytes(), original_plan)
+            self.assertEqual(digest(source), source_hash)
+            with fitz.open(source) as original, fitz.open(result['rendered_pdf']) as candidate:
+                self.assertEqual(candidate[0].search_for(block['text']), original[0].search_for(block['text']))
+                self.assertIn('独立观测', candidate[0].get_text())
 
     def test_corrupt_backup_refuses_rollback_before_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.6 — 2026-11-16
+
+- Add side-by-side PDF reading, page-linked review issues, and explicit acceptance and export from the macOS app.
+- Validate a user revision against the selected occurrence and candidate version. Rebuild the candidate and rerun PDF checks before acceptance.
+- Keep the version-matched CLI installation in the macOS download and use atmospheric-science glossary 2.0.0 for new translation runs.
+- See [installation and release details](docs/releases/v0.8.6.md).
+
 ## 0.8.4 — 2026-11-16
 
 - Use atmospheric-science glossary 2.0.0 by default for new translations, with 760 entries and per-segment guidance.

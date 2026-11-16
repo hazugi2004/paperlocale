@@ -17,7 +17,7 @@ domain_version="$(/usr/libexec/PlistBuddy -c 'Print :PaperLocaleAtmosphericScien
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
     fail '应用发布版本无效。请重新下载完整的 ZIP。'
 wheel="$archive_dir/paperlocale-$version-py3-none-any.whl"
-[[ -f "$wheel" ]] || fail "找不到安装文件 $wheel。请重新解压完整的 ZIP。"
+[[ -f "$wheel" ]] || fail "找不到安装文件 ${wheel}。请重新解压完整的 ZIP。"
 
 python=''
 for name in python3.12 python3.13 python3.11 python3.10 python3; do

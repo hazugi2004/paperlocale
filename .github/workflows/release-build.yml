@@ -45,11 +45,11 @@ jobs:
           HOME="$install_home" "$extracted/Install PaperLocale CLI.command"
           cli="$install_home/Library/Application Support/PaperLocale/cli/$expected_version/bin/paperlocale"
           "$cli" --version | grep -Fx "paperlocale $expected_version"
-          "$cli" domain-check atmospheric-science | grep -F "atmospheric-science $domain_version，"
+          "$cli" domain-check atmospheric-science | grep -F "atmospheric-science ${domain_version}，"
           # Foundation 可以规范化 /private/var，比较实际文件身份以核对 App 绑定。
           app_cli="$(HOME="$install_home" CFFIXED_USER_HOME="$install_home" "$app/Contents/MacOS/PaperLocale" --cli-path)"
           test "$app_cli" -ef "$cli"
-          "$app_cli" domain-check atmospheric-science | grep -F "atmospheric-science $domain_version，"
+          "$app_cli" domain-check atmospheric-science | grep -F "atmospheric-science ${domain_version}，"
       - uses: actions/upload-artifact@v7
         with:
           name: paperlocale-macos-${{ github.ref_name }}
@@ -80,7 +80,7 @@ jobs:
           EXPECTED_VERSION="$expected_version" python -c 'import importlib.metadata, os, paperlocale; expected = os.environ["EXPECTED_VERSION"]; assert importlib.metadata.version("paperlocale") == paperlocale.__version__ == expected'
           paperlocale --version | grep -Fx "paperlocale $expected_version"
           domain_version="$(python -c 'import json; from pathlib import Path; print(json.loads(Path("src/paperlocale/packs/atmospheric-science/manifest.json").read_text())["version"])')"
-          paperlocale domain-check atmospheric-science | grep -F "atmospheric-science $domain_version，"
+          paperlocale domain-check atmospheric-science | grep -F "atmospheric-science ${domain_version}，"
       - name: Resolve layout extra from the exact built wheel
         run: |
           # 从标签实际构建的 wheel 读取 extra 元数据，避免只验证源码目录而漏掉

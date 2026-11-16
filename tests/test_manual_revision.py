@@ -2,6 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import pymupdf as fitz
 
@@ -46,6 +47,11 @@ def prepare(root: Path, *, repeat: bool = False) -> tuple[Path, Path, Path]:
 class ManualRevisionTests(unittest.TestCase):
     def setUp(self):
         self.domain = load_domain_pack('atmospheric-science')
+        # 合成源页没有需要模型定位的图表；固定识别结果以隔离可选模型和网络资源。
+        # 正文定位、重排、保护区检查及机器 QA 仍使用实际流水线。
+        detector = patch('paperlocale.layout_detection.detect_regions', return_value=[])
+        self.addCleanup(detector.stop)
+        detector.start()
 
     def run_options(self, provider, font):
         return dict(provider=provider, domain=self.domain, plan_path=None, font_file=font, dpi=72,

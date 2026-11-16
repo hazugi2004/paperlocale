@@ -42,7 +42,7 @@ cli="$venv/bin/paperlocale"
 cli_version="$("$cli" --version)" || fail '无法启动安装后的 PaperLocale CLI。'
 [[ "$cli_version" == "paperlocale $version" ]] || fail "CLI 版本与应用不一致：$cli_version"
 domain_status="$("$cli" domain-check atmospheric-science)" || fail '安装后的大气科学术语库检查失败。'
-[[ "$domain_status" == *"atmospheric-science $domain_version，"* ]] ||
+[[ "$domain_status" == *"atmospheric-science ${domain_version}，"* ]] ||
     fail "大气科学术语库版本与下载包不一致：$domain_status"
 printf '\n%s\n%s\n\n%s\n%s\n' "$cli_version" "$domain_status" '已完成安装。CLI 路径' "$cli"
 printf '可将 PaperLocale.app 放入“应用程序”并打开。若要从终端运行 CLI，请执行\n%q --help\n' "$cli"

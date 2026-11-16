@@ -27,6 +27,13 @@ for provider in ["codex-local", "openai-compatible", "qwen-mt"] {
         precondition(args[1] == "/源 文.pdf")
     }
 }
+let legacy = TranslationOptions(pdf: "/源 文.pdf", runDirectory: "/旧断点", provider: "codex-local",
+    model: "original-model", effort: "high", baseURL: "", outputPDF: "", runQA: false,
+    layoutMode: "legacy", domain: "general", referencePolicy: "translate-titles").arguments
+precondition(!legacy.contains("--no-qa"))
+precondition(legacy[legacy.firstIndex(of: "--layout-mode")! + 1] == "legacy")
+precondition(legacy[legacy.firstIndex(of: "--domain")! + 1] == "general")
+precondition(legacy[legacy.firstIndex(of: "--reference-policy")! + 1] == "translate-titles")
 print("Swift provider and output options passed")
 ''')
             binary = Path(directory) / "options-test"

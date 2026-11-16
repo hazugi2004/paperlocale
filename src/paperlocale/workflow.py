@@ -125,6 +125,7 @@ def _verify_rendered_pdf(
     manifest: dict[str, object],
     *,
     bind_legacy: bool = False,
+    expected_sha256: str | None = None,
 ) -> Path:
     """确认候选 PDF 与渲染阶段绑定的 SHA-256 一致。
 
@@ -133,11 +134,14 @@ def _verify_rendered_pdf(
     """
 
     rendered = manifest.get("rendered_pdf")
+    expected = manifest.get("rendered_sha256")
+    # 交互式审校还要核对用户实际看过的候选。即使另一版已重新通过 QA，也不能沿用这次确认。
+    if expected_sha256 is not None and expected_sha256 != expected:
+        raise ValueError("当前候选与复核者刚审阅的版本不同；请重新打开并核对候选 PDF")
     if not isinstance(rendered, str) or not Path(rendered).is_file():
         raise FileNotFoundError("运行清单中的 rendered_pdf 不存在")
     path = Path(rendered).resolve()
     actual = _sha256(path)
-    expected = manifest.get("rendered_sha256")
     if not isinstance(expected, str) or not expected:
         if not bind_legacy:
             raise ValueError("运行清单缺少译文 PDF 哈希；请重新执行 qa")
@@ -149,7 +153,12 @@ def _verify_rendered_pdf(
     return path
 
 
-def export_run_pdf(run_dir: Path, *, require_qa: bool = True) -> Path:
+def export_run_pdf(
+    run_dir: Path, *,
+    require_qa: bool = True,
+    expected_rendered_sha256: str | None = None,
+    output_pdf: Path | None = None,
+) -> Path:
     """将完整候选安全复制到用户指定位置，默认放在源 PDF 所在目录。
 
     运行目录里的 PDF 仍是 QA 和修复的唯一依据。目标若属于本运行的旧导出，
@@ -161,7 +170,7 @@ def export_run_pdf(run_dir: Path, *, require_qa: bool = True) -> Path:
     if manifest["status"] not in allowed:
         raise ValueError("当前阶段不允许导出译文；默认要求完成机器 QA")
     source = _verify_source_pdf(manifest)
-    rendered = _verify_rendered_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest, expected_sha256=expected_rendered_sha256)
     # 只有 run --no-qa 明确调用时允许未检查候选，状态始终保持 rendered；
     # 普通导出和人工验收仍要求当前源文、译文与 QA 报告哈希完全一致。
     if require_qa:
@@ -169,8 +178,12 @@ def export_run_pdf(run_dir: Path, *, require_qa: bool = True) -> Path:
         if (report.get("errors") or report.get("translated_sha256") != manifest["rendered_sha256"]
                 or report.get("source_sha256") != manifest["source_sha256"]):
             raise ValueError("机器 QA 与当前源文或译文不一致，不能导出")
-    destination = Path(str(manifest["output_pdf"])) if manifest.get("output_pdf") else source.with_name(
-        f"{source.stem}_translated_by_paperlocale.pdf")
+    if output_pdf is not None:
+        destination = output_pdf.expanduser().absolute()
+    elif manifest.get("output_pdf"):
+        destination = Path(str(manifest["output_pdf"]))
+    else:
+        destination = source.with_name(f"{source.stem}_translated_by_paperlocale.pdf")
     if destination.resolve() in {source.resolve(), rendered.resolve()}:
         raise ValueError("输出位置不能覆盖源 PDF 或运行目录中的候选 PDF")
     if destination.suffix.lower() != ".pdf":
@@ -178,27 +191,28 @@ def export_run_pdf(run_dir: Path, *, require_qa: bool = True) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink():
         raise FileExistsError(f"目标是符号链接，拒绝覆盖：{destination}")
+    existing_hash = None
     if destination.exists():
         existing_hash = _sha256(destination) if destination.is_file() else None
         if existing_hash != manifest["rendered_sha256"] and (
                 manifest.get("exported_pdf") != str(destination)
                 or manifest.get("exported_sha256") != existing_hash):
             raise FileExistsError(f"目标已有不同内容，拒绝覆盖：{destination}")
-        if existing_hash == manifest["rendered_sha256"]:
-            manifest.update(exported_pdf=str(destination), exported_sha256=existing_hash)
-            save_manifest(root, manifest)
-            return destination
-    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
-    try:
-        with rendered.open("rb") as source_handle, temporary.open("wb") as output_handle:
-            shutil.copyfileobj(source_handle, output_handle)
-            output_handle.flush()
-            os.fsync(output_handle.fileno())
-        if _sha256(temporary) != manifest["rendered_sha256"]:
-            raise RuntimeError("译文复制后哈希不一致，未替换目标文件")
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+    if existing_hash != manifest["rendered_sha256"]:
+        temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+        try:
+            with rendered.open("rb") as source_handle, temporary.open("wb") as output_handle:
+                shutil.copyfileobj(source_handle, output_handle)
+                output_handle.flush()
+                os.fsync(output_handle.fileno())
+            if _sha256(temporary) != manifest["rendered_sha256"]:
+                raise RuntimeError("译文复制后哈希不一致，未替换目标文件")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+    # 审校时允许改名解决目标冲突。只在安全导出成功后记录新位置，失败仍能使用原来的检查报告。
+    if output_pdf is not None:
+        manifest["output_pdf"] = str(destination)
     manifest.update(exported_pdf=str(destination), exported_sha256=manifest["rendered_sha256"])
     save_manifest(root, manifest)
     return destination
@@ -2136,7 +2150,10 @@ def run_to_qa(
     return manifest
 
 
-def accept_run(run_dir: Path, *, reviewed_by: str) -> None:
+def accept_run(
+    run_dir: Path, *, reviewed_by: str, expected_rendered_sha256: str | None = None,
+    export: bool = False, output_pdf: Path | None = None,
+) -> Path | None:
     """记录人工逐页验收；必须显式提供复核者，不允许自动批准。"""
 
     if not reviewed_by.strip():
@@ -2146,7 +2163,7 @@ def accept_run(run_dir: Path, *, reviewed_by: str) -> None:
     if manifest["status"] != "qa_generated":
         raise ValueError(f"accept 只接受 qa_generated，当前为 {manifest['status']}")
     source = _verify_source_pdf(manifest)
-    rendered = _verify_rendered_pdf(manifest)
+    rendered = _verify_rendered_pdf(manifest, expected_sha256=expected_rendered_sha256)
     report_path = Path(str(manifest.get("qa_report", "")))
     if not report_path.is_file():
         raise FileNotFoundError("QA 报告不存在")
@@ -2167,6 +2184,15 @@ def accept_run(run_dir: Path, *, reviewed_by: str) -> None:
                 preservation.get("translated_sha256") != manifest["rendered_sha256"] or
                 preservation.get("layout_plan_sha256") != manifest.get("layout_plan_sha256")):
             raise ValueError("源版面保护报告与当前 PDF/计划不一致，不能验收")
+    exported = None
+    if export:
+        # 核验当前候选的全部审校证据后才能写入正式输出。路径冲突时保留
+        # 待验收状态，用户可以改名后继续确认同一份候选。
+        reviewed_hash = manifest["rendered_sha256"]
+        exported = export_run_pdf(root, expected_rendered_sha256=reviewed_hash, output_pdf=output_pdf)
+        manifest = load_manifest(root)
+        if manifest.get("rendered_sha256") != reviewed_hash or manifest["status"] != "qa_generated":
+            raise ValueError("导出期间候选已变化，请重新查看当前运行")
     report["visual_accepted"] = True
     report["visual_reviewed_by"] = reviewed_by.strip()
     report["visual_reviewed_at"] = _utc_now()
@@ -2176,3 +2202,4 @@ def accept_run(run_dir: Path, *, reviewed_by: str) -> None:
     manifest["status"] = "accepted"
     manifest["accepted_by"] = reviewed_by.strip()
     save_manifest(root, manifest)
+    return exported

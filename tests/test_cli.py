@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import contextlib
 import io
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -42,7 +43,25 @@ class CliTest(unittest.TestCase):
         self.assertEqual(manifest["status"], "rendered")
 
     def test_package_version_matches_current_release(self) -> None:
-        self.assertEqual(__version__, "0.8.4")
+        self.assertEqual(__version__, "0.8.6")
+
+    def test_inspect_old_cache_diagnostic_without_rewriting_checkpoint(self) -> None:
+        """旧报告无需重新调用模型即可获得当前处置方法。查看不会改变诊断身份。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "error_report.json"
+            old = {"error_id": "current", "category": "operation", "message": "缓存领域包不一致",
+                   "classification": {"code": "operation.other"}, "actions": [], "items": []}
+            path.write_text(json.dumps(old), encoding="utf-8")
+            args = build_parser().parse_args(["repair-inspect", "--run-dir", directory, "--error-id", "current"])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(cli._execute(args), 0)
+            self.assertEqual(json.loads(output.getvalue())["classification"]["code"], "cache.incompatible")
+            self.assertEqual(json.loads(path.read_text()), old)
+            args.error_id = "previous"
+            with self.assertRaisesRegex(ValueError, "当前错误已更新"):
+                cli._execute(args)
 
     def test_qwen_csv_key_is_opaque_and_takes_explicit_precedence(self) -> None:
         """有标点的完整CSV字段传入Provider；环境变量不得替换显式选定的密钥。"""
@@ -215,6 +234,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.rect, [40.0, 120.0, 500.0, 160.0])
         self.assertEqual(args.font_size, 9.5)
         self.assertTrue(args.single_line)
+        # 经过实际命令分发，防止误传仅属于 run 的版面和缓存参数。
+        with patch("paperlocale.cli.apply_text_repair", autospec=True) as apply, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli._execute(args), 0)
+        apply.assert_called_once_with(
+            Path("run"), page_number=27, rectangle=(40, 120, 500, 160),
+            replacement="图5 农业干旱评估", font_file=Path("NotoSansCJKsc-Regular.otf"),
+            font_size=9.5, description="修复跨对象碎裂图注", single_line=True,
+            min_font_size=None,
+        )
 
     def test_restore_source_vectors_requires_run_and_description(self) -> None:
         """源矢量重放必须通过显式、可审计的 PaperLocale 命令执行。"""

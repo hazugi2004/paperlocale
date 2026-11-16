@@ -396,7 +396,10 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
     errors = anchor_errors(unit, target)
     if errors:
         raise ValueError('; '.join(errors))
-    tokens = re.findall(r'\{v\d+\}|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', compact_target(target))
+    # 人工确认的单段文字保留空格和标点；段落框仍照常自动换行。
+    verbatim = '_manual_revision' in unit
+    text = target if verbatim else compact_target(target)
+    tokens = re.findall(r'\{v\d+\}|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', text)
     anchors, tokens = wrap_citation_anchors(unit, tokens)
     size = median(f['size'] for f in unit['frames'])
     floor = size*.8 if min_size is None else min_size
@@ -492,7 +495,7 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                                 prior['shift'][1] += delta
                         if baseline-bottom > rect.y1+.001:
                             break
-                    if token == ' ' and not line_items:
+                    if token == ' ' and not line_items and not verbatim:
                         cursor += 1
                         continue
                     item = {'page': frame['page'], 'rect': [x, baseline-top, x+width, baseline-bottom],

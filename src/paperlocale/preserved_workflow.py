@@ -19,6 +19,7 @@ import pymupdf as fitz
 from .contracts import read_jsonl, write_jsonl_atomic, validate_translation
 from .providers import Segment, TranslationContext
 from .pipeline import translate_segment_file, restored_content_errors
+from .manual_revision import occurrence_id, revision_errors
 from .safe_text import (safe_erase_rectangles, prepare_source_layer, restore_changed_isolated_regions,
                         page_pixels, region_pixels, fixed_text_rectangles, fixed_characters,
                         restore_default_color_spaces, verify_fixed_ink)
@@ -92,21 +93,50 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                            skip_block_ids=set(choices.get('skip_blocks', [])))
     if plan.get('journal'):
         print('期刊：'+plan['journal']['name']+'；识别依据：'+plan['journal']['evidence'], flush=True)
+    locations = []
+    revisions = manifest.get('manual_revisions', {})
+    remaining_revisions = set(revisions)
+    skipped_ids = set(choices['skip'])
     for unit in units:
-        default_floor = min_font_size if min_font_size is not None else unit_location(unit)['font_size']
+        location = unit_location(unit)
+        revision_id = occurrence_id(location)
+        if revision_id in revisions:
+            revision = revisions[revision_id]
+            if revision['segment_id'] != unit['id'] or revision_id not in remaining_revisions:
+                raise ValueError('人工修订的译文区块在当前版面中不唯一。')
+            remaining_revisions.remove(revision_id)
+            # 明确保留原文时仍保留修订供回退追溯，但不校验或写入已跳过的译文。
+            if unit['id'] not in skipped_ids:
+                errors = revision_errors(unit['source'], revision['target'], domain, location['anchors'],
+                                         revision.get('confirmed_denominator'))
+                if errors:
+                    raise LocatedError('人工修订须重新确认。', [{**location, 'target': revision['target'],
+                                         'manual_revision': revision_id, 'validation_source': unit['source'],
+                                         'errors': errors}], 'translation')
+                unit['_manual_revision'] = revision_id
+        default_floor = min_font_size if min_font_size is not None else location['font_size']
         unit['_repair_font_floor'] = choices['font_sizes'].get(unit['id'], default_floor)
-    save_json(root / 'source_locations.json', [unit_location(unit) for unit in units])
-    skipped_units = [unit for unit in units if unit['id'] in choices['skip']]
-    skipped_ids = {u['id'] for u in skipped_units}
+        locations.append({**location, 'font_size': unit['_repair_font_floor']})
+    if remaining_revisions:
+        raise ValueError('人工修订的区块已无法在当前版面定位，请恢复修订前的断点。')
+    save_json(root / 'source_locations.json', locations)
+    skipped_units = [unit for unit in units if unit['id'] in skipped_ids]
     all_ids = {u['id'] for u in units}
     if set(choices['skip']) - all_ids or set(choices['font_sizes']) - all_ids:
         raise ValueError('修复选择包含当前版面没有的片段')
     units = [unit for unit in units if unit['id'] not in skipped_ids]
     def fit_selected(unit, target, font, minimum, bold):
         try:
-            return fit_unit(unit, target, font, choices['font_sizes'].get(unit['id'], minimum), bold)
+            fitted = fit_unit(unit, target, font, choices['font_sizes'].get(unit['id'], minimum), bold)
+            if '_manual_revision' in unit:
+                for placement in fitted:
+                    placement['manual_revision'] = unit['_manual_revision']
+                    placement['paragraph_id'] = unit['id']
+            return fitted
         except ValueError as error:
-            raise LocatedError(str(error), [{**unit_location(unit), 'validation_source': unit['source'], 'target': target, 'errors': [str(error)]}], 'layout') from error
+            raise LocatedError(str(error), [{**unit_location(unit), 'validation_source': unit['source'],
+                              'target': target, 'manual_revision': unit.get('_manual_revision'),
+                              'errors': [str(error)]}], 'layout') from error
     if import_cache_from is not None:
         if not paragraph:
             raise ValueError('缓存导入只支持段落模式')
@@ -195,13 +225,19 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     save_json(root / 'repair_context.json', {'source_sha256': manifest['source_sha256'],
               'layout_plan_sha256': plan_hash, 'domain': domain.pack_id,
               'domain_sha256': domain.content_sha256, 'anchors': anchor_text})
+    model_ids = {unit['id'] for unit in units if '_manual_revision' not in unit}
     translate_segment_file(segments_path=segments, translations_path=translations,
                            provider=provider, domain=domain, contract_repair=contract_repair,
                            max_segments=max_segments, max_characters=max_characters, anchor_text=anchor_text,
+                           manually_covered=frozenset(set(unique) - model_ids),
                            progress=lambda done, total: emit_progress("翻译片段", .15+.55*done/max(1,total), done, total))
     targets = {row['id']: row['target'] for row in read_jsonl(translations)} if translations.exists() else {}
-    if set(targets) != set(unique):
+    if model_ids - targets.keys() or targets.keys() - unique.keys():
         raise ValueError('正文译文仍有缺口，不能创建候选 PDF')
+    def target_for(unit):
+        if revision_id := unit.get('_manual_revision'):
+            return revisions[revision_id]['target']
+        return targets[unit['id']]
     # 普通翻译可能在固定公式/引用之间过长。仅对溢出的逻辑段落自动请求
     # 同一模型进行一次等义精炼，仍验证科学合同和真实字体宽度，不缩短科学事实。
     full_font = fitz.Font(fontfile=str(font_file))
@@ -218,8 +254,11 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     failed = {}
     for unit in units:
         try:
-            fit_selected(unit, targets[unit['id']], full_font, min_font_size, bold_font)
+            fit_selected(unit, target_for(unit), full_font, min_font_size, bold_font)
         except ValueError as error:
+            # 用户确认的文字只能由用户再修订，自动等义精炼不处理它。
+            if '_manual_revision' in unit:
+                raise
             failed[unit['id']] = (unit, str(error))
     if failed and not contract_repair:
         # fit_unit 同时检查锚点合同和排版，不能把所有校验错误都称为溢出。
@@ -284,7 +323,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             raise LocatedError('自动版面精炼未通过科学内容校验：' + str(errors), [{**unit_location(unit), 'validation_source': unit['source'],
                                'target': refined, 'errors': errors}], 'translation')
         for occurrence in units:
-            if occurrence['id'] == sid:
+            if occurrence['id'] == sid and '_manual_revision' not in occurrence:
                 fit_selected(occurrence, refined, full_font, min_font_size, bold_font)
         targets[sid] = refined
         write_jsonl_atomic(translations, [{**row, 'target': targets[row['id']],
@@ -297,11 +336,14 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         'translation_complete': not skipped_units and not choices.get('skip_blocks'),
         'translated_blocks': sorted({p['source_block'] for u in units for slot in u['slots'] for p in slot if 'source_block' in p}),
         'preserved_blocks': [{'id': b['id'], 'page': b['page'], 'kind': b['kind'],
-                              'text': b['text'], 'reason': b.get('preserve_reason') or b['kind']}
+                              'text': b['text'], 'reason': b.get('preserve_reason') or b['kind'],
+                              'regions': [{'page': b['page'], 'rect': b['rect']}]}
                              for b in plan['blocks'] if b['kind'] not in translated_kinds],
-        'validated_segments': len(targets), 'semantic_review': 'pending', 'visual_review': 'pending'})
+        'manual_revision_count': sum('_manual_revision' in unit for unit in units),
+        'validated_segments': len(unique), 'semantic_review': 'pending', 'visual_review': 'pending'})
     # 预排版使用最终嵌入字体的同一个子集，避免测量原字体、写入子集产生差异。
-    font_bytes, font_evidence = _subset_repair_font(font_file, (''.join(targets.values()) or ' '))
+    font_text = ''.join(target_for(unit) for unit in units) or ' '
+    font_bytes, font_evidence = _subset_repair_font(font_file, font_text)
     font = fitz.Font(fontbuffer=font_bytes)
     from .unicode_fonts import unicode_glyph_aliases, insert_text_exact
     font_aliases = unicode_glyph_aliases(font_bytes)
@@ -309,12 +351,12 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     bold_bytes = None
     if bold_file is not None:
         # 粗体也使用最终嵌入的字形子集测量，不能用细体宽度预检后再加粗。
-        bold_bytes, bold_evidence = _subset_repair_font(Path(bold_file), (''.join(targets.values()) or ' '))
+        bold_bytes, bold_evidence = _subset_repair_font(Path(bold_file), font_text)
         bold_font = fitz.Font(fontbuffer=bold_bytes)
         bold_aliases = unicode_glyph_aliases(bold_bytes)
         font_evidence = {'regular': font_evidence, 'bold': bold_evidence}
     placements = [placement for unit in units
-                  for placement in fit_selected(unit, targets[unit['id']], font, min_font_size, bold_font)]
+                  for placement in fit_selected(unit, target_for(unit), font, min_font_size, bold_font)]
     # 写入和完整检查只针对临时文件。任何异常均不触碰已有候选，也不改变验收。
     emit_progress('写入完整候选并核对保护区', .82)
     temporary = root / '.preserved.tmp.pdf'
@@ -460,10 +502,11 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     extracted = ''.join(c['c'] for c in page_chars[item['page']] if abs(c['origin'][1] - item['baseline']) < .01 and fitz.Point((c['bbox'][0] + c['bbox'][2]) / 2,
                                                                            (c['bbox'][1] + c['bbox'][3]) / 2) in rectangle)
                 if ''.join(extracted.split()) != ''.join(item['target'].split()):
-                    unit = next((u for u in units if u['id'] == item.get('paragraph_id')), None)
+                    unit = next((u for u in units if u['id'] == item.get('paragraph_id') and
+                                 u.get('_manual_revision') == item.get('manual_revision')), None)
                     raise LocatedError(f'第{item["page"]}页回读译文与排版内容不同', [{
                         'id': item.get('paragraph_id'), 'source': unit['source'] if unit else '',
-                        'target': targets[unit['id']] if unit else item['target'],
+                        'target': target_for(unit) if unit else item['target'],
                         'pages': [item['page']], 'regions': [{'page':item['page'], 'rect':item['rect']}],
                         'errors': [f'preservation.readback 应写入 {item["target"]!r}；实际回读 {extracted!r}；请核对重叠、缺字或错位。'],
                     }], 'preservation')

@@ -12,19 +12,23 @@ struct TranslationOptions {
     var baseURL: String
     var outputPDF: String
     var runQA: Bool
+    var layoutMode = "paragraph"
+    var domain = "atmospheric-science"
+    var referencePolicy = "preserve"
 
     var arguments: [String] {
         var args = ["run", pdf, "--run-dir", runDirectory, "--provider", provider,
-                    "--model", model, "--layout-mode", "paragraph",
-                    "--target-language", "zh-CN", "--domain", "atmospheric-science",
+                    "--model", model, "--layout-mode", layoutMode,
+                    "--target-language", "zh-CN", "--domain", domain,
                     "--unattended", "--no-wait-on-error"]
+        if referencePolicy != "preserve" { args += ["--reference-policy", referencePolicy] }
         if provider == "codex-local" {
             args += ["--reasoning-effort", effort]
         } else {
             args += ["--base-url", baseURL, "--api-key-env", "PAPERLOCALE_API_KEY"]
         }
         if !outputPDF.isEmpty { args += ["--output-pdf", outputPDF] }
-        if !runQA { args += ["--no-qa"] }
+        if !runQA && layoutMode != "legacy" { args += ["--no-qa"] }
         return args
     }
 }
@@ -71,9 +75,12 @@ struct SourceIssue: Decodable {
     let regions: [SourceRegion]?
     let source: String
     let pages: [Int]?
-    var pageLabel: String { "PDF 第 " + (pages ?? []).map { String($0) }.joined(separator: ", ") + " 页" }
+    var pageLabel: String {
+        let located = pages ?? regions.map { Array(Set($0.map(\.page))).sorted() } ?? []
+        return located.isEmpty ? "页码未定位" : "PDF 第 " + located.map(String.init).joined(separator: ", ") + " 页"
+    }
 }
-struct SourceRegion: Decodable {
+struct SourceRegion: Decodable, Equatable {
     let page: Int
     let rect: [Double]
 }
@@ -94,6 +101,7 @@ struct ErrorClassification: Decodable {
 }
 struct RepairReport: Decodable, Identifiable {
     let source_pdf: String?
+    let source_sha256: String?
     let classification: ErrorClassification?
     let error_id: String
     let message: String

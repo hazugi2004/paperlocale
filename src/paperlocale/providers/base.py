@@ -136,7 +136,12 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
         quantities = scientific_quantities(segment.source)
         if quantities:
             item["scientific_quantities"] = [
-                {"source": segment.source[q.start:q.end], "signature": q.signature} for q in quantities
+                {
+                    "source": segment.source[q.start:q.end],
+                    "signature": q.signature,
+                    **({"denominator_for_review": q.unknown_denominator} if q.unknown_denominator else {}),
+                }
+                for q in quantities
             ]
         feedback = context.repair_feedback.get(segment.id)
         if segment.id in context.anchor_text:
@@ -170,6 +175,8 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
 3. 保留所有数字、正负号、单位、变量缩写、数据集名、URL、DOI 和引文标记。
    scientific_quantities 中数值与单位必须成对保留；允许km/千米、m/s/m s−1等
    等价表示，此规则优先于单位的表面形式要求；不得丢单位或进行单位倍率/温度换算。
+   统计分母的限定语须完整翻译；例如 event-occurring summer 指发生过事件的夏季。
+   如有 denominator_for_review，须保留该原文分母短语，便于复核统计口径。
    scientific_literals 中的小数点、变量及运算符必须原样保留，只允许排版空白变化。
 4. 逐句完整翻译，不得用省略号、空缺或半句话代替原文；源文自身的异常标点需保留。
    每个输入段落输出一个连续自然段，不插入段内换行、缩进或汉字之间的空格。

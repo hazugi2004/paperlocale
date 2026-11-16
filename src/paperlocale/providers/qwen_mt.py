@@ -228,6 +228,19 @@ class QwenMTProvider(TranslationProvider):
                                          {**protected_terms, **{marker: marker for marker in sentinels}}),
                 },
             }
+            denominators = [q.denominator for q in quantities if q.denominator]
+            unrecognized = [q.unknown_denominator for q in quantities if q.unknown_denominator]
+            if denominators:
+                # 完整统计分母可自然译为中文，限定条件必须和对应数字一起保留。
+                body['translation_options']['domains'] += (
+                    '\n完整翻译这些统计分母及限定语，保留它们对应的数值和单位：'
+                    + json.dumps(denominators, ensure_ascii=False)
+                )
+            if unrecognized:
+                body['translation_options']['domains'] += (
+                    '\n以下统计分母保留原文，便于核对统计对象：'
+                    + json.dumps(unrecognized, ensure_ascii=False)
+                )
             if segment.id in context.anchor_text:
                 # Qwen 看见的是本次请求的保护标记，说明必须使用同一映射，
                 # 不能把磁盘 {vN} 直接当成模型输入中已有的标记。

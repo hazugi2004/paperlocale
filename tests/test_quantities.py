@@ -1,6 +1,6 @@
 """数值—单位配对回归同时服务GPT/Qwen；不请求网络或改变模型协议。"""
 import unittest
-from paperlocale.contracts import validate_translation, scientific_quantities
+from paperlocale.contracts import validate_translation, scientific_quantities, unresolved_statistical_denominator
 from paperlocale.domains import load_domain_pack
 from paperlocale.quantities import find_quantities
 from paperlocale.providers.base import Segment, TranslationContext
@@ -103,6 +103,54 @@ class QuantityTests(unittest.TestCase):
         self.assertTrue(validate_translation('The rate is 2 day/hour.', '速率为2天。'))
         self.assertTrue(validate_translation('day/hour', 'day'))
 
+    def test_days_per_event_occurring_summer_keep_the_whole_denominator(self):
+        source = 'The mean is 10.43 days per event-occurring summer and the maximum is 7.73 days (Fig. 3d–i).'
+        quantities = scientific_quantities(source)
+        self.assertEqual(
+            [(source[q.start:q.end], q.signature) for q in quantities],
+            [('10.43 days per event-occurring summer', '10.43 d / event-occurring summer'),
+             ('7.73 days', '7.73 d')],
+        )
+        # 旧版面计划继续使用原字形扫描。这里的统计限定语只参与翻译与内容校验。
+        self.assertEqual(find_quantities(source)[0].signature, '10.43 d event^-1')
+        for good in ('平均值为10.43天/发生事件的夏季', '每个发生过事件的夏季平均 10.43 天',
+                     '每个有事件发生的夏季平均 10.43 天', '在发生过事件的夏季中，平均为10.43天'):
+            with self.subTest(good=good):
+                self.assertEqual(validate_translation(source, good + '，最大值为7.73天（图3d–i）。'), [])
+        for bad in ('每个夏季平均10.43天', '每个未发生过事件的夏季平均10.43天',
+                    '10.43天/发生过事件的夏季以外', '10.43天/次事件',
+                    '每次事件平均10.43天', '每个发生过事件的夏季平均11.43天',
+                    '每个发生过事件的夏季平均10.43小时', '每个发生过事件的夏季平均7.73天'):
+            with self.subTest(bad=bad):
+                self.assertTrue(validate_translation(source, bad + '，最大值为7.73天（图3d–i）。'))
+        self.assertEqual(validate_translation('10.43 days per event', '每次事件平均10.43天'), [])
+        self.assertEqual(validate_translation('10.43 days event−1', '10.43天/每次事件'), [])
+        self.assertEqual(validate_translation('10.43 days per event', '10.43天/次事件'), [])
+        self.assertTrue(validate_translation('10.43 days per event', '10.43天'))
+
+    def test_unrecognized_denominator_requires_exact_scoped_confirmation(self):
+        source = '10.43 days per event-contributing month'
+        target = '10.43天/有事件贡献的月份'
+        phrase = 'event-contributing month'
+        self.assertEqual(unresolved_statistical_denominator(source), phrase)
+        self.assertTrue(validate_translation(source, target)[0].startswith('quantity_review '))
+        self.assertEqual(validate_translation(source, target, confirmed_denominator=phrase), [])
+        self.assertEqual(validate_translation(source, '统计平均为10.43天/event-contributing month'), [])
+        for bad in ('10.43天', '11.43天/有事件贡献的月份', '10.43小时/有事件贡献的月份',
+                    '10.43天/次事件', '每次事件平均10.43天', '10.43天/每次事件',
+                    '10.43天/event-contributing year'):
+            with self.subTest(bad=bad):
+                self.assertTrue(validate_translation(source, bad, confirmed_denominator=phrase))
+        self.assertTrue(validate_translation(source, target, confirmed_denominator='other'))
+        self.assertIsNone(unresolved_statistical_denominator(source + ' or ' + source))
+        self.assertTrue(validate_translation(source + ' or ' + source, target + '或' + target,
+                                             confirmed_denominator=phrase))
+
+    def test_figure_suffix_is_not_a_quantity(self):
+        self.assertEqual([q.signature for q in scientific_quantities('Fig. 3d–i depicts the 3 d trend.')], ['3 d'])
+        self.assertEqual(validate_translation('Fig. 3d–i shows the trends.', '图3d–i展示了变化趋势。'), [])
+        self.assertTrue(validate_translation('Fig. 3d–i shows the trends.', '图4d–i展示了变化趋势。'))
+
     def test_gpt_prompt_has_joint_constraints_without_changing_key_schema(self):
         context=TranslationContext('en','zh-CN',load_domain_pack('atmospheric-science'))
         prompt,schema=_keyed_request([Segment('original-hash','Measure 500 hPa and 50 km.')],context)
@@ -110,6 +158,14 @@ class QuantityTests(unittest.TestCase):
         self.assertIn('500 hPa',prompt)
         self.assertEqual(schema['properties']['translations']['required'],['s1'])
         self.assertNotIn('original-hash',prompt)
+
+    def test_gpt_prompt_preserves_the_complete_statistical_phrase(self):
+        context = TranslationContext('en', 'zh-CN', load_domain_pack('atmospheric-science'))
+        phrase = '10.43 days per event-occurring summer'
+        prompt, _schema = _keyed_request([Segment('s1', phrase)], context)
+        self.assertIn('"source": "' + phrase + '"', prompt)
+        self.assertIn('"signature": "10.43 d / event-occurring summer"', prompt)
+        self.assertNotIn('10.43 d event^-1', prompt)
 
     def test_layout_split_decimals_and_math_variables_remain_literal(self):
         from paperlocale.contracts import scientific_literal_spans

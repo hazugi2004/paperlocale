@@ -7,6 +7,7 @@ RULES = {
     'formula': ('content.anchor', '固定公式或引用锚点', '按原文顺序保留全部 {vN} 标记；在 PDF 对照中核对其对应公式或引用，不猜测标记位置。'),
     'restored_content': ('content.anchor', '锚点及还原后的句子结构', '核对锚点顺序和还原后的括号；编辑失败译文时不要重复添加锚点已经包含的括号。'),
     'number': ('content.number', '数字保留', '逐项对照缺失数字和原句；核对年代、阈值、精度及正负号后修改译文。'),
+    'quantity_review': ('content.quantity_review', '统计分母待核对', '比较原句影响统计范围的限定语，逐项核对这一处分母与对应数值。'),
     'quantity': ('content.quantity', '数值与单位配对', '保持数值与对应单位相邻且含义一致；单位不能串到另一处数字上，也不能自行换算。'),
     'unit': ('content.quantity', '单位保留', '对照源 PDF 核对单位及上下标，保留数值和单位的对应关系。'),
     'abbreviation': ('content.abbreviation', '缩写保留', '保留指出的缩写及出现次数；即使展开为中文全称，仍需在对应位置保留原缩写。'),
@@ -34,14 +35,22 @@ def rule_detail(message: str) -> dict:
 
 def classify(error: Exception, category: str) -> dict:
     message = str(error).lower()
-    if category == 'translation':
+    if category == 'cache' or message == '缓存领域包不一致':
+        values = ('cache.incompatible', '旧译文缓存无法导入', '可跳过这次旧缓存导入，从当前断点继续。已核验并写入当前运行的译文仍可复用。')
+    elif category == 'translation':
         values = ('content.validation', '译文内容校验', '可在本窗口编辑失败译文并校验；合格片段继续复用。')
     elif category == 'layout' and '字体缺少字形' in message:
         values = ('layout.font', '中文字体缺字', '核对缺少的具体字符，纠正译文控制字符或在应用设置选择包含该字形的中文字体；缩小字号无效。')
     elif category == 'layout':
         values = ('layout.capacity', '译文排版容量', '先核对 PDF 区域，再等义修订译文或降低该片段字号；不能删减科学信息。')
     elif category in {'extraction', 'source-glyph', 'preservation'}:
-        values = ('source.'+category, '源 PDF 提取或保护', '在 PDF 预览核对报错区域；可用当前支持的保留原文选项继续，但结果将明确标为部分翻译。未知结构需修复引擎，不能绕过保护。')
+        values = ('source.'+category, '源 PDF 提取或保护', '先到原文查看异常。可唯一定位到待译区块时，可保留该区块原文并继续；结果会标为部分翻译。')
+    elif any(t in message for t in ('源 pdf 不存在', '源 pdf 在运行初始化后发生变化', '已绑定另一份源 pdf')):
+        values = ('source.identity', '源 PDF 缺失或已更改', '重新打开原来的 PDF 可恢复其断点。若要翻译修改过的文件，请为它新建运行。')
+    elif any(t in message for t in ('与复核者刚审阅的版本不同', '译文 pdf 在 render 后发生变化', 'rendered_pdf 不存在')):
+        values = ('candidate.changed', '候选 PDF 已更改', '重新查看当前运行和候选；若该候选已删除或手工改写，可重新分析同一源 PDF。')
+    elif any(t in message for t in ('qa 报告', '机器 qa 与当前', '源版面保护报告与当前')):
+        values = ('candidate.review', '候选检查记录需要更新', '在审校面板重新运行机器检查；确认当前候选后再验收。')
     elif any(t in message for t in ('版面计划', '旧计划', '回读译文', '像素改变')):
         values = ('source.plan' if '计划' in message else 'source.preservation', '版面计划或输出一致性', '核对原页和具体区域；提取规则更新后可在应用内重新分析并导入合格缓存。无法证明内容完整时保留断点，不能绕过保护。')
     elif isinstance(error, PermissionError):
@@ -50,8 +59,10 @@ def classify(error: Exception, category: str) -> dict:
         values = ('file.output_conflict', '输出文件冲突', '在应用内选择新的保存文件名；不覆盖来源不明的已有文件。')
     elif isinstance(error, FileNotFoundError):
         values = ('environment.missing', '文件或依赖缺失', '核对所示路径；在应用设置中重新选择 PDF、CLI 或中文字体后继续。')
-    elif category == 'provider' or any(t in message for t in ('401', '403', '429', 'timeout', 'timed out', 'connection', 'api 密钥', 'provider', 'codex', '模型')):
-        if any(t in message for t in ('401', '403', 'api 密钥', 'unauthorized', 'authentication')):
+    elif '获取中文字体失败' in message or '获取中文粗体字体失败' in message:
+        values = ('environment.missing', '中文字体资源不可用', '检查字体资源连接，或在翻译设置选择本机的中文字体后继续。')
+    elif category == 'provider' or any(t in message for t in ('401', '403', '429', 'timeout', 'timed out', 'connection', '无法连接', 'api 密钥', 'api_key', 'provider', 'codex', '模型')):
+        if any(t in message for t in ('401', '403', 'api 密钥', 'api_key', 'unauthorized', 'authentication')):
             values = ('service.authentication', '服务授权', '在应用设置更新 API 密钥或完成服务登录，再从断点继续。')
         elif any(t in message for t in ('429', 'quota', 'rate limit', '额度')):
             values = ('service.quota', '服务额度或限流', '检查服务额度，等待恢复后再重试；反复立即重试不会修复额度问题。')

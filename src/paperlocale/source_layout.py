@@ -1616,13 +1616,17 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
                 raise ValueError('保护区域为空或越界')
     if skip_block_ids:
         from copy import deepcopy
+        from itertools import groupby
         plan = deepcopy(plan)
         for block in plan['blocks']:
             if block['id'] in skip_block_ids:
                 block['kind'] = 'preserve'
                 block['preserve_reason'] = '用户选择跳过，保留原文'
-        plan['groups'] = [[sid for sid in group if sid not in skip_block_ids] for group in plan['groups']]
-        plan['groups'] = [group for group in plan['groups'] if group]
+        # 跳过中间的原块时，剩余正文会分隔在原文两侧。分开送给模型，避免
+        # 省略的原文两侧被当成连续句子，或译文跨过这块原文排版。
+        plan['groups'] = [list(run) for group in plan['groups']
+                          for kept, run in groupby(group, key=lambda sid: sid not in skip_block_ids)
+                          if kept]
     return plan, units_from_plan(plan, paragraph=paragraph)
 
 
@@ -1874,8 +1878,9 @@ def fit_unit(unit: dict, target: str, font: fitz.Font, min_size: float | None,
             # 中英文之间的可选空格不属于科学标记。窄引文间隙里一个空格
             # 就可能挤出完整模型名称；中文排版可直接相邻，数值与 ASCII
             # 单位内部的空格则保持，不能拆开或改写标识符来伪造容纳成功。
-            compact = re.sub(r'(?<=[\u3400-\u9fff]) +(?=[A-Za-z0-9])|'
-                             r'(?<=[A-Za-z0-9]) +(?=[\u3400-\u9fff])', '', _plain(chunk))
+            compact = chunk if '_manual_revision' in unit else re.sub(
+                r'(?<=[\u3400-\u9fff]) +(?=[A-Za-z0-9])|(?<=[A-Za-z0-9]) +(?=[\u3400-\u9fff])',
+                '', _plain(chunk))
             rest = re.findall(r'https?://\S+|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', compact)
             # 已有范围线/连字符是合法换行点，例如窄行中的（1981–2014）。
             # 不拆英文单词或小数，不增删连字符；各行重新连接仍是完整原标记。

@@ -55,6 +55,22 @@ class QuantityTests(unittest.TestCase):
         self.assertEqual(validate_translation('mid-1960s', '1960年代中期'), [])
         self.assertEqual(validate_translation('15°N', '北纬15度'), [])
 
+    def test_chinese_year_before_gwp_keeps_quantity_and_unit_boundaries(self):
+        source = 'A 100-year GWP was a reasonable approximation.'
+        target = '100年GWP在提出时是一种合理的近似。'
+        quantity, = scientific_quantities(target)
+        self.assertEqual((target[quantity.start:quantity.end], quantity.signature), ('100年', '100 yr'))
+        self.assertEqual(validate_translation(source, target), [])
+        for changed in ('20年GWP', '100天GWP', '100 GWP'):
+            with self.subTest(changed=changed):
+                self.assertTrue(any(error.startswith('quantity ') for error in validate_translation(source, changed)))
+        for text in ('100年GWP2', '100年GWP_rate', '100年GWP₂', '100年GWPé', '100年^1GWP',
+                     '100 yearGWP', '100yrGWP', '100mGWP', '100米m'):
+            with self.subTest(text=text):
+                self.assertEqual(scientific_quantities(text), [])
+        compound, = scientific_quantities('100米·m')
+        self.assertEqual(compound.signature, '100 m^2')
+
     def test_standalone_units_allow_aliases_but_not_lost_factors(self):
         self.assertEqual(validate_translation('km','千米'), [])
         self.assertEqual(validate_translation('m/s','米/秒'), [])

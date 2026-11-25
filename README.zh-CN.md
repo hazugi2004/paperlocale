@@ -27,7 +27,8 @@ PaperLocale 是一个面向学术论文的可验证保版翻译工具。它的�
 ## 已实现能力
 
 - `codex-local`：调用用户本机已登录的 Codex，仅用于可信本地环境；
-- `openai-compatible`：由用户自备 API Key，可连接 OpenAI 及兼容接口；
+- `openai-api`：使用自备密钥和显式指定的模型调用 OpenAI 官方 Responses API；
+- `openai-compatible`：使用自备密钥连接兼容 Chat Completions 的接口；
 - `chatgpt-web` 人工桥接：把哈希绑定批次粘贴到 ChatGPT 网页端普通 Chat，再导入
   严格 JSON 回复；项目不登录、抓取或自动点击网页；
 - `qwen-mt`：由用户自备百炼 API Key，按 Qwen-MT 专用翻译接口的单片段语义调用；
@@ -71,16 +72,16 @@ v0.4.0 网页桥接的操作与额度边界见
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.8.6"
+python -m pip install "paperlocale[layout]==0.8.7"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
 当前验证兼容 `pdf2zh-next 2.9.0`。版面依赖较多，所以被放在可选的 `layout` 依赖组中。
 
-0.8.6 的 macOS 应用支持原译文对照阅读、译后核对和人工修订。新翻译默认使用内置大气科学
-术语库 2.0.0，macOS 下载包附带同版本 CLI 和安装脚本。
-参见[发布说明](docs/releases/v0.8.6.md)和[macOS 安装步骤](macos/README.md)。
+0.8.7 的 macOS 应用和 CLI 新增 OpenAI 官方 API，并通过无损压缩缩小保版译稿。
+新翻译默认使用内置大气科学术语库 2.0.0，macOS 下载包附带同版本 CLI 和安装脚本。
+参见[发布说明](docs/releases/v0.8.7.md)和[macOS 安装步骤](macos/README.md)。
 从当前源码安装时，使用 `python -m pip install ".[layout]"`。
 
 ## 开始翻译
@@ -108,7 +109,20 @@ paperlocale run /path/to/paper.pdf --run-dir runs/paper \
 
 新运行默认使用 `codex-local`、`gpt-6-sol` 和 `medium`；显式参数可覆盖，已有断点沿用记录的模型与档位。机器 QA 通过后，候选译文同时写到原 PDF 所在目录，文件名为 `原文件名_translated_by_paperlocale.pdf`。若同名文件不属于当前运行，程序拒绝覆盖。报错时当前命令行窗口立即显示原因、位置和处理办法，即使任务保持等待也无需先搜索 JSON。交付前仍须逐页检查并执行 `paperlocale accept`。
 
+段落和保版模式在最终完整性检查前无损压缩页面内容流，并清理输出 PDF 中未使用的对象。
+
 状态 `qa_generated` 表示候选通过机器检查，仍需逐页视觉验收；它不等于对任意 PDF 的无损保证。扫描件、旋转正文和无法通过安全检查的版面会保持等待。详细范围、恢复方式与验收证据见[源版面翻译](docs/PRESERVED_LAYOUT.zh-CN.md)。
+
+### OpenAI 官方 API
+
+在进程环境中设置 `OPENAI_API_KEY`，并指定 API 项目有权使用、支持结构化输出的模型。
+
+```bash
+paperlocale run paper.pdf --run-dir runs/paper-openai \
+  --provider openai-api --model gpt-5.4
+```
+
+程序向 `https://api.openai.com/v1/responses` 发送待译文本，请求关闭响应存储。OpenAI API 按用量单独计费。每次最多发送 10 段及 4000 个源文字符，超过字符上限的单段保持完整并独立发送。HTTP 或连接故障会保留断点，修正后用相同的服务和模型继续。译文未通过内容校验时，修复流程可额外调用一次同一模型，GPT-5.4 在这次返修中使用低强度推理。使用 `--no-contract-repair` 可在首次内容校验失败时停止。
 
 ## 旧引擎工作流
 
@@ -202,7 +216,7 @@ paperlocale confirm-references \
 [PR #611](https://github.com/funstory-ai/BabelDOC/pull/611)；等待上游审查期间，
 PaperLocale 不用本地 PDF 区域覆盖伪装成真正的 preserve。
 
-或者使用自备密钥的 OpenAI-compatible 接口。`--base-url` 应包含服务的 API 版本前缀，但不要包含 `/chat/completions`：
+使用 OpenAI-compatible 接口时，`--base-url` 应包含服务的 API 版本前缀，省略末尾的 `/chat/completions`。
 
 ```bash
 export PAPERLOCALE_API_KEY="你的密钥"

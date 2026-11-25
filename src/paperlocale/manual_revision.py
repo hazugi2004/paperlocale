@@ -29,7 +29,7 @@ def revision_errors(source: str, target: str, domain, anchors: dict, confirmatio
         return ['请将修订写为一个段落。页面会自动折行，请移除手工换行或制表符。']
     if confirmation is not None and confirmation != unresolved_statistical_denominator(source):
         return ['确认的统计分母与当前原文待核对项不一致。']
-    errors = validate_translation(source, target, domain, confirmed_denominator=confirmation)
+    errors = validate_translation(source, target, domain, confirmed_denominator=confirmation, anchor_text=anchors)
     errors += restored_content_errors(source, target, anchors)
     for marker, anchor in anchors.items():
         # 旧计划可能只将「(Fig. 3」做成固定字形。能从源句确认的紧邻

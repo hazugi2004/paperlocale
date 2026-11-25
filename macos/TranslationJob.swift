@@ -485,7 +485,8 @@ import PDFKit
             notice = "请确认源文件存在，并在翻译设置中填写模型。"
             return
         }
-        if provider != "codex-local" && baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if provider != "codex-local" && provider != "openai-api"
+            && baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             notice = "请填写所选翻译服务的 API 地址。"
             return
         }
@@ -718,11 +719,11 @@ import PDFKit
         task.standardOutput = pipe
         task.standardError = pipe
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        var environment = ProcessInfo.processInfo.environment
+        var environment = TranslationOptions.keyEnvironment(ProcessInfo.processInfo.environment,
+            provider: provider, key: apiKey, includeKey: includeKey)
         // Finder 不使用终端的 PATH。可执行文件路径与参数分开传入，API 密钥只放在翻译子进程环境中。
         environment["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
         environment["PYTHONUNBUFFERED"] = "1"
-        if includeKey && provider != "codex-local" && !apiKey.isEmpty { environment["PAPERLOCALE_API_KEY"] = apiKey }
         task.environment = environment
         stage = title
         notice = nil

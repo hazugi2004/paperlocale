@@ -10,7 +10,7 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
-from .contracts import read_jsonl, segment_id, validate_translation, write_jsonl_atomic
+from .contracts import FORMULA_RE, read_jsonl, segment_id, validate_translation, write_jsonl_atomic
 from .domains import DomainPack
 from .providers import Segment, TranslationContext, TranslationProvider
 
@@ -23,7 +23,6 @@ def restored_content_errors(source: str, target: str, anchors: dict | None) -> l
     """
     if anchors is None:
         return []
-    from .contracts import FORMULA_RE
     from .source_layout import anchor_errors
     markers = FORMULA_RE.findall(source)
     if any(marker not in anchors for marker in markers):
@@ -34,6 +33,37 @@ def restored_content_errors(source: str, target: str, anchors: dict | None) -> l
     if re.search(r'…|\.{3}', target) and not re.search(r'…|\.{3}', source + ''.join(anchors.values())):
         errors.append('restored_content 原文没有省略号，译文不得用省略号代替未翻译内容')
     return errors
+
+
+def _duplicate_anchor_closer(source: str, target: str, anchors: dict[str, str]) -> tuple[str, int] | None:
+    """定位唯一紧邻锚点且实无配对对象的额外右括号，坐标对应未展开的译文。"""
+    # 允许锚点紧邻句读，保留原文在句读后立即关闭外层括号的结构。
+    punctuation = re.compile(r'[.!?;,:。！？；，：、](?!\s*[)）\]］])')
+    before_punctuation = {
+        match.group() for match in FORMULA_RE.finditer(source)
+        if punctuation.match(source, match.end())
+    }
+    candidates = []
+    for match in FORMULA_RE.finditer(target):
+        marker, end = match.group(), match.end()
+        if marker not in before_punctuation or end == len(target):
+            continue
+        for opening, closing in (('(（', ')）'), ('[［', ']］')):
+            if target[end] in closing and anchors[marker].endswith(tuple(closing)):
+                candidates.append((marker, end, opening, closing))
+    if len(candidates) != 1:
+        return None
+    marker, end, opening, closing = candidates[0]
+    # 如果这枚括号可以关闭又一层左括号，它可能是合法的外层括号。
+    # 某个更早位置已经失衡时，也无法把问题唯一归因于这枚括号。
+    depth = 0
+    for character in FORMULA_RE.sub(lambda match: anchors[match.group()], target[:end]):
+        depth += (character in opening) - (character in closing)
+        if depth < 0:
+            return None
+    if depth == 0:
+        return marker, end
+    return None
 
 
 def make_batches(
@@ -115,8 +145,29 @@ def translate_segment_file(
         raise ValueError(f"参考文献与透传映射不能包含相同片段：{sorted(overlap)}")
 
     def full_errors(source, target, sid, selected_domain):
-        return validate_translation(source, target, selected_domain) + restored_content_errors(
-            source, target, None if anchor_text is None else anchor_text.get(sid, {}))
+        anchors = None if anchor_text is None else anchor_text.get(sid, {})
+        return validate_translation(source, target, selected_domain, anchor_text=anchors) + restored_content_errors(
+            source, target, anchors)
+
+    def check_new_candidate(segment: Segment, target: str) -> tuple[dict[str, object], list[str]]:
+        row: dict[str, object] = {"id": segment.id, "source": segment.source, "target": target}
+        if segment.id in reference_segment_ids:
+            return row, validate_translation(segment.source, target, None)
+        errors = full_errors(segment.source, target, segment.id, domain)
+        if (contract_repair and len(errors) == 1
+                and errors[0].startswith('restored_content 还原固定锚点后括号不配对：')):
+            anchors = (anchor_text or {}).get(segment.id, {})
+            duplicate = _duplicate_anchor_closer(segment.source, target, anchors)
+            if duplicate is not None:
+                marker, index = duplicate
+                normalized = target[:index] + target[index + 1:]
+                if not full_errors(segment.source, normalized, segment.id, domain):
+                    row['target'] = normalized
+                    row['normalization'] = {
+                        'kind': 'duplicate_anchor_closer', 'anchor': marker, 'removed': target[index],
+                    }
+                    return row, []
+        return row, errors
 
     existing_rows = read_jsonl(translations_path) if translations_path.exists() else []
     rejected_path = translations_path.with_name("rejected_translations.jsonl")
@@ -200,11 +251,17 @@ def translate_segment_file(
         if provider_limit is not None
         else max_segments
     )
+    provider_character_limit = getattr(provider, 'max_batch_characters', None)
+    effective_max_characters = (
+        min(max_characters, provider_character_limit)
+        if provider_character_limit is not None
+        else max_characters
+    )
     provenance = provider.provenance() if pending else None
     for batch in make_batches(
         pending,
         max_segments=effective_max_segments,
-        max_characters=max_characters,
+        max_characters=effective_max_characters,
     ):
         from .diagnostics import LocatedError
         try:
@@ -217,28 +274,11 @@ def translate_segment_file(
         accepted: list[dict[str, object]] = []
         rejected: list[dict[str, object]] = []
         for source_segment, result in zip(batch, translated):
-            if source_segment.id in reference_segment_ids:
-                errors = validate_translation(source_segment.source, result.target, None)
-            else:
-                errors = full_errors(source_segment.source, result.target, source_segment.id, domain)
+            row, errors = check_new_candidate(source_segment, result.target)
             if errors:
-                rejected.append(
-                    {
-                        "id": result.id,
-                        "source": source_segment.source,
-                        "target": result.target,
-                        "errors": errors,
-                    }
-                )
+                rejected.append({**row, "errors": errors})
                 continue
-            accepted.append(
-                {
-                    "id": result.id,
-                    "source": source_segment.source,
-                    "target": result.target,
-                    "provider": provenance,
-                }
-            )
+            accepted.append({**row, "provider": provenance})
         if accepted:
             # 即使同批另有失败项，也先保存已通过门禁的结果，避免重复消耗模型额度。
             ordered.extend(accepted)
@@ -279,17 +319,12 @@ def translate_segment_file(
             repaired_accepted: list[dict[str, object]] = []
             final_rejected: list[dict[str, object]] = []
             for source_segment, result in zip(repair_batch, repaired):
-                if source_segment.id in reference_segment_ids:
-                    errors = validate_translation(source_segment.source, result.target, None)
-                else:
-                    errors = full_errors(source_segment.source, result.target, source_segment.id, domain)
+                row, errors = check_new_candidate(source_segment, result.target)
                 if errors:
                     initial = rejected_by_id[source_segment.id]
                     final_rejected.append(
                         {
-                            "id": result.id,
-                            "source": source_segment.source,
-                            "target": result.target,
+                            **row,
                             "errors": errors,
                             "attempts": [
                                 {
@@ -301,14 +336,7 @@ def translate_segment_file(
                         }
                     )
                     continue
-                repaired_accepted.append(
-                    {
-                        "id": result.id,
-                        "source": source_segment.source,
-                        "target": result.target,
-                        "provider": provenance,
-                    }
-                )
+                repaired_accepted.append({**row, "provider": provenance})
 
             if repaired_accepted:
                 ordered.extend(repaired_accepted)

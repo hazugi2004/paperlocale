@@ -198,6 +198,11 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             raise ValueError('恢复时领域包发生变化')
     emit_progress("预检正文删除与公式保留", .10)
     reference_bytes = prepare_source_layer(source, editable, protected, erase_regions)
+    moving_math = [anchor for unit in units for anchor in unit['anchors'] if anchor.get('strokes')]
+    stroke_removal = []
+    if moving_math:
+        from .inline_vectors import remove_strokes
+        reference_bytes, stroke_removal = remove_strokes(reference_bytes, moving_math)
     preflight = {'status': 'preflight_passed', 'source_sha256': manifest['source_sha256'],
                  'layout_plan_sha256': plan_hash, 'logical_group_count': len(units),
                  'checks': ['source_identity', 'layout_identity', 'inline_font_binding',
@@ -205,6 +210,9 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                  'translation_checked': False, 'final_pixels_checked': False}
     if paragraph:
         preflight['checks'].append('canonical_source_pixels')
+    if stroke_removal:
+        preflight['checks'].append('declared_inline_stroke_removal')
+        preflight['inline_strokes'] = stroke_removal
     save_json(root / 'preflight_report.json', preflight)
     if preflight_only:
         return preflight
@@ -303,7 +311,9 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             refinements[sid] = {'before': targets[sid], 'after': refined, 'width_budgets': budgets,
                                 'anchor_text': anchor_text.get(sid, {}), 'provider': provider.provenance()}
             save_json(refinement_path, refinements)
-        errors = validate_translation(unit['source'], refined, domain) + restored_content_errors(unit['source'], refined, anchor_text.get(sid, {}))
+        anchors = anchor_text.get(sid, {})
+        errors = validate_translation(unit['source'], refined, domain, anchor_text=anchors)
+        errors += restored_content_errors(unit['source'], refined, anchors)
         if errors and 'repair' not in refinements[sid]:
             # 实测等义精炼会漏掉 ERA5，或重复锚点里原有的右括号。将明确
             # 门禁错误反馈给同一 Provider 一次。原答复和纠正答复分别落盘；
@@ -318,7 +328,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             refinements[sid]['repair'] = {'before': refined, 'after': results[0].target, 'errors': errors}
             refined = results[0].target
             save_json(refinement_path, refinements)
-            errors = validate_translation(unit['source'], refined, domain) + restored_content_errors(unit['source'], refined, anchor_text.get(sid, {}))
+            errors = validate_translation(unit['source'], refined, domain, anchor_text=anchors)
+            errors += restored_content_errors(unit['source'], refined, anchors)
         if errors:
             raise LocatedError('自动版面精炼未通过科学内容校验：' + str(errors), [{**unit_location(unit), 'validation_source': unit['source'],
                                'target': refined, 'errors': errors}], 'translation')
@@ -404,6 +415,14 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                 # 删除引擎还可能清理面积为零的填充路径。复用现有源矢量身份
                 # 比较和原生重放函数，在候选发布前补回；不能靠画面相同忽略对象减少。
                 missing = _missing_source_vector_drawings(original[number - 1], page)
+                if moving_math:
+                    from .inline_vectors import exclude_moved_drawings, verify_strokes
+                    # 从旧位置删去的笔画只在已证实重放的候选中排除恢复，避免重复绘制。
+                    for item in placements:
+                        strokes = item.get('inline_anchor', {}).get('strokes')
+                        if strokes and item['page'] == number:
+                            verify_strokes(page, strokes, item['shift'])
+                    missing = exclude_moved_drawings(missing, [a for a in moving_math if a['page'] == number])
                 for drawing in missing:
                     _replay_vector_drawing(page, drawing)
                 if missing:
@@ -411,14 +430,16 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                     restored = True
                 # MuPDF 会因删除框碰到链接外框而从 Annots 列表移除链接，
                 # 即使引用字形本身完全保留。实测原注释对象仍未改变；本流程
-                # 始终 garbage=0，不重编号或清理源对象，因此恢复源 Annots
+                # 恢复和搬移链接前使用 garbage=0，不清理源对象，因此恢复源 Annots
                 # 引用即可保留原坐标、目标与注释属性，不重新拼装链接字典。
                 original_annots = original.xref_get_key(original[number - 1].xref, 'Annots')
                 if document.xref_get_key(page.xref, 'Annots') != original_annots:
                     document.xref_set_key(page.xref, 'Annots', original_annots[1])
                     annotation_restorations.append(number)
                     restored = True
-            repaired = document.tobytes(garbage=0, deflate=True) if restored else None
+            # 源对象恢复完毕后可清理无引用对象。段落模式要等链接搬移完成。
+            repaired = (document.tobytes(garbage=0 if paragraph else 1, deflate=True)
+                        if restored or not paragraph else None)
         if repaired is not None:
             temporary.write_bytes(repaired)
         expected_links = None
@@ -426,7 +447,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             from .paragraph_layout import relocate_links
             with open_source_pdf(source) as original, fitz.open(temporary) as written:
                 expected_links = relocate_links(written, original, placements)
-                linked = written.tobytes(garbage=0, deflate=True)
+                linked = written.tobytes(garbage=1, deflate=True)
             temporary.write_bytes(linked)
         # Last serialization step: later MuPDF saves would round these values again.
         from .vector_precision import restore_vector_precision

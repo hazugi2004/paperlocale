@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 from collections import Counter
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
@@ -309,7 +310,20 @@ def _has_local_denominator(text: str, start: int, end: int) -> bool:
                 or re.match(r'[ \t]*[/／][ \t]*[^\W\d_]', after))
 
 
-def scientific_literal_spans(text: str) -> list[tuple[int, int]]:
+def _anchor_sentence_break(text: str, match: re.Match[str], anchors: Mapping[str, str]) -> bool:
+    # 只放行闭合的量纲后接普通句号、空格和新主语的形式。PDF 的空格可能
+    # 在下一个固定锚点内。没有原字形证据或语法不明确时，仍保护小数点。
+    left, _, right = match.group().partition('.')
+    unit = anchors.get(left, '').strip()
+    if not (unit.startswith('(') and unit.endswith(')')
+            and re.fullmatch(r'\s+[^\W\d]\w*', anchors.get(right, ''))
+            and re.match(r'\s+(?:is|are|was|were)\b', text[match.end():])):
+        return False
+    quantity = '1 ' + unit[1:-1]
+    return any(q.start == 0 and q.end == len(quantity) for q in scientific_quantities(quantity))
+
+
+def scientific_literal_spans(text: str, *, anchor_text: Mapping[str, str] | None = None) -> list[tuple[int, int]]:
     """保护版面占位符拆开的数值，以及语法明确的整行数学表达式。
 
     只处理有公式占位符的表达式；正文中的小写词不推断为变量。完整函数式
@@ -325,7 +339,8 @@ def scientific_literal_spans(text: str) -> list[tuple[int, int]]:
     numeric_only = re.fullmatch(r"(?:\{v\d+\}|[0-9\s.,+~<>≤≥−-])+", text)
     if math_only or numeric_only:
         return [(0, len(text))]
-    return [match.span() for match in decimals]
+    return [match.span() for match in decimals
+            if not anchor_text or not _anchor_sentence_break(text, match, anchor_text)]
 
 
 # 仅供门禁使用：不改变 Provider 的原文、保护范围、请求或重试策略。
@@ -366,6 +381,7 @@ def validate_translation(
     *,
     require_cjk: bool = True,
     confirmed_denominator: str | None = None,
+    anchor_text: Mapping[str, str] | None = None,
 ) -> list[str]:
     """返回全部合同错误；空列表才允许译文进入渲染阶段。"""
 
@@ -391,7 +407,7 @@ def validate_translation(
             )
 
     # 科学表达式内部的小数点和小写变量不能翻译成句号或人名。
-    literal_spans = scientific_literal_spans(source)
+    literal_spans = scientific_literal_spans(source, anchor_text=anchor_text)
     target_compact = re.sub(r"\s+", "", target)
     for start, end in literal_spans:
         literal = re.sub(r"\s+", "", source[start:end])

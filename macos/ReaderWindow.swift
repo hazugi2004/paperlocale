@@ -501,13 +501,18 @@ private struct TranslationSettings: View {
                     } else {
                         Picker("翻译服务", selection: Binding(get: { job.provider }, set: { job.provider = $0; job.changeProvider() })) {
                             Text("GPT（Codex）").tag("codex-local")
+                            Text("OpenAI API（独立计费）").tag("openai-api")
                             Text("其他（兼容 API）").tag("openai-compatible")
                             Text("Qwen（翻译模型）").tag("qwen-mt")
                         }
-                        Picker("具体模型", selection: Binding(get: { job.selectedModel }, set: { job.selectedModel = $0; job.changeModel() })) {
-                            ForEach(job.modelChoices, id: \.self) { Text($0) }
+                        if job.provider == "openai-api" {
+                            TextField("API 模型名称", text: $job.model)
+                        } else {
+                            Picker("具体模型", selection: Binding(get: { job.selectedModel }, set: { job.selectedModel = $0; job.changeModel() })) {
+                                ForEach(job.modelChoices, id: \.self) { Text($0) }
+                            }
+                            if job.selectedModel == "自定义" { TextField("模型名称", text: $job.model) }
                         }
-                        if job.selectedModel == "自定义" { TextField("模型名称", text: $job.model) }
                         if job.provider == "codex-local" {
                             Picker("推理强度", selection: $job.effort) {
                                 ForEach(job.effortChoices, id: \.self) { Text($0) }
@@ -515,7 +520,13 @@ private struct TranslationSettings: View {
                         }
                     }
                     if job.provider != "codex-local" {
-                        TextField("API 地址", text: $job.baseURL).disabled(job.hasRecordedProvider)
+                        if job.provider == "openai-api" {
+                            LabeledContent("API 地址", value: "api.openai.com")
+                            Text("使用 OpenAI API 项目密钥与项目可用的模型。开始翻译后，待译文本会发送到 OpenAI，并按 API 用量计费。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            TextField("API 地址", text: $job.baseURL).disabled(job.hasRecordedProvider)
+                        }
                         SecureField("API 密钥（仅本次使用）", text: $job.apiKey)
                     }
                 }

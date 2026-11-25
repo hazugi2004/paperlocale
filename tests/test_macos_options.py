@@ -14,19 +14,34 @@ class MacOSOptionsTest(unittest.TestCase):
             main = Path(directory) / "main.swift"
             main.write_text('''
 import Foundation
-for provider in ["codex-local", "openai-compatible", "qwen-mt"] {
+for provider in ["codex-local", "openai-api", "openai-compatible", "qwen-mt"] {
     for qa in [true, false] {
         let options = TranslationOptions(pdf: "/源 文.pdf", runDirectory: "/断点",
             provider: provider, model: "test-model", effort: "medium",
             baseURL: "https://example.com/v1", outputPDF: "/译文 目录/结果.pdf", runQA: qa)
         let args = options.arguments
         precondition(args.contains("--reasoning-effort") == (provider == "codex-local"))
-        precondition(args.contains("--base-url") == (provider != "codex-local"))
+        precondition(args.contains("--base-url") == (provider == "openai-compatible" || provider == "qwen-mt"))
+        if let key = args.firstIndex(of: "--api-key-env") {
+            precondition(provider != "codex-local")
+            precondition(args[key + 1] == (provider == "openai-api" ? "OPENAI_API_KEY" : "PAPERLOCALE_API_KEY"))
+        } else { precondition(provider == "codex-local") }
         precondition(args.contains("--no-qa") == !qa)
         precondition(args[args.firstIndex(of: "--output-pdf")! + 1] == "/译文 目录/结果.pdf")
         precondition(args[1] == "/源 文.pdf")
     }
 }
+let inherited = ["OPENAI_API_KEY": "official-test-key", "PAPERLOCALE_API_KEY": "compatible-test-key", "PATH": "/test"]
+precondition(TranslationOptions.keyEnvironment(inherited, provider: "openai-api", key: "window-test-key", includeKey: true)
+    == ["OPENAI_API_KEY": "window-test-key", "PATH": "/test"])
+precondition(TranslationOptions.keyEnvironment(inherited, provider: "openai-api", key: "", includeKey: true)
+    == ["OPENAI_API_KEY": "official-test-key", "PATH": "/test"])
+precondition(TranslationOptions.keyEnvironment(inherited, provider: "qwen-mt", key: "", includeKey: true)
+    == ["PAPERLOCALE_API_KEY": "compatible-test-key", "PATH": "/test"])
+precondition(TranslationOptions.keyEnvironment(inherited, provider: "codex-local", key: "", includeKey: true)
+    == ["PATH": "/test"])
+precondition(TranslationOptions.keyEnvironment(inherited, provider: "openai-api", key: "window-test-key", includeKey: false)
+    == ["PATH": "/test"])
 let legacy = TranslationOptions(pdf: "/源 文.pdf", runDirectory: "/旧断点", provider: "codex-local",
     model: "original-model", effort: "high", baseURL: "", outputPDF: "", runQA: false,
     layoutMode: "legacy", domain: "general", referencePolicy: "translate-titles").arguments

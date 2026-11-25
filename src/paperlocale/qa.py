@@ -9,10 +9,11 @@ import math
 import re
 import shutil
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 import pymupdf as fitz
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 from pypdf import PdfReader
 from .pdf_streams import content_parsing_budget, selected_content_operations
 
@@ -256,6 +257,45 @@ def _vector_objects(pdf_path: Path) -> list[list[dict[str, object]]]:
     return pages
 
 
+def _verified_inline_vector_moves(source_path, target_path, checks):
+    """从实际两份 PDF 重新核验行内笔画，再统计跨页移动。"""
+    from .inline_vectors import _drawing_key, select_strokes, verify_strokes
+
+    removed, added = Counter(), Counter()
+    source_used, target_used = set(), set()
+    with fitz.open(source_path) as source, fitz.open(target_path) as target:
+        for check in checks:
+            if not isinstance(check, dict) or not isinstance(check.get('strokes', []), list):
+                raise ValueError('Invalid inline vector ledger entry')
+            declarations = check.get('strokes', [])
+            if not declarations:
+                continue
+            before, after, shift = check.get('source_page'), check.get('page'), check.get('shift')
+            if (type(before) is not int or not 1 <= before <= len(source)
+                    or type(after) is not int or not 1 <= after <= len(target)
+                    or not isinstance(shift, list) or len(shift) != 2
+                    or any(type(value) not in (int, float) or not math.isfinite(value) for value in shift)
+                    or any(not isinstance(item, dict) or item.get('page') != after
+                           or item.get('shift') != shift or not isinstance(item.get('source'), dict)
+                           for item in declarations)):
+                raise ValueError('Invalid inline stroke page, shift or source drawing')
+            strokes = select_strokes(source[before - 1], [item['source'] for item in declarations])
+            original = verify_strokes(source[before - 1], strokes, (0, 0))
+            replayed = verify_strokes(target[after - 1], strokes, shift)
+            for declared, src, dst in zip(declarations, original, replayed):
+                src_key, dst_key = (before, _drawing_key(src['actual'])), (after, _drawing_key(dst['actual']))
+                if src_key in source_used or dst_key in target_used:
+                    raise ValueError('Duplicate inline stroke declaration')
+                if src['actual'] != declared['source'] or dst['actual'] != declared.get('actual'):
+                    raise ValueError('Inline stroke ledger differs from verified native drawing')
+                source_used.add(src_key)
+                target_used.add(dst_key)
+                if before != after:
+                    removed[before] += 1
+                    added[after] += 1
+    return removed, added, len(source_used)
+
+
 def _missing_vector_objects(
     source: list[dict[str, object]],
     translated: list[dict[str, object]],
@@ -461,6 +501,13 @@ def inspect_pdf_pair(
     except Exception as exc:  # noqa: BLE001  # PyMuPDF 对异常 PDF 的错误类型不固定。
         source_vector_objects = target_vector_objects = []
         warnings.append(f"矢量边界框无法提取：{exc}")
+    moved_out, moved_in, verified_strokes = Counter(), Counter(), 0
+    checks = preservation_report.get('inline_checks', []) if preservation_bound else []
+    if checks:
+        try:
+            moved_out, moved_in, verified_strokes = _verified_inline_vector_moves(source_path, target_path, checks)
+        except Exception as exc:  # noqa: BLE001  # 原生验证失败时，保留所有原数量检查。
+            errors.append(f'行内公式矢量核验失败：{exc}')
     if len(source_reader.pages) != len(target_reader.pages):
         errors.append(
             f"页数不一致：source={len(source_reader.pages)}, translated={len(target_reader.pages)}"
@@ -533,7 +580,11 @@ def inspect_pdf_pair(
         except Exception as exc:  # noqa: BLE001  # 特殊内容流异常类型不固定。
             source_vectors = target_vectors = -1
             warnings.append(f"第{index + 1}页矢量绘图无法枚举：{exc}")
-        if source_vectors >= 0 and target_vectors < source_vectors:
+        page_number = index + 1
+        has_vector_objects = index < len(source_vector_objects) and index < len(target_vector_objects)
+        outgoing, incoming = (moved_out[page_number], moved_in[page_number]) if has_vector_objects else (0, 0)
+        expected_vectors = source_vectors - outgoing + incoming
+        if source_vectors >= 0 and target_vectors < expected_vectors:
             errors.append(
                 f"第{index + 1}页矢量绘图减少："
                 f"source={source_vectors}, translated={target_vectors}"
@@ -555,8 +606,14 @@ def inspect_pdf_pair(
                                raw_source_crop_box=raw_source_crop)
         if image_evidence is not None:
             page_record['image_preservation_evidence'] = image_evidence
+        if outgoing or incoming:
+            page_record['inline_vector_move_evidence'] = {
+                'declared_strokes_verified': verified_strokes,
+                'verified_moved_out': outgoing, 'verified_moved_in': incoming,
+                'adjusted_expected': expected_vectors,
+            }
         if (
-            target_vectors < source_vectors
+            target_vectors < expected_vectors
             and index < len(source_vector_objects)
             and index < len(target_vector_objects)
         ):
@@ -591,7 +648,15 @@ def inspect_pdf_pair(
     ):
         with Image.open(source_image_path) as source_image, Image.open(target_image_path) as target_image:
             ratio = _nonwhite_ratio(target_image)
-            if ratio < 0.01:
+            source_rgb = source_image.convert("RGB")
+            target_rgb = target_image.convert("RGB")
+            # 只有原译页尺寸和全部像素相同，才放行原本墨量不足 1% 的页面。
+            # 少量文字被删或被移动时，即使墨量近似，仍需报错。
+            sparse_unchanged = (
+                ratio < 0.01 and source_rgb.size == target_rgb.size
+                and ImageChops.difference(source_rgb, target_rgb).getbbox() is None
+            )
+            if ratio < 0.01 and not sparse_unchanged:
                 errors.append(f"第{index}页疑似空白，非白像素比例={ratio:.4f}")
             page_record = pages[index - 1] if index <= len(pages) else {}
             source_media = page_record.get("source_media_box")
@@ -602,8 +667,8 @@ def inspect_pdf_pair(
                     float(source_media[3]) - float(source_media[1]),
                 )
             comparison = _comparison(
-                source_image.convert("RGB"),
-                target_image.convert("RGB"),
+                source_rgb,
+                target_rgb,
                 index,
                 missing_vectors=page_record.get("missing_vector_drawings"),
                 page_size=page_size,
@@ -613,6 +678,8 @@ def inspect_pdf_pair(
             if index <= len(pages):
                 pages[index - 1]["translated_nonwhite_ratio"] = round(ratio, 6)
                 pages[index - 1]["comparison"] = str(comparison_path)
+                if sparse_unchanged:
+                    pages[index - 1]["sparse_source_pixels_identical"] = True
 
     final_source_sha256, final_translated_sha256 = _sha256(source_path), _sha256(target_path)
     if (final_source_sha256, final_translated_sha256) != (source_sha256, translated_sha256):

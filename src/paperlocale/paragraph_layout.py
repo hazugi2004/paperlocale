@@ -71,7 +71,7 @@ def starts_paragraph(native_lines, preceding, line, *, dash_lists=False, structu
             baseline - previous_y > 1.65 * size)
 
 
-def paragraph_groups(blocks, *, section_boundaries=True, mixed_first_page=True, dash_lists=False, pipe_headings=False, structured_headings=False, appendix_captions=False, heading_styles=False):
+def paragraph_groups(blocks, *, section_boundaries=True, mixed_first_page=True, dash_lists=False, pipe_headings=False, structured_headings=False, appendix_captions=False, heading_styles=False, backmatter_structure=False, math_closures=False):
     """正文与图注分别建立阅读链；缩进段首和标题是不可跨越的段落边界。"""
     groups = []
     # AGU 首页为窄侧栏加宽正文，按页面中线分类会把侧栏续行与摘要交错。
@@ -170,6 +170,26 @@ def paragraph_groups(blocks, *, section_boundaries=True, mixed_first_page=True, 
                         re.fullmatch(r'Abstract|Keywords', value.strip(), re.I)
                         for value in (previous['text'], block['text'])):
                     connect = False
+                if backmatter_structure and kind == 'body':
+                    # 数据可用性、作者贡献等声明首行可以紧接正文。按明确
+                    # 栏目切段，避免相邻两条声明共享一个译段和物理写入框。
+                    if re.match(r'^(?:Acknowledg(?:e)?ments|Author contributions|'
+                                r'Competing interests|Review statement|'
+                                r'(?:Data|Code|Data and code) availability)\s*[.:]',
+                                block['text'], re.I):
+                        connect = False
+                    if previous.get('definition_row') or block.get('definition_row'):
+                        connect = previous.get('definition_row') == block.get('definition_row')
+                if (math_closures and kind == 'body' and previous['page'] == block['page']
+                        and not previous.get('heading') and not block.get('heading')
+                        and not previous.get('definition_row') and not block.get('definition_row')
+                        and abs(a.x0 - b.x0) < 1 and a.y0 < b.y0 < a.y1
+                        and block['text'].lstrip().startswith(')')
+                        and previous['text'].count('(') > previous['text'].count(')')
+                        and any(part.get('strokes') for part in previous['parts'])):
+                    # 根号的原生笔画使两块框在公式所在行重叠。后一块的右括号
+                    # 闭合上一块的括注，应合成一个译段，保留原读序与公式。
+                    connect = True
             if connect:
                 groups[-1].append(block['id'])
             else:
@@ -192,6 +212,9 @@ def attach_frames(units, plan):
             metrics = ordinary or parts
             size = median(p['size'] for p in metrics)
             rect = fitz.Rect(b['rect'])
+            if b.get('definition_row'):
+                # 短释义也可使用整列宽度，原位保留左栏数学符号。
+                rect.x1 = b['definition_right']
             ys = sorted(set(round(p['baseline'], 2) for p in metrics))
             gaps = [y-x for x,y in zip(ys, ys[1:]) if .8*size < y-x < 1.7*size]
             frame = {'page': b['page'], 'rect': list(rect), 'size': size,
@@ -260,16 +283,31 @@ def bind_inline_glyphs(source, units):
                         glyphs.append({'base14': span['font'], 'text': char['text'],
                                        'origin': char['origin'], 'size': span['size'],
                                        'color': span['color'], 'rect': list(charinfo[3])})
+                if not glyphs:
+                    # 矢量分式拆分可能留下纯空白片段，说明公式边界尚
+                    # 未得到验证。定位到当前锚点并停止，避免删掉原公式。
+                    from .diagnostics import LocatedError, unit_location
+                    location = unit_location(unit)
+                    location['anchor_text'] = anchor['text']
+                    location['anchor_region'] = {'page': anchor['page'], 'rect': anchor['rect']}
+                    raise LocatedError(
+                        f"第{anchor['page']}页行内固定片段缺少可核验字形，请核对相邻公式或引文边界",
+                        [location], 'source-glyph')
                 for g in glyphs:
                     g['rect'] = list(g['rect'])
                 ink = fitz.Rect(glyphs[0]['rect'])
                 for g in glyphs[1:]:
                     ink |= fitz.Rect(g['rect'])
+                for stroke in anchor.get('strokes', ()):
+                    ink |= fitz.Rect(stroke['rect'])
                 anchor['glyphs'] = glyphs
                 anchor['ink'] = list(ink)
                 peers = [p for slot in unit['slots'] for p in slot if p['page'] == anchor['page']]
                 # 用最近正文基线保留上标/下标的相对高度；上标本身的基线不是正文基线。
                 anchor['body_baseline'] = min(peers, key=lambda p: abs(p['baseline']-anchor['baseline']))['baseline'] if peers else anchor['baseline']
+                if anchor.get('math_island'):
+                    # 笔画和上下标沿用源提取已核证的相邻正文基线。
+                    anchor['body_baseline'] = anchor['baseline']
                 # A wrapped URL can have no prose on its final native line. Its
                 # real hyperlink and character rectangles prove the continuation;
                 # do not align that line relative to the preceding prose baseline.
@@ -357,7 +395,9 @@ def wrap_citation_anchors(unit, tokens):
                                        '&' in anchor['text'] and
                                        re.fullmatch(r'[\w%+=.&-]+', anchor['text']) and
                                        re.search(r'%[0-9A-Fa-f]{2}', anchor['text']) and '=' in anchor['text'])
-        if (anchor.get('source_url') and anchor.get('glyphs') and
+        # 跨页引文可占据整条源行，该行没有正文。只对已由完整引文语法
+        # 或链接验证、且所有原字形同线的锚点使用自身基线，避免借用下一行。
+        if ((anchor.get('source_url') or i in citation_parts) and anchor.get('glyphs') and
                 all(abs(g['origin'][1]-anchor['baseline']) < .1*anchor['size'] for g in anchor['glyphs'])):
             anchor = {**anchor, 'body_baseline': anchor['baseline']}
             anchors[i] = anchor
@@ -631,6 +671,9 @@ def write_inline(page, item, font_refs):
         document.update_stream(ref, ('\n'.join(commands)).encode())
         refs = page.get_contents()+[ref]
         document.xref_set_key(page.xref, 'Contents', '['+' '.join(f'{r} 0 R' for r in refs)+']')
+    if item['inline_anchor'].get('strokes'):
+        from .inline_vectors import write_strokes
+        write_strokes(page, item['inline_anchor']['strokes'], item['shift'])
 
 
 def verify_inline(candidate, placements):
@@ -648,6 +691,10 @@ def verify_inline(candidate, placements):
                 continue
             dx,dy = item['shift']
             anchor = item['inline_anchor']
+            stroke_checks = []
+            if anchor.get('strokes'):
+                from .inline_vectors import verify_strokes
+                stroke_checks = verify_strokes(document[item['page']-1], anchor['strokes'], item['shift'])
             for g in anchor['glyphs']:
                 expected = (g['origin'][0]+dx, g['origin'][1]+dy)
                 found = [(s,c) for s,c in traces[item['page']] if
@@ -657,7 +704,8 @@ def verify_inline(candidate, placements):
                 if len(found) != 1:
                     raise ValueError(f"第{item['page']}页行内原字形重放校验失败：{g['text']!r}")
             evidence.append({'source_page': anchor['page'], 'page': item['page'],
-                             'text': anchor['text'], 'shift': [dx,dy], 'glyphs': len(anchor['glyphs'])})
+                             'text': anchor['text'], 'shift': [dx,dy], 'glyphs': len(anchor['glyphs']),
+                             **({'strokes': stroke_checks} if stroke_checks else {})})
     return evidence
 
 
@@ -719,7 +767,9 @@ def merge_inline_parts(parts):
     result = []
     for part in parts:
         last = result[-1] if result else None
-        if (last and last['fixed'] and part['fixed'] and last['page'] == part['page'] and
+        # 原生公式已有可核证的字形和笔画边界，相邻锚点不能改变它的归属。
+        if (last and last['fixed'] and part['fixed'] and not last.get('strokes') and not part.get('strokes')
+                and last['page'] == part['page'] and
                 (-max(part['size'],last['size']) < part['rect'][0]-last['rect'][2] < max(part['size'],last['size'])
                  # 上下标共享横向起点，较长上标后出现的下标仍属于同一
                  # 不可拆分锚点；保持字符原坐标，绝不把 r 另排到下一行。

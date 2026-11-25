@@ -104,7 +104,8 @@ def import_cache(old_root: Path, root: Path, plan: dict, units: list, domain) ->
             reason = ['固定锚点内容不同']
         else:
             anchors = {'{v'+str(i)+'}': a['text'] for i,a in enumerate(new['anchors'])}
-            reason = validate_translation(row['source'], row['target'], domain) + restored_content_errors(row['source'], row['target'], anchors)
+            reason = validate_translation(row['source'], row['target'], domain, anchor_text=anchors)
+            reason += restored_content_errors(row['source'], row['target'], anchors)
         if reason:
             rejected.append({**row, 'errors': reason})
         else:

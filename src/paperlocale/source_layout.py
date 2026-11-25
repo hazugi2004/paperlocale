@@ -719,6 +719,63 @@ def _nonprinting_line(page: fitz.Page, line: dict, paint: dict) -> str | None:
     return None
 
 
+def _rotated_table_label(page, line, boxes):
+    """确认表格检测框左沿的竖排标签仍被同一张表的上下横线围住。"""
+    if tuple(line['dir']) not in {(0, -1), (0, 1)}:
+        return False
+    rect = fitz.Rect(line['bbox'])
+    size = max(span['size'] for span in line['spans'])
+    for box in boxes:
+        if box['kind'] != 'table':
+            continue
+        table = fitz.Rect(box['rect'])
+        if not (table.y0 < rect.y0 < rect.y1 < table.y1 and
+                0 <= table.x0 - rect.x0 <= 1.5 * size):
+            continue
+        # 两条细横线都须跨过标签并延伸到表格右沿。仅贴近表格不足以
+        # 忽略竖排正文。用字号限定端点误差，兼容不同尺寸的表格。
+        rule_heights = []
+        for drawing in page.get_drawings():
+            if (drawing['type'] != 's' or drawing['width'] > 1 or
+                    len(drawing['items']) != 1 or drawing['items'][0][0] != 'l'):
+                continue
+            rule = fitz.Rect(drawing['rect'])
+            if rule.height < .01 and rule.x0 < rect.x0 and rule.x1 > table.x1 - size:
+                rule_heights.append(rule.y0)
+        if (any(table.y0 - size < y < rect.y0 for y in rule_heights) and
+                any(rect.y1 < y <= table.y1 + size for y in rule_heights)):
+            return True
+    return False
+
+
+def _definition_rows(native):
+    """根据同行位置、数学字体和对齐的释义列拆分符号表。"""
+    lines = native.get('lines', [])
+    starts = []
+    for i, (left, right) in enumerate(zip(lines, lines[1:])):
+        symbol = ''.join(c['c'] for span in left['spans'] for c in span['chars']).strip()
+        definition = ''.join(c['c'] for span in right['spans'] for c in span['chars']).strip()
+        size = max(span['size'] for span in right['spans'])
+        if (0 < len(symbol) <= 18 and not symbol.endswith('.') and definition
+                and right['bbox'][0] - left['bbox'][2] > size
+                and abs(right['bbox'][1] - left['bbox'][1]) < .4 * size
+                and any(MATH_FONT.search(span['font']) or re.match(r'^MT(?:MI|SY)', span['font'])
+                        for span in left['spans'])):
+            starts.append(i)
+    # 三行以上须对齐到同一释义列，避免把独立公式旁的两栏正文识别为表。
+    positions = [lines[i+1]['bbox'][0] for i in starts]
+    if len(starts) < 3 or max(positions) - min(positions) > 1:
+        return [native]
+    pieces = [{**native, 'lines': lines[:starts[0]]}] if starts[0] else []
+    right_edge = max(line['bbox'][2] for line in lines)
+    for start, stop in zip(starts, starts[1:] + [len(lines)]):
+        pieces.append({**native, 'lines': [lines[start]], '_definition_symbol': True})
+        pieces.append({**native, 'lines': lines[start+1:stop],
+                       '_definition_row': f"{native['number']}:{start}",
+                       '_definition_right': right_edge})
+    return pieces
+
+
 def _list_marker_box(page, box):
     """排除被视觉检测器误标成独立公式的正文列表编号。
 
@@ -793,7 +850,54 @@ def normalize_nonadvancing_spaces(raw):
                 span['chars'] = [c for c in span['chars'] if id(c) not in discard]
 
 
-def _preserve_vector_fractions(source, blocks, *, include_label=False, glyph_structure=False):
+def _confirmed_fraction_numerator(entries, denominator, drawing):
+    """确认原生横线上方有同字号、居中且完整的分子字形。
+
+    按实际基线和字号取完整片段，否则会把上一行的 pHMo 或 NH3
+    裁成伪分子。字形字号来自 PDF 绘制记录。
+    """
+    rect = fitz.Rect(drawing['rect'])
+    size = max(e[4] for e in denominator)
+    groups = {}
+    for entry in entries:
+        if entry[1]['fixed']:
+            groups.setdefault((id(entry[1]), round(entry[2]['origin'][1], 3)), []).append(entry)
+    for group in groups.values():
+        if (not all(abs(e[4]-size) < .001 for e in group)
+                or not any(re.search(r'[A-Za-z0-9α-ωΑ-Ω]', e[2].get('semantic_text', e[2]['text'])) for e in group)):
+            continue
+        ink = fitz.Rect(group[0][3])
+        for entry in group[1:]:
+            ink |= entry[3]
+        if (rect.x0 <= ink.x0 < ink.x1 <= rect.x1
+                and 0 < rect.y0-drawing['width']/2-ink.y1 < .5*size
+                and round((ink.x0+ink.x1)/2, 3) == round((rect.x0+rect.x1)/2, 3)):
+            return True
+    return False
+
+
+def _short_overbar(entries, drawing):
+    """用短变量的实际墨迹识别上划线，排除具备完整分子的分式。"""
+    r = fitz.Rect(drawing['rect'])
+    selected = [e for e in entries if r.x0-1 <= e[3].x0 and e[3].x1 <= r.x1+1
+                and 0 < e[2]['origin'][1]-r.y0 < 1.6*e[1]['size']
+                and e[3].y0 > r.y0]
+    value = ''.join(e[2].get('semantic_text', e[2]['text']) for e in selected)
+    label = r'(?:pH[∗*]?(?:w|Md|Mo)?|AWC(?:Md|Mo)?|[A-Za-zα-ωΑ-Ω]{1,3}[∗*]?)'
+    if (not re.fullmatch(label, value)
+            or not any(c.isupper() or 'α' <= c <= 'ω' for c in value)):
+        return None
+    bounds = fitz.Rect(selected[0][3])
+    for entry in selected[1:]:
+        bounds |= entry[3]
+    if abs(bounds.x0-r.x0) > 1 or abs(bounds.x1-r.x1) > 1:
+        return None
+    if _confirmed_fraction_numerator(entries, selected, drawing):
+        return None
+    return selected, bounds
+
+
+def _preserve_vector_fractions(source, blocks, *, include_label=False, glyph_structure=False, native_inline_math=False):
     """有原生横线的短行内分式整体原位保留，不能只让字形随中文流动。
 
     输入是已分类的标准文本块。要求细短水平矢量线、紧贴线两侧的数学
@@ -809,8 +913,20 @@ def _preserve_vector_fractions(source, blocks, *, include_label=False, glyph_str
                 'rect': list(bounds)}
 
     detached = []
+    glyph_cache = {}
     with open_source_pdf(source) as document:
         for number, page in enumerate(document, 1):
+            entries = []
+            if native_inline_math:
+                from .font_geometry import _source_anchor_glyphs
+                for block in blocks:
+                    if block['page'] != number or block['kind'] not in {'body', 'caption', 'formula'}:
+                        continue
+                    for part in block['parts']:
+                        chars = [c for c in part['chars'] if c['text'].strip()]
+                        glyphs = _source_anchor_glyphs(page, chars, glyph_cache)
+                        if glyphs and len(glyphs) == len(chars):
+                            entries.extend((block, part, c, fitz.Rect(g['rect']), g['size']) for c, g in zip(chars, glyphs))
             candidates = [(b, p) for b in blocks if b['page'] == number
                           and b['kind'] in {'body', 'caption'} for p in b['parts'] if p['fixed']]
             for drawing in page.get_drawings():
@@ -818,6 +934,11 @@ def _preserve_vector_fractions(source, blocks, *, include_label=False, glyph_str
                 if (drawing['type'] != 's' or len(drawing['items']) != 1
                         or drawing['items'][0][0] != 'l' or r.height > .01
                         or not 5 < r.width < 100 or drawing['width'] > 1):
+                    continue
+                if native_inline_math and _short_overbar(entries, drawing):
+                    # A proven overbar is not a fraction with a chemical script
+                    # on the preceding prose line. Its complete label is bound
+                    # by the movable-island pass, including a lowered w.
                     continue
                 slices = []
                 if glyph_structure:
@@ -1032,7 +1153,298 @@ def _join_inline_fragments(blocks):
     return remaining
 
 
-def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 6, frontmatter_after_cover: bool = True, publisher_font_styles: bool = True, nonadvancing_spaces: bool = True, extended_citations: int = 2, middle_dot_names: bool = True, publisher_layout: bool = True, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, reading_structure: int = 5, script_geometry: int = 4, author_details: bool = True, inline_fragments: int = 2) -> dict:
+def _join_math_line_fragments(blocks):
+    """沿有原生笔画和字形证据的行内公式，接回同一物理行的相邻原块。"""
+    def single_line(block):
+        # 至少一侧须本身是单行碎片，不能借一处接触合并两个多行段落。
+        # 上下标的独立基线不代表另一正文行。
+        parts = [p for p in block['parts'] if not p['fixed'] or p.get('math_island')]
+        return bool(parts) and max(p['baseline'] for p in parts)-min(p['baseline'] for p in parts) < .2*max(p['size'] for p in parts)
+
+    remaining = list(blocks)
+    while True:
+        for left in remaining:
+            if left['kind'] not in {'body', 'caption'} or left.get('heading'):
+                continue
+            left_is_single_line = single_line(left)
+            right = next((block for block in remaining
+                          if block is not left and not block.get('heading')
+                          and (block['page'], block['kind']) == (left['page'], left['kind'])
+                          and (left_is_single_line or single_line(block))
+                          and any(
+                              (a.get('math_island') or b.get('math_island'))
+                              and abs(a['baseline']-b['baseline']) < .2*max(a['size'], b['size'])
+                              and 0 <= max(b['rect'][0]-a['rect'][2], a['rect'][0]-b['rect'][2])
+                              < max(a['size'], b['size'])
+                              for a in left['parts'] for b in block['parts'])), None)
+            if right is None:
+                continue
+            parts = left['parts'] + right['parts']
+            baselines = [p['baseline'] for p in parts if not p['fixed'] or p.get('math_island')]
+
+            def order(part):
+                # 上下标跟随最近的正文/公式基线，同一行按 x 排序。
+                # 只改变 parts 顺序，保留原字形和笔画用于擦除与重放。
+                baseline = min(baselines, key=lambda y: abs(y-part['baseline']))
+                if abs(baseline-part['baseline']) >= .7*part['size']:
+                    baseline = part['baseline']
+                return round(baseline, 1), part['rect'][0]
+
+            parts.sort(key=order)
+            rect = list(fitz.Rect(left['rect']) | fitz.Rect(right['rect']))
+            value = _plain(' '.join(p['text'] for p in parts))
+            left.update(parts=parts, rect=rect, text=value,
+                        id=segment_id(json.dumps([left['page'], rect, value], ensure_ascii=False)))
+            remaining.remove(right)
+            break
+        else:
+            return remaining
+
+
+def _preserve_vector_math(source, blocks):
+    """将可核验的行内公式连同原生笔画绑定为一个锚点。
+
+    以实际原字形、笔画和相邻同基线正文判定公式边界。独立公式原位保留，
+    行内公式随对应中文段落移动，未知字形仍交给源预检处理。
+    """
+    from .font_geometry import _source_anchor_glyphs
+    protected, detached, cache = [], [], {}
+
+    def semantic(char):
+        return char.get('semantic_text', char['text'])
+
+    def detach(number, selected, drawings, ink):
+        selected_ids = {id(e[2]) for e in selected}
+        parts = []
+        template = selected[0][0]
+        bounds = fitz.Rect(ink)
+        for drawing in drawings:
+            r = fitz.Rect(drawing['rect'])
+            bounds |= fitz.Rect(r.x0, r.y0-.5*drawing['width'], r.x1, r.y1+.5*drawing['width'])
+        # 行内公式左右有紧邻同基线的正文，以实际正文片段取证。
+        # 整段外框过宽，容易把邻近的独立公式误判成行内公式。
+        neighbours = []
+        for block in [b for b in blocks if b['page'] == number]:
+            remaining = []
+            for part in block['parts']:
+                if part.get('math_island') and not any(id(c) in selected_ids for c in part['chars']):
+                    remaining.append(part)
+                    continue
+                runs = []
+                for char in part['chars']:
+                    fixed = id(char) in selected_ids
+                    if not runs or runs[-1][0] != fixed:
+                        runs.append((fixed, []))
+                    runs[-1][1].append(char)
+                for fixed, chars in runs:
+                    piece_rect = fitz.Rect(chars[0]['rect'])
+                    for char in chars[1:]:
+                        piece_rect |= fitz.Rect(char['rect'])
+                    piece = {**part, 'chars': chars, 'rect': list(piece_rect),
+                             'text': ''.join(semantic(c) for c in chars)}
+                    if fixed:
+                        parts.append({**piece, 'fixed': True})
+                    elif piece['text'].strip():
+                        remaining.append(piece)
+                        if block['kind'] in {'body', 'caption'} and not piece['fixed']:
+                            baseline = piece['baseline']
+                            rect, size = fitz.Rect(piece['rect']), piece['size']
+                            gap = max(bounds.x0-rect.x1, rect.x0-bounds.x1, 0)
+                            if (bounds.y0 <= baseline <= bounds.y1+.2*size and gap < size
+                                    and (rect.x1 <= bounds.x0+.5 or rect.x0 >= bounds.x1-.5)
+                                    and (re.search(r'[A-Za-z]{2,}', piece['text']) or
+                                         re.fullmatch(r'[\s,;().]+', piece['text']) and
+                                         any(not p['fixed'] and re.search(r'[A-Za-z]{2,}', p['text'])
+                                             for p in block['parts']))):
+                                neighbours.append((gap, block, piece))
+            if len(remaining) != len(block['parts']) or any(
+                    id(c) in selected_ids for p in block['parts'] for c in p['chars']):
+                block['parts'] = remaining
+                block['text'] = _plain(' '.join(p['text'] for p in remaining))
+                if remaining:
+                    block_rect = fitz.Rect(remaining[0]['rect'])
+                    for part in remaining[1:]:
+                        block_rect |= fitz.Rect(part['rect'])
+                    block['rect'] = list(block_rect)
+        value = _plain(' '.join(p['text'] for p in parts))
+        if neighbours:
+            from .inline_vectors import select_strokes
+            _, owner, prose = min(neighbours, key=lambda item: item[0])
+            strokes = select_strokes(page, drawings)
+            compact = re.sub(r'\s+', '', value)
+            short_bar = len(drawings) == 1 and re.fullmatch(
+                r'(?:pH[∗*]?(?:w|Md|Mo)?|AWC(?:Md|Mo)?|[A-Za-zα-ωΑ-Ω]{1,3}[∗*]?)', compact)
+            # 上划线记法用于模型上下文，实际仍重放原字形和原路径。
+            if short_bar:
+                value = r'\overline{' + compact + '}'
+            anchor = {**parts[0], 'fixed': True, 'text': value, 'rect': list(bounds),
+                      'chars': [c for p in parts for c in p['chars']],
+                      'baseline': prose['baseline'], 'size': prose['size'],
+                      'strokes': strokes, 'math_island': True}
+            before = [i for i, p in enumerate(owner['parts'])
+                      if abs(p['baseline']-prose['baseline']) < .6*prose['size']
+                      and p['rect'][0] >= bounds.x1-.5]
+            after = [i for i, p in enumerate(owner['parts'])
+                     if abs(p['baseline']-prose['baseline']) < .6*prose['size']
+                     and p['rect'][2] <= bounds.x0+.5]
+            index = min(before) if before else max(after)+1
+            owner['parts'].insert(index, anchor)
+            owner['rect'] = list(fitz.Rect(owner['rect']) | bounds)
+            owner['text'] = _plain(' '.join(p['text'] for p in owner['parts']))
+            return
+        detached.append({**template, 'id': segment_id(json.dumps([number, list(bounds), value])),
+                         'kind': 'formula', 'parts': parts, 'text': value, 'rect': list(bounds)})
+        protected.append({'page': number, 'rect': list(bounds), 'kind': 'formula'})
+
+    with open_source_pdf(source) as document:
+        for number, page in enumerate(document, 1):
+            drawings = [d for d in page.get_drawings() if d['type'] == 's' and len(d['items']) == 1
+                        and d['items'][0][0] == 'l' and fitz.Rect(d['rect']).height < .01
+                        and 5 < fitz.Rect(d['rect']).width < 150 and d['width'] <= 1]
+            if not drawings:
+                continue
+            entries = []
+            for block in blocks:
+                if block['page'] != number or block['kind'] not in {'body', 'caption', 'formula'}:
+                    continue
+                for part in block['parts']:
+                    chars = [c for c in part['chars'] if semantic(c).strip()]
+                    glyphs = _source_anchor_glyphs(page, chars, cache)
+                    if not glyphs or len(glyphs) != len(chars):
+                        continue
+                    entries.extend((block, part, char, fitz.Rect(glyph['rect']), glyph['size'])
+                                   for char, glyph in zip(chars, glyphs))
+            used = set()
+            for formula in [b for b in blocks if b['page'] == number and b['kind'] == 'formula'
+                            and '=' in b['text']]:
+                members = [e for e in entries if e[0] is formula]
+                equals = next((e for e in members if semantic(e[2]) == '='), None)
+                if equals is None:
+                    continue
+                size, baseline = equals[1]['size'], equals[2]['origin'][1]
+                paths = [d for d in drawings if fitz.Rect(formula['rect']).contains(fitz.Point(
+                    (d['rect'][0]+d['rect'][2])/2, d['rect'][1]))]
+                if not paths or not any(e[2]['origin'][1] > paths[0]['rect'][1] for e in members):
+                    continue
+                cursor, prefix = equals[3].x0, []
+                for entry in sorted((e for e in entries if e[0] is not formula and
+                                     e[3].x1 <= cursor and abs(e[2]['origin'][1]-baseline) < .8*size),
+                                    key=lambda e:e[3].x1, reverse=True):
+                    if cursor-entry[3].x1 > .7*size:
+                        break
+                    if not entry[1]['fixed']:
+                        if semantic(entry[2]) == '(' and prefix:
+                            prefix.append(entry)
+                        break
+                    prefix.append(entry); cursor = entry[3].x0
+                value = ''.join(semantic(e[2]) for e in reversed(prefix))
+                if not prefix or not re.fullmatch(r'\(?[A-Za-zα-ωΑ-Ω0-9−-]+',value):
+                    continue
+                selected = members+prefix
+                if value.startswith('('):
+                    right = max(e[3].x1 for e in members)
+                    closer = next((e for e in entries if semantic(e[2]) == ')'
+                                   and 0 <= e[3].x0-right < .7*size
+                                   and abs(e[2]['origin'][1]-baseline) < .2*size),None)
+                    if closer is None:
+                        continue
+                    selected.append(closer)
+                bounds = fitz.Rect(selected[0][3])
+                for entry in selected[1:]: bounds |= entry[3]
+                detach(number,selected,paths,bounds)
+                used.update(id(e[2]) for e in selected)
+            brackets = [e for e in entries if e[2].get('semantic_text') in {'(', ')'}
+                        and e[3].height > 1.5*e[1]['size']]
+            for left in sorted(brackets, key=lambda e: e[3].x0):
+                if semantic(left[2]) != '(' or id(left[2]) in used:
+                    continue
+                size = left[1]['size']
+                rights = [e for e in brackets if semantic(e[2]) == ')' and e[3].x0 > left[3].x1
+                          and max(abs(e[3][i]-left[3][i]) for i in (1,3)) < .15*size]
+                for right in sorted(rights, key=lambda e: e[3].x0, reverse=True):
+                    area = fitz.Rect(left[3].x0, left[3].y0-.3*size, right[3].x1, right[3].y1)
+                    selected = [e for e in entries if id(e[2]) not in used
+                                and left[2]['origin'][1]-.35*size <= e[2]['origin'][1] <= area.y1+.15*size
+                                and e[3].y0 >= area.y0 and e[3].y1 <= area.y1+.1*size
+                                and area.x0-.2*size <= e[3].x0 and e[3].x1 <= area.x1+.2*size]
+                    value = ''.join(semantic(e[2]) for e in selected)
+                    paths = [d for d in drawings if area.x0 <= d['rect'][0]
+                             and d['rect'][2] <= area.x1 and area.y0 <= d['rect'][1] <= area.y1]
+                    if (not paths or '=' not in value or not value.isprintable()
+                            or any(w not in {'pH', 'log'} for w in re.findall(r'[A-Za-z]{2,}', value))):
+                        continue
+                    bounds = fitz.Rect(selected[0][3])
+                    for entry in selected[1:]:
+                        bounds |= entry[3]
+                    detach(number, selected, paths, bounds)
+                    used.update(id(e[2]) for e in selected)
+                    break
+            for root in [e for e in entries if semantic(e[2]) == '√' and id(e[2]) not in used]:
+                size = root[1]['size']
+                bars = [d for d in drawings if abs(d['rect'][0]-root[3].x1) < .3*size
+                        and abs(d['rect'][1]-root[3].y0) < .15*size]
+                if len(bars) != 1:
+                    continue
+                bar = fitz.Rect(bars[0]['rect'])
+                operand = [e for e in entries if id(e[2]) not in used and e is not root
+                           and bar.x0-.1*size <= e[3].x0 and e[3].x1 <= bar.x1+.1*size
+                           and bar.y0 < e[3].y0 < bar.y0+1.2*size and e[3].y1 <= bar.y0+1.5*size]
+                value = ''.join(semantic(e[2]) for e in operand)
+                if (not operand or not re.fullmatch(r'[0-9α-ωΑ-ΩA-Za-z+−×·*/.()]+', value)
+                        or any(len(w) > 3 for w in re.findall(r'[A-Za-z]+', value))):
+                    continue
+                selected = [root, *operand]
+                # 同基线且间距紧邻的等式前缀属于同一个根式，遇普通正文即结束。
+                baseline = max(e[2]['origin'][1] for e in operand)
+                cursor, prefix = root[3].x0, []
+                for entry in sorted((e for e in entries if e[3].x1 <= cursor
+                                     and abs(e[2]['origin'][1]-baseline) < .4*size),
+                                    key=lambda e: e[3].x1, reverse=True):
+                    if not entry[1]['fixed'] or cursor-entry[3].x1 > .6*size or id(entry[2]) in used:
+                        break
+                    prefix.append(entry)
+                    cursor = entry[3].x0
+                if any(semantic(e[2]) == '=' for e in prefix):
+                    selected += prefix
+                bounds = fitz.Rect(selected[0][3])
+                for entry in selected[1:]:
+                    bounds |= entry[3]
+                detach(number, selected, bars, bounds)
+                used.update(id(e[2]) for e in selected)
+            for drawing in drawings:
+                overbar = _short_overbar([e for e in entries if id(e[2]) not in used], drawing)
+                if overbar is None:
+                    continue
+                selected, bounds = overbar
+                detach(number, selected, [drawing], bounds)
+                used.update(id(e[2]) for e in selected)
+            # 分式可能是正文不等式的右操作数；只有相邻正文提供了阅读位置才移动。
+            for formula in [b for b in blocks if b['page'] == number and b['kind'] == 'formula']:
+                selected = [e for e in entries if e[0] is formula and id(e[2]) not in used]
+                if not selected:
+                    continue
+                if not re.fullmatch(r'[0-9α-ωΑ-Ω+−×·*/().]+', ''.join(semantic(e[2]) for e in selected)):
+                    continue
+                bounds = fitz.Rect(selected[0][3])
+                for entry in selected[1:]: bounds |= entry[3]
+                paths = [d for d in drawings if bounds.x0-1 <= d['rect'][0]
+                         and d['rect'][2] <= bounds.x1+1 and bounds.y0 < d['rect'][1] < bounds.y1]
+                if (not paths or not any(e[2]['origin'][1] < paths[0]['rect'][1] for e in selected)
+                        or not any(e[2]['origin'][1] > paths[0]['rect'][1] for e in selected)):
+                    continue
+                # 要求紧邻完整正文词组，避免把旁边的公式标签当成正文。
+                if any(b['page'] == number and b['kind'] == 'body' and not p['fixed']
+                       and re.search(r'[A-Za-z]+\s+[A-Za-z]+', p['text'])
+                       and bounds.y0 <= p['baseline'] <= bounds.y1+.2*p['size']
+                       and max(bounds.x0-p['rect'][2],p['rect'][0]-bounds.x1,0) < p['size']
+                       for b in blocks for p in b['parts']):
+                    detach(number, selected, paths, bounds)
+                    used.update(id(e[2]) for e in selected)
+    blocks[:] = [b for b in blocks if b['parts']] + detached
+    return protected
+
+
+def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 7, frontmatter_after_cover: bool = True, publisher_font_styles: bool = True, nonadvancing_spaces: bool = True, extended_citations: int = 2, middle_dot_names: bool = True, publisher_layout: bool = True, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, reading_structure: int = 5, script_geometry: int = 4, author_details: bool = True, inline_fragments: int = 2, rotated_table_labels: bool = True, native_inline_math: int = 3, backmatter_structure: bool = True) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
@@ -1178,8 +1590,11 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if corpus_evidence:
                     from .source_symbols import restore_verified_symbols
                     restore_verified_symbols(page, raw, symbol_cache, printable_math=symbol_revision >= 3, latin_math=symbol_revision >= 4,
-                                             reviewed_brackets=symbol_revision >= 5, reviewed_decimals=symbol_revision >= 6)
+                                             reviewed_brackets=symbol_revision >= 5, reviewed_decimals=symbol_revision >= 6,
+                                             reviewed_type1=symbol_revision >= 7)
             text_blocks = []
+            if paragraph and backmatter_structure:
+                raw = [piece for native in raw for piece in _definition_rows(native)]
             for native in raw:
                 if not native.get('lines'):
                     continue
@@ -1243,6 +1658,11 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     covers = [box for box in boxes if classification_rect.get_area() > 0 and
                               (classification_rect & fitz.Rect(box['rect'])).get_area() / classification_rect.get_area() > .5]
                     role = covers[0]['kind'] if covers else 'body'
+                    if native.get('_definition_symbol'):
+                        role = 'table'
+                    if (paragraph and rotated_table_labels and role == 'body' and
+                            _rotated_table_label(page, line, boxes)):
+                        role = 'table'
                     if corpus_evidence and role == 'body':
                         # 数学字体的全局框可能比墨迹高三倍；显式公式内的
                         # 字符基线比整行外框面积更可靠。仅接纳全部基线在
@@ -1297,7 +1717,10 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                         paragraph_break = starts_paragraph(native['lines'], split[-1]['lines'], line, dash_lists=dash_lists, structured_headings=reading_structure >= 2)
                     if not split or paragraph_break or index in list_starts or split[-1]['_role'] != role or split[-1]['_reason'] != reason or changed:
                         split.append({'lines': [], 'bbox': list(lr), '_role': role, '_style': style,
-                                      '_reason': reason, '_list_start': index in list_starts})
+                                      '_reason': reason, '_list_start': index in list_starts,
+                                      **({'definition_row': f"{number}:{native['_definition_row']}",
+                                          'definition_right': native['_definition_right']}
+                                         if '_definition_row' in native else {})})
                     split[-1]['lines'].append(line)
                     split[-1]['bbox'] = list(fitz.Rect(split[-1]['bbox']) | lr)
                 text_blocks.extend(split)
@@ -1390,7 +1813,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                    all(s['flags'] & 2 for l in block['lines'] for s in l['spans']) or
                                    paragraph and publisher_layout and journal and journal['family'] == 'asce'
                                    and kind == 'body' and value in {'Results', 'Discussion', 'Conclusions'}),
-                               'page_width': page.rect.width})
+                               'page_width': page.rect.width,
+                               **({key: block[key] for key in ('definition_row', 'definition_right')}
+                                  if 'definition_row' in block else {})})
     if corpus_evidence:
         # PDF 可把行内分式的横线和分母另写成原生块。分子已作为行内
         # 锚点时，必须一起删除/重放这些紧贴的数学片段；否则固定横线的
@@ -1421,7 +1846,12 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
         blocks = [b for b in blocks if b['id'] not in absorbed]
     if paragraph and vector_fractions:
         _preserve_vector_fractions(source, blocks, include_label=fraction_labels,
-                                   glyph_structure=fraction_structure and fraction_labels)
+                                   glyph_structure=fraction_structure and fraction_labels,
+                                   native_inline_math=native_inline_math)
+        if native_inline_math:
+            protected.extend(_preserve_vector_math(source, blocks))
+        if native_inline_math >= 3:
+            blocks = _join_math_line_fragments(blocks)
     if paragraph and formula_openers:
         _detach_formula_openers(blocks)
     # 期刊图注也会分成左右两栏；视觉模型有时只识别带 Fig. 标题的一栏。
@@ -1473,7 +1903,8 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
         groups = paragraph_groups(blocks, section_boundaries=section_boundaries,
                                   mixed_first_page=content_geometry, dash_lists=dash_lists,
                                   pipe_headings=reading_structure, structured_headings=reading_structure >= 2,
-                                  appendix_captions=reading_structure >= 3, heading_styles=reading_structure >= 4)
+                                  appendix_captions=reading_structure >= 3, heading_styles=reading_structure >= 4,
+                                  backmatter_structure=backmatter_structure, math_closures=native_inline_math >= 2)
         if extended_citations >= 2:
             groups = _protect_group_citations(blocks, groups)
         return {'schema': 2, **({'journal': journal} if journal else {}),
@@ -1483,6 +1914,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 **({'script_geometry_revision': int(script_geometry)} if script_geometry else {}),
                 **({'author_details_revision': 1} if author_details else {}),
                 **({'inline_fragment_revision': int(inline_fragments)} if inline_fragments else {}),
+                **({'rotated_table_label_revision': 1} if rotated_table_labels else {}),
+                **({'backmatter_structure_revision': 1} if backmatter_structure else {}),
+                **({'native_inline_math_revision': int(native_inline_math)} if native_inline_math and vector_fractions else {}),
                 **({'publisher_font_revision': 1} if publisher_font_styles else {}),
                 **({'spacing_revision': 1} if nonadvancing_spaces else {}),
                 **({'author_separator_revision': 1} if middle_dot_names else {}),
@@ -1555,7 +1989,10 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
                             reading_structure=plan.get('reading_structure_revision', 0),
                             script_geometry=plan.get('script_geometry_revision', 0),
                             author_details=plan.get('author_details_revision') == 1,
-                            inline_fragments=plan.get('inline_fragment_revision', 0))
+                            inline_fragments=plan.get('inline_fragment_revision', 0),
+                            rotated_table_labels=plan.get('rotated_table_label_revision') == 1,
+                            native_inline_math=plan.get('native_inline_math_revision', 0),
+                            backmatter_structure=plan.get('backmatter_structure_revision') == 1)
     if plan != actual:
         raise ValueError('自动版面计划与源文件/检测结果不一致；拒绝人工改写或过期缓存')
     skip_block_ids = skip_block_ids or set()

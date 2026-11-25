@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 // 只生成 CLI 参数，不包含密钥。服务能力来自 PaperLocale 当前的 Provider 合同：
-// Codex 支持推理档位；兼容 API 与 Qwen-MT 不接收 reasoning-effort。
+// 只有 Codex 接收推理档位。官方 OpenAI API 使用固定端点。
 struct TranslationOptions {
     var pdf: String
     var runDirectory: String
@@ -16,6 +16,19 @@ struct TranslationOptions {
     var domain = "atmospheric-science"
     var referencePolicy = "preserve"
 
+    // 每个翻译进程只接收当前服务的密钥。检查和导出无需 API 凭据。
+    static func keyEnvironment(_ inherited: [String: String], provider: String,
+                               key: String, includeKey: Bool) -> [String: String] {
+        var environment = inherited
+        environment.removeValue(forKey: "OPENAI_API_KEY")
+        environment.removeValue(forKey: "PAPERLOCALE_API_KEY")
+        if includeKey && provider != "codex-local" {
+            let name = provider == "openai-api" ? "OPENAI_API_KEY" : "PAPERLOCALE_API_KEY"
+            environment[name] = key.isEmpty ? inherited[name] : key
+        }
+        return environment
+    }
+
     var arguments: [String] {
         var args = ["run", pdf, "--run-dir", runDirectory, "--provider", provider,
                     "--model", model, "--layout-mode", layoutMode,
@@ -24,6 +37,8 @@ struct TranslationOptions {
         if referencePolicy != "preserve" { args += ["--reference-policy", referencePolicy] }
         if provider == "codex-local" {
             args += ["--reasoning-effort", effort]
+        } else if provider == "openai-api" {
+            args += ["--api-key-env", "OPENAI_API_KEY"]
         } else {
             args += ["--base-url", baseURL, "--api-key-env", "PAPERLOCALE_API_KEY"]
         }

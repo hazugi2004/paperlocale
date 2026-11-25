@@ -1,4 +1,4 @@
-"""用已目视核验的 CFF 轮廓修复文本层，不按字体名或乱码字符猜测。
+"""用已目视核验的字形轮廓修复文本层，不按字体名或乱码字符猜测。
 
 部分出版社把 minus 命名为 two，ToUnicode 也写成 2。轮廓摘要不依赖
 子集字体名、字形编号或论文文件；只有绘制指令完全相同才恢复语义。
@@ -158,8 +158,18 @@ REVIEWED_DECIMAL_OUTLINES = {
 }
 
 
+# Biogeosciences 21, 5639 第 3 页及 ACP 24, 6583 第 4 页的嵌入式
+# Type 1 字形。经原页图像和实际绘图指令核对，保留原字形与坐标，仅恢复文本语义。
+REVIEWED_TYPE1_OUTLINES = {
+    ('pfa', 1000, '8c8cb8c6b71b7e344ef7957b174a1f14992ab06de59a589d8d893670854e76a6'): 'Ω',
+    ('pfa', 1000, '093e5679a0877fa980b2ae78c5fb2bc409bad144a2421442e2131732e125b547'): '(',
+    ('pfa', 1000, 'b54fecf2418779186935a5894984bd92ae1d7ed050710795b805dbe680cfa56b'): ')',
+    ('pfa', 1000, '7699e92272e54726f41e4038c290834bc301e3509c918aefd529c13b19de090c'): '√',
+}
+
+
 def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_math=False,
-                             reviewed_brackets=False, reviewed_decimals=False):
+                             reviewed_brackets=False, reviewed_decimals=False, reviewed_type1=False):
     """新计划专用：已核验异常轮廓恢复语义；无墨迹字符恢复空白。
 
     不推断未知控制码，也不向模型传入乱码。空白要由实际原字形的空
@@ -168,9 +178,12 @@ def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_ma
     for block in raw:
         for line in block.get('lines', []):
             for span in line['spans']:
+                # MTEX 的原编码 p 可能绘制根号。字体名仅筛选候选，避免对普通
+                # 正文的 p 重做字形查询。是否修复仍取决于完整轮廓。
+                type1_math = reviewed_type1 and span['font'].startswith('MTEX')
                 for char in span['chars']:
                     if (char['c'].isprintable() and not (printable_math and char['c'] in 'ðÞ¼' or latin_math and char['c'] == 'q'
-                            or reviewed_decimals and char['c'] == ':')
+                            or reviewed_decimals and char['c'] == ':' or type1_math and char['c'] == 'p')
                             or char['c'].isspace() or char['c'] == '\u00ad'):
                         continue
                     native = {'text': char['c'], 'rect': char['bbox'], 'origin': char['origin']}
@@ -198,7 +211,7 @@ def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_ma
                     # 也防止新表命中/旧表None在不同修订间互相污染。
                     decimal_candidate = reviewed_decimals and char['c'] == ':'
                     key = ('corpus-semantic', glyph['xref'], glyph['name'], reviewed_brackets,
-                           reviewed_decimals, decimal_candidate)
+                           reviewed_decimals, decimal_candidate, reviewed_type1)
                     if key not in cache:
                         pen = RecordingPen()
                         outlines[glyph['name']].draw(pen)
@@ -209,6 +222,8 @@ def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_ma
                             semantic = REVIEWED_BRACKET_OUTLINES.get(identity)
                         if semantic is None and decimal_candidate:
                             semantic = REVIEWED_DECIMAL_OUTLINES.get(identity)
+                        if semantic is None and reviewed_type1:
+                            semantic = REVIEWED_TYPE1_OUTLINES.get(identity)
                         cache[key] = semantic
                     semantic = cache[key]
                     if semantic:

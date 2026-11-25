@@ -6,10 +6,30 @@ import unittest
 
 import pymupdf as fitz
 
-from paperlocale.source_layout import extract_layout, load_plan, save_json, units_from_plan
+from paperlocale.source_layout import _definition_rows, extract_layout, load_plan, save_json, units_from_plan
 
 
 class ClassificationBoundaryTests(unittest.TestCase):
+    def test_math_definition_grid_requires_repeated_aligned_pairs(self):
+        def line(text, x, y, font):
+            return {'bbox': [x, y, x + len(text) * 5, y + 10],
+                    'spans': [{'font': font, 'size': 10, 'chars': [{'c': c} for c in text]}]}
+
+        rows = [(line(symbol, 40, y, 'Symbol'), line(definition, 100, y, 'Times-Roman'))
+                for symbol, definition, y in [('X', 'Constituent', 100), ('t', 'Time', 112),
+                                               ('p', 'Pressure', 136)]]
+        continued = line('in this equation', 100, 124, 'Times-Roman')
+        lines = [*rows[0], *rows[1], continued, *rows[2]]
+        native = {'number': 7, 'lines': lines}
+        pieces = _definition_rows(native)
+        self.assertEqual([entry for piece in pieces for entry in piece['lines']], lines)
+        self.assertEqual([p.get('_definition_symbol', False) for p in pieces],
+                         [True, False, True, False, True, False])
+        self.assertEqual(pieces[3]['lines'], [rows[1][1], continued])
+        self.assertEqual(pieces[3]['_definition_right'], continued['bbox'][2])
+        unrelated = {**native, 'lines': [*lines[:-1], line('Pressure', 150, 136, 'Times-Roman')]}
+        self.assertEqual(_definition_rows(unrelated), [unrelated])
+
     def test_frontiers_sidebar_does_not_preserve_unlabelled_abstract_or_keywords(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

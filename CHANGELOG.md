@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.7 — 2026-11-25
+
+- Add the official OpenAI Responses API to the CLI and macOS app. Translate in bounded batches, validating and saving each batch before continuing.
+- Compress the drawing streams of preserved-layout PDFs losslessly and save a single current revision.
+- Improve source reading order and placement for inline formulas, citations continued across pages, and mathematical symbol lists.
+- Improve translation checks for citation order, paired punctuation, and scientific quantities.
+- See [installation and release details](docs/releases/v0.8.7.md).
+
 ## 0.8.6 — 2026-11-16
 
 - Add side-by-side PDF reading, page-linked review issues, and explicit acceptance and export from the macOS app.

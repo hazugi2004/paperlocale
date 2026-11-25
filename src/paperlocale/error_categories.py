@@ -61,8 +61,10 @@ def classify(error: Exception, category: str) -> dict:
         values = ('environment.missing', '文件或依赖缺失', '核对所示路径；在应用设置中重新选择 PDF、CLI 或中文字体后继续。')
     elif '获取中文字体失败' in message or '获取中文粗体字体失败' in message:
         values = ('environment.missing', '中文字体资源不可用', '检查字体资源连接，或在翻译设置选择本机的中文字体后继续。')
-    elif category == 'provider' or any(t in message for t in ('401', '403', '429', 'timeout', 'timed out', 'connection', '无法连接', 'api 密钥', 'api_key', 'provider', 'codex', '模型')):
-        if any(t in message for t in ('401', '403', 'api 密钥', 'api_key', 'unauthorized', 'authentication')):
+    elif category == 'provider' or any(t in message for t in ('401', '403', '429', 'timeout', 'timed out', 'connection', '无法连接', 'api 密钥', 'api_key', 'api key', 'provider', 'codex', '模型')):
+        if message.startswith('openai api http 404.'):
+            values = ('service.connection', 'OpenAI 模型不可用', '核对 API 项目是否有权使用已选模型。若需更换模型，请新建运行并选择可用模型。')
+        elif any(t in message for t in ('401', '403', 'api 密钥', 'api_key', 'api key', 'unauthorized', 'authentication')):
             values = ('service.authentication', '服务授权', '在应用设置更新 API 密钥或完成服务登录，再从断点继续。')
         elif any(t in message for t in ('429', 'quota', 'rate limit', '额度')):
             values = ('service.quota', '服务额度或限流', '检查服务额度，等待恢复后再重试；反复立即重试不会修复额度问题。')

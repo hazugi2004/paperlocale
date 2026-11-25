@@ -21,6 +21,7 @@ from .pipeline import translate_segment_file
 from .providers import (
     REASONING_EFFORTS,
     CodexLocalProvider,
+    OpenAIAPIProvider,
     OpenAICompatibleProvider,
     QwenMTProvider,
 )
@@ -45,6 +46,9 @@ from .workflow import (
     translate_run,
     validate_run,
 )
+
+PROVIDER_CHOICES = ("codex-local", "openai-api", "openai-compatible", "qwen-mt")
+API_KEY_ENV_HELP = "API key variable (default: OPENAI_API_KEY for openai-api, PAPERLOCALE_API_KEY otherwise)"
 
 
 def _domain_check(identifier: str) -> None:
@@ -122,14 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
     provider_eval.add_argument("--domain", default="atmospheric-science")
     provider_eval.add_argument(
         "--provider",
-        choices=("codex-local", "openai-compatible", "qwen-mt"),
+        choices=PROVIDER_CHOICES,
         required=True,
     )
     provider_eval.add_argument("--model")
     provider_eval.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     provider_eval.add_argument("--codex-bin")
     provider_eval.add_argument("--base-url")
-    provider_eval.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    provider_eval.add_argument("--api-key-env", help=API_KEY_ENV_HELP)
     provider_eval.add_argument("--api-key-csv", type=Path, help="Qwen-MT：读取CSV中唯一完整sk-密钥字段；优先于环境变量")
     provider_eval.add_argument("--output", type=Path, required=True)
 
@@ -144,14 +148,14 @@ def build_parser() -> argparse.ArgumentParser:
     translate.add_argument("--domain", default="atmospheric-science")
     translate.add_argument(
         "--provider",
-        choices=("codex-local", "openai-compatible", "qwen-mt"),
+        choices=PROVIDER_CHOICES,
         required=True,
     )
     translate.add_argument("--model")
     translate.add_argument("--reasoning-effort", choices=REASONING_EFFORTS)
     translate.add_argument("--codex-bin")
     translate.add_argument("--base-url")
-    translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    translate.add_argument("--api-key-env", help=API_KEY_ENV_HELP)
     translate.add_argument("--api-key-csv", type=Path, help="Qwen-MT：读取CSV中唯一完整sk-密钥字段；优先于环境变量")
     translate.add_argument("--max-segments", type=int, default=200)
     translate.add_argument("--max-characters", type=int, default=30000)
@@ -194,15 +198,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="preserve",
     )
     run.add_argument(
-        "--provider", choices=("codex-local", "openai-compatible", "qwen-mt")
+        "--provider", choices=PROVIDER_CHOICES
     )
     run.add_argument("--output-pdf", type=Path, help="译文 PDF 保存位置；续跑默认沿用已记录位置，不覆盖无关文件")
-    run.add_argument("--model", help="codex-local 新运行默认 gpt-6-sol；续跑沿用原模型")
+    run.add_argument("--model", help="codex-local defaults to gpt-6-sol; openai-api requires an explicit model; resume uses the recorded model")
     run.add_argument("--reasoning-effort", choices=REASONING_EFFORTS,
                      help="codex-local 新运行默认 medium；续跑沿用原档位")
     run.add_argument("--codex-bin")
     run.add_argument("--base-url")
-    run.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    run.add_argument("--api-key-env", help=API_KEY_ENV_HELP)
     run.add_argument("--api-key-csv", type=Path, help="Qwen-MT：读取CSV中唯一完整sk-密钥字段；优先于环境变量")
     run.add_argument("--max-segments", type=int, default=200)
     run.add_argument("--max-characters", type=int, default=30000)
@@ -308,7 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_translate.add_argument(
         "--provider",
-        choices=("codex-local", "openai-compatible", "qwen-mt"),
+        choices=PROVIDER_CHOICES,
         required=True,
     )
     run_translate.add_argument("--model")
@@ -316,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_translate.add_argument("--contract-repair", action=argparse.BooleanOptionalAction, default=True)
     run_translate.add_argument("--codex-bin")
     run_translate.add_argument("--base-url")
-    run_translate.add_argument("--api-key-env", default="PAPERLOCALE_API_KEY")
+    run_translate.add_argument("--api-key-env", help=API_KEY_ENV_HELP)
     run_translate.add_argument("--api-key-csv", type=Path, help="Qwen-MT：读取CSV中唯一完整sk-密钥字段；优先于环境变量")
     run_translate.add_argument("--max-segments", type=int, default=200)
     run_translate.add_argument("--max-characters", type=int, default=30000)
@@ -456,6 +460,16 @@ def _provider_from_args(args: argparse.Namespace):
         )
     if args.reasoning_effort:
         raise ValueError("--reasoning-effort 当前只适用于 codex-local")
+    key_env = args.api_key_env or ("OPENAI_API_KEY" if args.provider == "openai-api" else "PAPERLOCALE_API_KEY")
+    if args.provider == "openai-api":
+        if args.base_url is not None:
+            raise ValueError("openai-api uses the fixed official endpoint; --base-url is not supported")
+        if not args.model or not args.model.strip():
+            raise ValueError("openai-api requires --model")
+        api_key = os.environ.get(key_env, "")
+        if not api_key:
+            raise ValueError(f"OpenAI API key variable {key_env} is empty")
+        return OpenAIAPIProvider(api_key=api_key, model=args.model)
     if not args.base_url or not args.model:
         raise ValueError(f"{args.provider} 必须提供 --base-url 和 --model")
     if key_csv is not None:
@@ -468,9 +482,9 @@ def _provider_from_args(args: argparse.Namespace):
             raise ValueError("Qwen 密钥 CSV 必须包含唯一、无内部空白的完整 sk-字段")
         api_key = keys.pop()
     else:
-        api_key = os.environ.get(args.api_key_env, "")
+        api_key = os.environ.get(key_env, "")
     if not api_key:
-        raise ValueError(f"环境变量 {args.api_key_env} 为空")
+        raise ValueError(f"环境变量 {key_env} 为空")
     provider_class = (
         QwenMTProvider if args.provider == "qwen-mt" else OpenAICompatibleProvider
     )
@@ -512,8 +526,13 @@ def main() -> int:
 
 
 def _apply_run_provider_defaults(args: argparse.Namespace, manifest: dict, is_new: bool) -> None:
-    """新运行选定默认模型；已有 Codex 断点始终沿用记录的模型身份。"""
+    """新运行默认 Codex；已有官方 API 或 Codex 断点沿用记录的模型身份。"""
     recorded = manifest.get("translation_provider")
+    if isinstance(recorded, dict) and recorded.get("provider") == "openai-api":
+        args.provider = args.provider or "openai-api"
+        if args.provider == "openai-api":
+            args.model = args.model or recorded.get("model")
+        return
     codex_recorded = isinstance(recorded, dict) and recorded.get("provider") == "codex-local"
     if args.provider is None and (is_new or manifest["status"] == "initialized" or codex_recorded):
         args.provider = "codex-local"

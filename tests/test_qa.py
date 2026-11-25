@@ -82,6 +82,68 @@ def _build_link_icon_pdf(path: Path, *, include_icons: bool) -> None:
 
 
 class PdfQaTest(unittest.TestCase):
+    def test_exact_native_move_never_hides_an_unrelated_drawing(self):
+        """真实 PDF 落盘后核验跨页笔画，缺失和改样式仍被拒绝。"""
+        from paperlocale.inline_vectors import select_strokes, remove_strokes, write_strokes, verify_strokes
+        from paperlocale.source_watermarks import set_page_stream
+        from paperlocale.vector_precision import restore_vector_precision
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.pdf'
+            rule = b'q .458 w 70 160 m 85 160 l S Q\n'
+            figure = b'q 2 w 30 40 130 60 re S Q\n'
+            with fitz.open() as document:
+                for number in range(2):
+                    page = document.new_page(width=300, height=300)
+                    for row in range(12):
+                        page.insert_text((20, 20 + row * 10), f'Synthetic text {row}: native ink.', fontsize=8)
+                    set_page_stream(page, page.read_contents() + figure + (rule if number == 0 else b''))
+                document.save(source)
+                strokes = select_strokes(document[0], [document[0].get_drawings()[1]])
+                cleared, removal = remove_strokes(document.tobytes(), [{'page': 1, 'strokes': strokes}])
+                self.assertEqual(len(removal), 1)
+
+            for case in ('complete', 'missing_figure', 'changed_rule', 'unbound_report'):
+                with self.subTest(case=case), fitz.open(stream=cleared, filetype='pdf') as document:
+                    target = root / f'{case}.pdf'
+                    shift = [20, -50]
+                    write_strokes(document[1], strokes, shift)
+                    declarations = verify_strokes(document[1], strokes, shift)
+                    if case == 'missing_figure':
+                        page = document[1]
+                        self.assertIn(figure, page.read_contents())
+                        set_page_stream(page, page.read_contents().replace(figure, b''))
+                    if case == 'changed_rule':
+                        stream = document[1].get_contents()[-1]
+                        raw = document.xref_stream(stream)
+                        self.assertIn(b'.458 w', raw)
+                        document.update_stream(stream, raw.replace(b'.458 w', b'.6 w'))
+                    document.save(target)
+                    restore_vector_precision(source, target)
+                    proof = {
+                        'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+                        'translated_sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+                        'dpi': 144, 'protected_region_count': 0, 'fixed_ink_checks': [],
+                        'pages': [{'page': n, 'outside_pixels_equal': True} for n in (1, 2)],
+                        'inline_checks': [{'source_page': 1, 'page': 2, 'shift': shift, 'strokes': declarations}],
+                    }
+                    if case == 'unbound_report':
+                        proof['translated_sha256'] = '0' * 64
+                    report = inspect_pdf_pair(source_pdf=source, translated_pdf=target,
+                        output_dir=root/case, dpi=72, preservation_report=proof)
+                    errors = report['errors']
+                    if case == 'complete':
+                        self.assertEqual(errors, [])
+                        self.assertEqual([p['inline_vector_move_evidence']['adjusted_expected']
+                                          for p in report['pages']], [1, 2])
+                    elif case == 'missing_figure':
+                        self.assertTrue(any('第2页矢量绘图减少' in error for error in errors))
+                    elif case == 'changed_rule':
+                        self.assertTrue(any('行内公式矢量核验失败' in error for error in errors))
+                    else:
+                        self.assertTrue(any('第1页矢量绘图减少' in error for error in errors))
+
     def test_shading_rasterization_is_not_counted_as_a_pdf_image(self):
         from reportlab.lib.colors import Color
         with tempfile.TemporaryDirectory() as tmp:
@@ -241,6 +303,36 @@ class PdfQaTest(unittest.TestCase):
                 dpi=72,
             )
             self.assertTrue(any("MediaBox" in error for error in report["errors"]))
+
+    def test_sparse_page_exemption_requires_identical_source_pixels(self) -> None:
+        """参考文献尾页原样保留时放行，删字或移动后仍报空白。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+
+            def build(path, lines, x=40, width=300):
+                document = canvas.Canvas(str(path), pagesize=(width, 300))
+                document.setFont("Helvetica", 8)
+                for row in range(lines):
+                    document.drawString(x, 240 - row * 12, "Reference text tail")
+                document.showPage()
+                document.save()
+
+            build(source, 2)
+            for name, args in {"identical": (2,), "deleted": (1,), "moved": (2, 80),
+                               "resized": (2, 40, 320), "blank": (0,)}.items():
+                with self.subTest(name=name):
+                    target = root / f"{name}.pdf"
+                    build(target, *args)
+                    report = inspect_pdf_pair(source_pdf=source, translated_pdf=target,
+                                              output_dir=root / name, dpi=72)
+                    page = report["pages"][0]
+                    self.assertLess(page["translated_nonwhite_ratio"], 0.01)
+                    self.assertEqual(bool(page.get("sparse_source_pixels_identical")),
+                                     name == "identical")
+                    self.assertEqual(any("疑似空白" in error for error in report["errors"]),
+                                     name != "identical")
 
     def test_lost_image_and_vector_table_are_errors(self) -> None:
         """译文页丢失图片或矢量表格时必须阻止 QA，而不只是发出警告。"""

@@ -68,6 +68,40 @@ class Provider(TranslationProvider):
 
 
 class SourceLayoutTests(unittest.TestCase):
+    def test_math_line_rejoins_source_blocks_in_physical_reading_order(self):
+        from paperlocale.source_layout import _join_math_line_fragments
+
+        def part(text, x0, x1, baseline, *, formula=False):
+            return {'text': text, 'rect': [x0, baseline-9, x1, baseline+2],
+                    'size': 10, 'baseline': baseline, 'fixed': formula,
+                    'chars': [{'text': text}], **({'math_island': True, 'strokes': [{'width': .5}]}
+                                                if formula else {})}
+
+        def block(label, parts, page=4):
+            rect = fitz.Rect(parts[0]['rect'])
+            for piece in parts[1:]:
+                rect |= fitz.Rect(piece['rect'])
+            return {'id': label, 'page': page, 'kind': 'body',
+                    'rect': list(rect), 'parts': parts, 'text': label}
+
+        first = part('is 1.3', 40, 78, 100)
+        fraction = part('formula', 80, 145, 100, formula=True)
+        tail = part('that', 147, 168, 100)
+        previous = part('While', 80, 130, 88)
+        off_line = block('different baseline', [part('another row', 146, 200, 112)])
+        next_page = block('different page', [part('same coordinates', 147, 195, 100)], page=5)
+        result = _join_math_line_fragments([block('right', [tail]), off_line,
+                    block('center', [previous, fraction]), block('left', [first]), next_page])
+
+        self.assertEqual(result[0]['parts'], [previous, first, fraction, tail])
+        self.assertIs(result[0]['parts'][2], fraction)
+        self.assertEqual(result[0]['text'], 'While is 1.3 formula that')
+        self.assertEqual(result[1:], [off_line, next_page])
+        # 两个多行块即使有一行碰到公式，也各保留自身段落身份。
+        preceding = block('preceding paragraph', [previous, first])
+        following = block('following paragraph', [fraction, part('in another line', 80, 155, 112)])
+        self.assertEqual(_join_math_line_fragments([preceding, following]), [preceding, following])
+
     def test_mixed_italic_prose_translates_to_and_as_but_keeps_variable(self):
         from paperlocale.source_layout import _parts
         spans = []
@@ -267,7 +301,7 @@ class SourceLayoutTests(unittest.TestCase):
                 doc.save(source)
             modern=extract_layout(source,paragraph=True)
             legacy=extract_layout(source,paragraph=True,symbol_revision=0)
-            self.assertEqual(modern['symbol_revision'],6)
+            self.assertEqual(modern['symbol_revision'],7)
             self.assertEqual(modern['blocks'][0]['kind'],'formula')
             self.assertEqual(legacy['blocks'][0]['kind'],'body')
             path=Path(tmp)/'plan.json';save_json(path,legacy)
@@ -533,6 +567,36 @@ class SourceLayoutTests(unittest.TestCase):
             save_json(root / 'plan.json', plan)
             with self.assertRaisesRegex(ValueError, '待确认'):
                 load_plan(source, root / 'plan.json')
+
+    def test_rotated_table_label_requires_two_enclosing_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            table = [{'page': 1, 'rect': [79, 75, 501, 301], 'kind': 'table'}]
+            for enclosed in (True, False):
+                with self.subTest(enclosed=enclosed):
+                    source = root / f'table-{enclosed}.pdf'
+                    with fitz.open() as doc:
+                        page = doc.new_page()
+                        page.draw_line((60, 80), (500, 80))
+                        page.draw_line((60, 300), (500 if enclosed else 90, 300))
+                        # 检测框左沿略窄，只罩住标签字框的少量面积。
+                        page.insert_text((78, 195), 'Rotated table label', rotate=90, fontsize=9)
+                        page.insert_text((60, 380), 'Body text to translate.', fontsize=10)
+                        doc.save(source)
+                    plan_path = root / 'plan.json'
+                    for modern in (True, False):
+                        plan = extract_layout(source, table, paragraph=True, rotated_table_labels=modern)
+                        label = next(b for b in plan['blocks'] if b['text'] == 'Rotated table label')
+                        save_json(plan_path, plan)
+                        if modern and enclosed:
+                            self.assertEqual(label['kind'], 'table')
+                            checked, units = load_plan(source, plan_path, table, paragraph=True)
+                            self.assertEqual(checked, plan)
+                            self.assertEqual([unit['source'] for unit in units], ['Body text to translate.'])
+                        else:
+                            self.assertEqual(label['kind'], 'review')
+                            with self.assertRaisesRegex(ValueError, '待确认'):
+                                load_plan(source, plan_path, table, paragraph=True)
 
     def setUp(self):
         # 几何/写入单元测试使用自有明确样例；ONNX 实测在真实论文验证中单独执行。

@@ -43,7 +43,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(manifest["status"], "rendered")
 
     def test_package_version_matches_current_release(self) -> None:
-        self.assertEqual(__version__, "0.8.6")
+        self.assertEqual(__version__, "0.8.7")
 
     def test_inspect_old_cache_diagnostic_without_rewriting_checkpoint(self) -> None:
         """旧报告无需重新调用模型即可获得当前处置方法。查看不会改变诊断身份。"""

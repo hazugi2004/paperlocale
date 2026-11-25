@@ -1,12 +1,12 @@
-# PaperLocale 0.8.6 for macOS
+# PaperLocale 0.8.7 for macOS
 
 打开论文后可以立即浏览原 PDF。有候选译文时，同一窗口可切换原文、译文和双栏对照。翻译和机器检查使用配套 CLI，人工验收由复核者在 App 中确认。
 
 ## 安装
 
-1. 在 macOS 13 或更新版本上，从 [v0.8.6 GitHub Release](https://github.com/hazugi2004/paperlocale/releases/tag/v0.8.6) 下载并完整解压 `PaperLocale-0.8.6-macOS-universal2.zip`。可立即用随附的 `PaperLocale.app` 阅读 PDF。
-2. 使用翻译前，先安装 Python 3.10–3.13（推荐 3.12）与 Poppler（`brew install poppler`），准备所选服务的登录或 API 密钥。双击 `Install PaperLocale CLI.command`，或在解压目录运行 `bash "./Install PaperLocale CLI.command"`。脚本安装随附的 `paperlocale-0.8.6-py3-none-any.whl`，联网下载排版依赖并检查大气科学术语库。
-3. 安装后可将 `PaperLocale.app` 放入“应用程序”。应用默认使用 `~/Library/Application Support/PaperLocale/cli/0.8.6/bin/paperlocale`，终端也可直接调用此路径。若在“翻译设置”手动选择了其他 CLI，该选择只对当前发行版本有效。也可把随附的 wheel 安装到已有 Python 虚拟环境。
+1. 在 macOS 13 或更新版本上，从 [v0.8.7 GitHub Release](https://github.com/hazugi2004/paperlocale/releases/tag/v0.8.7) 下载并完整解压 `PaperLocale-0.8.7-macOS-universal2.zip`。可立即用随附的 `PaperLocale.app` 阅读 PDF。
+2. 使用翻译前，先安装 Python 3.10–3.13（推荐 3.12）与 Poppler（`brew install poppler`），准备所选服务的登录或 API 密钥。双击 `Install PaperLocale CLI.command`，或在解压目录运行 `bash "./Install PaperLocale CLI.command"`。脚本安装随附的 `paperlocale-0.8.7-py3-none-any.whl`，联网下载排版依赖并检查大气科学术语库。
+3. 安装后可将 `PaperLocale.app` 放入“应用程序”。应用默认使用 `~/Library/Application Support/PaperLocale/cli/0.8.7/bin/paperlocale`，终端也可直接调用此路径。若在“翻译设置”手动选择了其他 CLI，该选择只对当前发行版本有效。也可把随附的 wheel 安装到已有 Python 虚拟环境。
 
 App 使用 ad-hoc 签名。若 macOS 阻止打开，先核对发行来源与 SHA-256，再使用系统“隐私与安全性”的“仍要打开”。[Apple 的首次打开说明](https://support.apple.com/102445)
 
@@ -20,7 +20,11 @@ App 使用 ad-hoc 签名。若 macOS 阻止打开，先核对发行来源与 SHA
 
 新任务默认使用英译中大气科学术语库（`atmospheric-science` 2.0.0）和整篇保版。打开原 PDF 时，App 在默认工作区查找与源路径和文件哈希同时匹配的运行。新任务默认放在 `~/paperlocale/<文件名>-<源路径摘要>/`。也可以通过“打开已有运行…”选取包含 `run_manifest.json` 的目录。
 
-继续运行会沿用清单记录的服务、模型和版面模式。支持 Codex 本机登录、兼容 API 和 Qwen-MT。兼容 API 填写含版本前缀的服务地址。API 密钥仅留在窗口内存，翻译子进程也可使用其启动环境中的 `PAPERLOCALE_API_KEY`。服务或模型变更需要新建运行。
+继续运行会沿用清单记录的服务、模型和版面模式。服务或模型变更需要新建运行。
+
+- 在「翻译设置」选择「OpenAI API（独立计费）」，填写 API 项目可用且支持结构化输出的模型名称和密钥。服务地址已固定。开始翻译后，程序才会向 OpenAI 发送待译文本。
+- 兼容 API 和 Qwen-MT 使用包含版本前缀的服务地址。Codex 使用本机已登录的 CLI。
+- App 内输入的密钥仅留在窗口内存。翻译进程也可使用 App 启动环境中的 `OPENAI_API_KEY`（OpenAI 官方 API）或 `PAPERLOCALE_API_KEY`（兼容 API 和 Qwen-MT）。
 
 运行时仍可阅读原文。“诊断”可展开查看日志。翻译失败时，可以从原文定位打开修订区块。审校已生成的候选时，也可以选择当前页的译文区块。
 
@@ -46,7 +50,7 @@ App 使用 ad-hoc 签名。若 macOS 阻止打开，先核对发行来源与 SHA
 
 在安装了 Xcode Command Line Tools 的 Mac 上，用 Python 3.11 或更新版本安装 Pillow，执行 `python3 scripts/build_macos_app.py`。脚本编译 arm64 和 x86_64，生成经过 ad-hoc 签名的 Universal 2 App 和 ZIP。若源码目录上的 FinderInfo 妨碍签名，可用 `--output-dir` 指定本地构建目录。
 
-发行构建使用 `python3 scripts/build_macos_app.py --wheel dist/paperlocale-0.8.6-py3-none-any.whl`，在 ZIP 中加入该 wheel 和 CLI 安装命令。仅构建应用时，默认使用原有的 CLI 设置或 `~/.local/bin/paperlocale`。可在虚拟环境运行 `python -m pip install ".[layout]"`，然后在“翻译设置”选择该环境的 `bin/paperlocale`。运行 `PaperLocale.app/Contents/MacOS/PaperLocale --cli-path` 可查看应用当前使用的 CLI 路径。
+发行构建使用 `python3 scripts/build_macos_app.py --wheel dist/paperlocale-0.8.7-py3-none-any.whl`，在 ZIP 中加入该 wheel 和 CLI 安装命令。仅构建应用时，默认使用原有的 CLI 设置或 `~/.local/bin/paperlocale`。可在虚拟环境运行 `python -m pip install ".[layout]"`，然后在“翻译设置”选择该环境的 `bin/paperlocale`。运行 `PaperLocale.app/Contents/MacOS/PaperLocale --cli-path` 可查看应用当前使用的 CLI 路径。
 
 ## 0.8.3 鲁棒性修复
 

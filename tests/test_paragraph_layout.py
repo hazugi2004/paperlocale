@@ -8,6 +8,7 @@ import pymupdf as fitz
 
 from paperlocale.source_layout import extract_layout, load_plan, save_json, fit_unit
 from paperlocale.paragraph_layout import bind_inline_glyphs, compact_target
+from paperlocale.diagnostics import LocatedError
 from paperlocale.preserved_workflow import run_preserved
 from paperlocale.providers import TranslationProvider, Translation
 from paperlocale.workflow import initialize_run
@@ -15,6 +16,26 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_blank_anchor_reports_its_position_instead_of_crashing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'blank-anchor.pdf'
+            with fitz.open() as doc:
+                doc.new_page().insert_text((40, 100), 'Ordinary text.')
+                doc.save(source)
+            rect = [60, 90, 63, 103]
+            unit = {
+                'id': 'sample', 'source': 'Ordinary {v0} text.',
+                'frames': [{'page': 1, 'rect': [40, 90, 160, 103], 'size': 10}],
+                'anchors': [{
+                    'page': 1, 'rect': rect, 'text': ' ',
+                    'chars': [{'text': ' ', 'origin': [60, 100], 'rect': rect}],
+                }],
+            }
+            with self.assertRaisesRegex(LocatedError, '缺少可核验字形') as error:
+                bind_inline_glyphs(source, [unit])
+            self.assertEqual(error.exception.category, 'source-glyph')
+            self.assertEqual(error.exception.items[0]['anchor_region'], {'page': 1, 'rect': rect})
+
     def test_dash_items_keep_continuations_but_do_not_merge(self):
         """PDF 中紧邻的破折号列表应按条翻译，悬挂续行仍属于同一条。"""
         with tempfile.TemporaryDirectory() as folder:
@@ -105,16 +126,18 @@ class ParagraphTests(unittest.TestCase):
     def test_full_width_citation_wraps_without_losing_original_glyphs(self):
         from paperlocale.paragraph_layout import fit_paragraph
         text='(Smith et al. 2020; Wang et al. 2021)'
-        glyphs=[{'text':c, 'rect':[i*3,0,i*3+2,8]} for i,c in enumerate(text)]
         width=len(text)*3
-        anchor={'text':text, 'ink':[0,0,width-1,8], 'body_baseline':8,
+        glyphs=[{'text':c, 'origin':[i*3,8], 'rect':[i*3,0,i*3+2,8]} for i,c in enumerate(text)]
+        anchor={'text':text, 'ink':[0,0,width-1,8], 'baseline':8, 'size':10, 'body_baseline':20,
                 'glyphs':glyphs, 'page':1}
         unit={'id':'citation','source':'{v0}.','anchors':[anchor], 'frames':[{
             'page':1,'rect':[0,0,width+1,50],'size':10,'bold':False,'leading':12,
             'weight':40,'indent':0}]}
         placed=fit_paragraph(unit,'{v0}。',fitz.Font('china-s'),None,None)
-        replayed=[g for p in placed if 'inline_anchor' in p for g in p['inline_anchor']['glyphs']]
+        citations=[p['inline_anchor'] for p in placed if 'inline_anchor' in p]
+        replayed=[g for citation in citations for g in citation['glyphs']]
         self.assertEqual(replayed,glyphs)
+        self.assertEqual({citation['body_baseline'] for citation in citations}, {8})
         self.assertEqual(placed[-1]['target'],'。')
         self.assertTrue(all(p['rect'][2]<=width+1 for p in placed))
         self.assertEqual(unit['anchors'],[anchor])
@@ -436,6 +459,24 @@ class ParagraphTests(unittest.TestCase):
         items=[block('a','The analysis follows Karl and Knight',90),
                block('b','(1998) and their definition of wet days.',102)]
         self.assertEqual(paragraph_groups(items),[['a','b']])
+
+    def test_overlapping_parenthesis_continuation_keeps_native_formula_with_prose(self):
+        from paperlocale.paragraph_layout import paragraph_groups
+
+        # 源根号外框向下一正文行伸展，短右括号已被提取成后一块开头。
+        left = {'id': 'a', 'kind': 'body', 'page': 5, 'rect': [46, 596, 287, 642],
+                'text': 'Use a frequency f (by setting p = 2πf × √ −1',
+                'parts': [{'fixed': False, 'size': 10, 'bold': False,
+                           'text': 'Use a frequency f', 'rect': [46, 596, 287, 642]},
+                          {'fixed': True, 'strokes': [{}]}]}
+        right = {'id': 'b', 'kind': 'body', 'page': 5, 'rect': [46, 632, 287, 678],
+                 'text': ') This avoids aliasing.',
+                 'parts': [{'fixed': False, 'size': 9, 'bold': False,
+                            'text': ') This avoids aliasing.', 'rect': [46, 632, 287, 678]}]}
+        self.assertEqual(paragraph_groups([left, right]), [['a'], ['b']])
+        self.assertEqual(paragraph_groups([left, right], math_closures=True), [['a', 'b']])
+        self.assertEqual(paragraph_groups([left, {**right, 'page': 6}], math_closures=True),
+                         [['a'], ['b']])
 
     def test_hanging_list_lines_form_one_frame_with_continuation_indent(self):
         from paperlocale.paragraph_layout import attach_frames

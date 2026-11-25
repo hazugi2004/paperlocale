@@ -7,7 +7,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from ..contracts import match_glossary, protected_counts, scientific_quantities, scientific_literal_spans
+from ..contracts import (
+    FORMULA_RE,
+    match_glossary,
+    protected_counts,
+    scientific_literal_spans,
+    scientific_quantities,
+)
 from ..domains import DomainPack
 
 
@@ -50,8 +56,9 @@ class TranslationProvider(ABC):
     """所有真实 Provider 必须实现的同步批量接口。"""
 
     # 大多数聊天模型可接收多个结构化片段；专用翻译模型可覆盖
-    # 此值声明更严格的单次上限，由公共流水线统一切批。
+    # 声明更严格的单次段数或源文字符数上限，由公共流水线统一切批。
     max_batch_segments: int | None = None
+    max_batch_characters: int | None = None
 
     def provenance(self) -> dict[str, object]:
         """返回可写入运行清单的非敏感 Provider 身份。
@@ -132,7 +139,8 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
                  **({"note": entry.note} if entry.note else {})}
                 for surface, entry in match_glossary(segment.source, context.domain)
             ]
-        item["scientific_literals"] = [segment.source[a:b] for a,b in scientific_literal_spans(segment.source)]
+        anchors = context.anchor_text.get(segment.id)
+        item["scientific_literals"] = [segment.source[a:b] for a,b in scientific_literal_spans(segment.source, anchor_text=anchors)]
         quantities = scientific_quantities(segment.source)
         if quantities:
             item["scientific_quantities"] = [
@@ -144,8 +152,10 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
                 for q in quantities
             ]
         feedback = context.repair_feedback.get(segment.id)
-        if segment.id in context.anchor_text:
-            item['fixed_anchor_text'] = dict(context.anchor_text[segment.id])
+        if anchors is not None:
+            # 锚点字典描述各标记的原 PDF 内容。顺序和重复次数按源文实际出现位置提供。
+            item['fixed_anchor_text'] = dict(anchors)
+            item['fixed_anchor_order'] = FORMULA_RE.findall(segment.source)
         if feedback is not None:
             previous_target, errors = feedback
             item["previous_target"] = previous_target
@@ -162,10 +172,29 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
         repair_instruction = """
 6. 本批是合同修复重试。逐条依据 validation_errors 修正 previous_target；
    must_preserve 中每个表面形式必须至少保留指定次数，不要省略重复图号、
-   变量、单位或引文。仍需返回完整 target，不能只返回差异或解释。
+   变量、单位或引文。若领域术语缺失，在 source 找到该术语对应的正文或括号释义，
+   将 previous_target 该处的英文或异译改为 terminology 指定的译名，保留相关缩写与定义。
+   若锚点顺序失败，以 source 为准重写有反序的分句，改写普通连接语使顺序合规，
+   维持各锚点的修饰归属，不能只搬动占位符而把限定挂到另一对象。
+   若仪器被前置，按固定锚点说明用两个分句恢复被测量与仪器的顺序。
+   若把变量写到了对应数值之前，按原句重写为先给出数值，再说明对应变量。
+   若还原锚点后括号不配对，逐一代回 fixed_anchor_text 检查 source 中的配对位置，
+   在相应的普通正文恢复缺少的半边括号，只删除锚点已经提供的重复半边。
+   保留与错误无关的合格分句；修完后重新核对全段的括号与锚点顺序。
+   若一个标记被重复，后续从句可用指代同一概念的词，不得再复制标记或改变对象。
+   仍需返回完整 target，不能只返回差异或解释。
 """
     anchor_instruction = ("fixed_anchor_text 说明占位符在 PDF 中原样显示的内容（含括号）。占位符前后的信息须保持对应，不能把数值、单位或整句移过固定锚点来改变所属位置。"
-                          "target 仍保留占位符，不能重复其文本或标点；代回原文后语句及括号须完整。\n"
+                          "fixed_anchor_order 是 target 必须逐项保留的完整序列；相邻锚点也不得因中文语序交换。"
+                          "原文先出现带锚点的被测量、后出现带锚点的仪器时，用两个分句：先写完整被测量，再说明所用仪器。"
+                          "例如“测量了该通量，所用仪器为……”。"
+                          "嵌套在评估或检验的长句中时，后半句用普通名词复指同一量，例如“检验了通量的差异（这些通量由相应仪器测得），并评估了另一指标”。"
+                          "原文先给出数值再指明变量时，保留完整数值在前，例如“取值为……（对应变量……）”。"
+                          "保持仪器与该量的关联，仪器型号的文字前缀与锚点仍相连。输出前按段核对占位符实际次序。"
+                          "target 仍保留占位符，锚点的文字与标点由占位符提供。"
+                          "若原文的括号一边在锚点内、另一边在普通正文，保留正文中的配对半边，并让它仍包围同一内容。"
+                          "例如锚点自带右括号时写“（见模型{vN}”，锚点自带左括号时写“{vN}，即相应测量值）”；省去的只是锚点已提供的半边。"
+                          "原文跨段的括号按原样保留，输出前将各锚点代回检查配对。\n"
                           if context.anchor_text else "")
     return f"""{context.domain.prompt}
 
@@ -184,7 +213,8 @@ def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
 {anchor_instruction}{reference_instruction}
 {repair_instruction}
 
-每段 terminology 仅列原文命中的术语。required=true 时使用给定译名；
+每段 terminology 仅列原文命中的术语。required=true 时，即使术语出现在括号释义或较长词组中，也须使用给定译名。
+原文同时提供缩写及其普通术语释义时，保留缩写，并把释义完整译为目标语言。
 required=false 时参考推荐译名及备注，按原句语境消歧。保留源文限定语与缩写。
 
 源语言：{context.source_language}

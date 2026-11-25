@@ -147,10 +147,13 @@ class VectorPrecisionTests(unittest.TestCase):
             buff=BytesIO();w.write(buff);source.write_bytes(buff.getvalue())
             with fitz.open(source) as doc:
                 p=doc[0];p.add_redact_annot(fitz.Rect(20,30,150,60),fill=False);p.apply_redactions(images=0,graphics=0);p.insert_text((30,50),'Replacement');doc.save(target,garbage=0)
+            before_precision = target.read_bytes()
             evidence=restore_vector_precision(source,target)
             self.assertEqual(evidence['rectangles_restored'],1)
             self.assertEqual(evidence['shading_resource_sets_restored'],1)
             a=PdfReader(source);b=PdfReader(target)
+            self.assertEqual(b.pages[0]['/Contents']['/Filter'], '/FlateDecode')
+            self.assertFalse(target.read_bytes().startswith(before_precision))
             self.assertEqual([float(x.get_object()) for x in a.pages[0]['/Resources']['/Shading']['/Original']['/Coords']], [float(x.get_object()) for x in b.pages[0]['/Resources']['/Shading']['/Original']['/Coords']])
             with fitz.open(target) as doc:
                 self.assertIn('Replacement',doc[0].get_text());self.assertNotIn('Erase',doc[0].get_text())

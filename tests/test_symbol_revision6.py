@@ -10,6 +10,7 @@ import copy
 import hashlib
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import pymupdf as fitz
 from fontTools import t1Lib
@@ -38,9 +39,9 @@ def _draw_point(pen, offset=0):
     pen.closePath()
 
 
-def _decimal_fixture(path, *, kind='cff', scale=.001, outline='point'):
+def _decimal_fixture(path, *, kind='cff', scale=.001, outline='point', control_code=None):
     """构造文本映射为冒号、真实墨迹由参数决定的简单Type1临时PDF。"""
-    fixture(path)
+    fixture(path, control_code=control_code)
     matrix = [scale, 0, 0, scale, 0, 0]
     if kind == 'cff':
         cff = CFFFontSet()
@@ -63,12 +64,17 @@ def _decimal_fixture(path, *, kind='cff', scale=.001, outline='point'):
         font = t1Lib.T1Font.__new__(t1Lib.T1Font)
         font.data, font.encoding = program('pfa', matrix), 'ascii'
         font.parse()
-        font.font['CharStrings']['P'] = T1CharString(program=[
+        point = T1CharString(program=[
             0, 500, 'hsbw', 139, 0, 'rmoveto',
             25, 0, 27, 18, 0, 34, 'rrcurveto',
             0, 34, -27, 19, -25, 0, 'rrcurveto',
             -24, 0, -28, -19, 0, -34, 'rrcurveto',
             0, -34, 28, -18, 24, 0, 'rrcurveto', 'closepath', 'endchar'])
+        if control_code is None:
+            font.font['CharStrings']['P'] = point
+        else:
+            font.font['CharStrings']['FixtureBracket'] = point
+            font.font['Encoding'][control_code] = 'FixtureBracket'
         data, name = font.createData(), 'FixturePFA'
     with fitz.open(path) as document:
         page = document[0]
@@ -177,7 +183,7 @@ class SymbolRevision6Tests(unittest.TestCase):
                 self.assertTrue(any(c['c'] == '\x01' for b in alias for l in b.get('lines', [])
                                     for s in l['spans'] for c in s['chars']))
 
-    def test_real_extract_and_load_keep_revisions_zero_through_five(self):
+    def test_real_extract_and_load_keep_revisions_zero_through_six(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / 'point.pdf'
@@ -192,4 +198,47 @@ class SymbolRevision6Tests(unittest.TestCase):
                     checked, _ = load_plan(source, path, paragraph=True)
                     self.assertEqual(checked, plan)
             modern = extract_layout(source, paragraph=True)
-            self.assertEqual(modern['symbol_revision'], 6)
+            self.assertEqual(modern['symbol_revision'], 7)
+
+    def test_type1_semantics_require_exact_outline_and_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'type1.pdf'
+            _decimal_fixture(source, kind='pfa', control_code=0x10)
+            with fitz.open(source) as document:
+                page = document[0]
+                raw = page.get_text('rawdict')['blocks']
+                native = raw[0]['lines'][0]['spans'][0]['chars'][0]
+                self.assertEqual(native['c'], '\x10')
+                identity = _identity(page, native)
+                before = copy.deepcopy(native)
+                cache = {}
+                with patch('paperlocale.source_symbols.REVIEWED_TYPE1_OUTLINES', {identity: '('}):
+                    restore_verified_symbols(page, raw, cache)
+                    self.assertEqual(native, before)
+                    restore_verified_symbols(page, raw, cache, reviewed_type1=True)
+                    self.assertEqual(native, {**before, 'c': '(', 'native_text': '\x10'})
+                with patch('paperlocale.source_symbols.REVIEWED_TYPE1_OUTLINES', {}):
+                    unknown = page.get_text('rawdict')['blocks']
+                    restore_verified_symbols(page, unknown, {}, reviewed_type1=True)
+                    self.assertEqual(unknown[0]['lines'][0]['spans'][0]['chars'][0], before)
+
+    def test_unknown_type1_outline_blocks_source_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture_path = root / 'type1.pdf'
+            source = root / 'unknown.pdf'
+            _decimal_fixture(fixture_path, kind='pfa', control_code=0x10)
+            with fitz.open(fixture_path) as document:
+                page = document[0]
+                page.insert_font(fontname='helv')
+                # 用单一基线连接控制码与普通正文，模拟丢失括号语义的段落。
+                document.update_stream(page.get_contents()[0],
+                    b'BT /helv 12 Tf 1 0 0 1 90 742 Tm (The measured value ) Tj '
+                    b'/F 12 Tf <10> Tj /helv 12 Tf ( follows this relation.) Tj ET')
+                document.save(source)
+            plan = extract_layout(source, paragraph=True)
+            plan_path = root / 'plan.json'
+            self.assertTrue(any('\x10' in block['text'] for block in plan['blocks']))
+            save_json(plan_path, plan)
+            with self.assertRaisesRegex(ValueError, '未解决的异常编码'):
+                load_plan(source, plan_path, paragraph=True)

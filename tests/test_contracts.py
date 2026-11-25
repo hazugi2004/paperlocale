@@ -33,6 +33,17 @@ class TranslationContractTest(unittest.TestCase):
             self.assertTrue(validate_translation(source, target))
         self.assertEqual(validate_translation("Volume is 3 cubic metres.", "体积为3立方米。"), [])
 
+    def test_fixed_unit_sentence_stop_is_distinct_from_a_decimal(self) -> None:
+        source = "Report the concentration {v0}.{v1} is the mean residence time."
+        target = "浓度为{v0}。{v1}是平均停留时间。"
+        known = {"{v0}": "(µmol m−3)", "{v1}": " θC"}
+        self.assertEqual(validate_translation(source, target, anchor_text=known), [])
+        for unclear in (None, {"{v0}": "12", "{v1}": "5"},
+                        {"{v0}": "(a)", "{v1}": " θC"}):
+            with self.subTest(unclear=unclear):
+                self.assertTrue(any(error.startswith("scientific_literal ") for error in
+                                    validate_translation(source, target, anchor_text=unclear)))
+
     def test_url_only_and_mixed_prose(self) -> None:
         """纯网址允许原样保留；网址损坏及漏译正文仍拒绝。"""
         source = "www.nature.com/scientificdata www.nature.com/scientificdata/"

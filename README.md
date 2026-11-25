@@ -32,7 +32,8 @@ The project does not promise bitwise-identical typography. Chinese text naturall
 ## Implemented providers and gates
 
 - `codex-local`: local-only translation through an authenticated Codex CLI session;
-- `openai-compatible`: BYOK access to OpenAI and compatible endpoints;
+- `openai-api`: OpenAI Responses API with your own API key and an explicitly selected model;
+- `openai-compatible`: BYOK access to compatible Chat Completions endpoints;
 - an auditable manual ChatGPT Web bridge that exports hash-bound prompts and imports
   strict JSON responses without browser login, scraping, or automation;
 - `qwen-mt`: BYOK access to Qwen-MT's dedicated translation endpoint, with
@@ -106,15 +107,15 @@ Install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.8.6"
+python -m pip install "paperlocale[layout]==0.8.7"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-PaperLocale 0.8.6 adds side-by-side PDF reading, translation review and manual
-revisions to the macOS app. New translations use the built-in atmospheric-science
-glossary 2.0.0 by default. The macOS download includes a matching CLI wheel and
-its setup command. See the [release notes](docs/releases/v0.8.6.md) and
+PaperLocale 0.8.7 adds the official OpenAI API to the CLI and macOS app and
+writes smaller PDFs with lossless compression. New translations use the
+built-in atmospheric-science glossary 2.0.0 by default. The macOS download
+includes a matching CLI wheel and setup command. See the [release notes](docs/releases/v0.8.7.md) and
 [macOS setup instructions](macos/README.md). To install this checkout from source,
 use `python -m pip install ".[layout]"`.
 
@@ -166,10 +167,33 @@ never overwritten. The terminal prints the error cause, location, and recovery
 step immediately, including when a run remains waiting. Human visual review and
 `paperlocale accept` are still required.
 
+Paragraph and preserved modes compress the final PDF's page content streams
+losslessly and discard unused PDF objects before the final preservation checks.
+
 `qa_generated` remains a machine-checked candidate requiring visual acceptance.
 This is not a guarantee for arbitrary PDFs: scanned pages, rotated body text, or
 layouts that cannot pass safety checks remain waiting. See the detailed
 [scope and recovery guide](docs/PRESERVED_LAYOUT.zh-CN.md).
+
+### OpenAI API
+
+Set `OPENAI_API_KEY` in the process environment and choose a model available to
+your API project that supports Structured Outputs.
+
+```bash
+paperlocale run paper.pdf --run-dir runs/paper-openai \
+  --provider openai-api --model gpt-5.4
+```
+
+The provider sends text segments to `https://api.openai.com/v1/responses` with
+response storage disabled. OpenAI API usage is billed separately from ChatGPT.
+Long papers are split into requests of at most 10 segments and 4,000 source
+characters. A single longer paragraph stays intact in its own request.
+An HTTP or connection failure stops at the checkpoint. Rerun with the same
+provider and model to resume. The existing one-time correction for rejected
+translation content can make an additional request. GPT-5.4 uses low reasoning
+effort for this correction. Use `--no-contract-repair` to stop on the first
+content error.
 
 ## Legacy workflow
 

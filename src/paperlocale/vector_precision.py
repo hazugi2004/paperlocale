@@ -8,6 +8,7 @@ once after the final MuPDF save, before preservation checks; never rasterize.
 from collections import defaultdict
 from decimal import Decimal
 from io import BytesIO
+from inspect import signature
 import math
 import struct
 
@@ -41,7 +42,7 @@ def _multiply(a, b):
             _float32(dot(a[4], b[1], a[5], b[3]) + b[5]))
 
 
-def _operations(data):
+def _operations(data, extra=()):
     """Use pypdf's parser, including strings/comments/inline images, with offsets.
 
     Its parser appends each complete operation after consuming it. Recording
@@ -57,6 +58,7 @@ def _operations(data):
     retained = {b'q', b'Q', b'cm', b're', b'Do', b'gs', b'BT', b'ET', b'Tf',
                 b'Tc', b'Tw', b'Tz', b'Ts', b'Tr', b'TL', b'Tm', b'Td', b'TD',
                 b'T*', b'TJ', b'Tj', b"'", b'"'}
+    retained.update(extra)
 
     class Operations(list):
         previous_end = 0
@@ -362,14 +364,14 @@ def _restore_protected_text(source, target, source_fonts, target_fonts, proven):
 
 
 def restore_vector_precision(source, candidate, *, protected_regions=()):
-    """Append precise source geometry to the final candidate without renumbering.
+    """Restore precise source geometry before losslessly writing the candidate.
 
     Shading resources (including functions/colorspaces) are native source PDF
     objects, cloned recursively. Whole text/Form streams are never copied from source.
     The caller must still run its final text, geometry and pixel checks.
     """
     original = PdfReader(source)
-    written = PdfWriter(candidate, incremental=True)
+    written = PdfWriter(clone_from=candidate)
     if len(original.pages) != len(written.pages):
         raise ValueError('Page count changed before precision preservation')
     evidence = {'rectangles_restored': 0, 'shading_resource_sets_restored': 0,
@@ -467,14 +469,25 @@ def restore_vector_precision(source, candidate, *, protected_regions=()):
                 text_proofs.get(number, [])) if text_proofs.get(number) else (data, 0)
             evidence['protected_text_arrays_restored'] += text_count
             if count or text_count:
-                # set_data invalidates parsed operations without rounding them.
+                # 保留原生绘制指令的精确字节，只对新内容流做无损压缩。单独分配
+                # 引用，避免覆盖其他页可能共用的旧内容流。
                 dst.set_data(data)
-                b.replace_contents(dst)
+                b[NameObject('/Contents')] = written._add_object(dst.flate_encode())
                 evidence['rectangles_restored'] += count
         resources(a['/Resources'], b['/Resources'], src.get_data() if src is not None else b'',
                   dst.get_data() if dst is not None else b'')
     if any(evidence[key] for key in ('rectangles_restored', 'shading_resource_sets_restored',
                                      'form_geometry_restored', 'page_geometry_restored', 'protected_text_arrays_restored')):
+        # 完整保存只写当前版本，避免增量更新为同一页留下新旧两套绘制流。
+        # 保留所有可达对象的浮点精度，也保留内容相同但作为不同目标的页面和注释。
+        _precise_floats(written.root_object, set())
+        if 'remove_duplicates' in signature(written.compress_identical_objects).parameters:
+            written.compress_identical_objects(remove_duplicates=False)
+        else:
+            # 早期 pypdf 6 的清理方法要求存在 Info 字典，即使源文件没有文档属性。
+            if written.metadata is None:
+                written.add_metadata({})
+            written.compress_identical_objects(remove_identicals=False)
         output = BytesIO()
         written.write(output)
         candidate.write_bytes(output.getvalue())

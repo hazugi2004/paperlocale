@@ -40,6 +40,7 @@ _POWER = r'10(?:\^[+−-]?\d+|−\d+|[⁻⁺]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+)'
 _NUM = rf'(?:[+−-]?{_POWER}|[+−-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+−-]?\d+)?(?:\s*[×x]\s*{_POWER})?)'
 _VALUES = re.compile(rf'(?<![A-Za-z0-9_./])(?P<a>{_NUM})(?:\s*[–—~-]\s*(?P<b>{_NUM}))?')
 _NON_CJK_LETTER = re.compile(r'[^\W\d_\u3400-\u9fff]')
+_GWP_ABBREVIATION = re.compile(r'GWP(?![^\W\u3400-\u9fff])')
 _BARE = {'m', 'km', 'cm', 'mm', 'kg', 'Pa', 'hPa', 'kPa', 'K', '°C', '°F', '°', '%', 'ppm', 'ppb'}
 
 
@@ -82,7 +83,10 @@ def _unit_at(text: str, start: int):
         power *= int(re.sub(r'[\s^]', '', exponent.group()).translate(_SUPERS).replace('−', '-'))
         end = exponent.end()
     if end < len(text) and _NON_CJK_LETTER.match(text[end]):
-        return None
+        # “100年GWP”中的年限定全球增温潜势的时间范围，缩写不属于单位。
+        # 只接受紧接无幂“年”的独立 GWP，避免从其他字母串截取单位。
+        if not (alias == '年' and exponent is None and _GWP_ABBREVIATION.match(text, end)):
+            return None
     return end, base, power
 
 

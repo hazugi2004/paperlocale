@@ -127,6 +127,25 @@ class PipelineTest(unittest.TestCase):
             )
             self.assertEqual(provider.calls, 2)
 
+    def test_provider_character_limit_keeps_a_long_segment_whole(self) -> None:
+        pairs = {
+            'Rain was 3 mm.': '降雨量为3 mm。',
+            'Air was cool.': '空气凉爽。',
+            'The site remained wet throughout the measurement.': '观测期间站点一直保持湿润。',
+        }
+        provider = _MappingProvider(pairs)
+        provider.max_batch_characters = 20
+        with tempfile.TemporaryDirectory() as directory:
+            segments = Path(directory) / 'segments.jsonl'
+            target = Path(directory) / 'translations.jsonl'
+            write_jsonl_atomic(segments, [{'id': segment_id(s), 'source': s} for s in pairs])
+            self.assertEqual(translate_segment_file(
+                segments_path=segments, translations_path=target, provider=provider,
+                domain=load_domain_pack('atmospheric-science'), max_characters=30,
+            ), (0, 3))
+            self.assertEqual(provider.calls, 3)
+            self.assertEqual([row['source'] for row in read_jsonl(target)], list(pairs))
+
     def test_fail_fast_saves_progress_without_repair_call(self) -> None:
         """作者姓名误判也必须先保存证据；调用方禁重试时只调用一次模型。"""
         good = "Soil moisture was 10 mm."
@@ -253,6 +272,95 @@ class PipelineTest(unittest.TestCase):
             self.assertTrue(any("NDVI" in error for error in feedback[1]))
             self.assertEqual(read_jsonl(translations)[0]["target"], "NDVI值为2.0。")
             self.assertFalse((root / "rejected_translations.jsonl").exists())
+
+    def test_duplicate_anchor_closer_is_normalized_on_either_model_attempt(self) -> None:
+        source = 'The test used a resistor (200{v0}.'
+        sid = segment_id(source)
+        duplicate = '测试使用了（200{v0}）的电阻。'
+        corrected = '测试使用了（200{v0}的电阻。'
+        for initial, expected_calls in ((duplicate, 1), ('测试使用了电阻。', 2)):
+            with self.subTest(initial=initial), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                segments, target = root / 'segments.jsonl', root / 'translations.jsonl'
+                write_jsonl_atomic(segments, [{'id': sid, 'source': source}])
+                provider = _RepairingProvider(source, initial, duplicate)
+                self.assertEqual(translate_segment_file(
+                    segments_path=segments, translations_path=target, provider=provider,
+                    domain=load_domain_pack('atmospheric-science'), anchor_text={sid: {'{v0}': ' Ω)'}},
+                ), (0, 1))
+                self.assertEqual(len(provider.contexts), expected_calls)
+                row, = read_jsonl(target)
+                self.assertEqual(row['target'], corrected)
+                self.assertEqual(row['normalization'], {
+                    'kind': 'duplicate_anchor_closer', 'anchor': '{v0}', 'removed': '）',
+                })
+                self.assertFalse((root / 'rejected_translations.jsonl').exists())
+
+    def test_duplicate_anchor_closer_requires_unique_unmatched_candidate(self) -> None:
+        source = 'The test used a resistor (200{v0}.'
+        domain = load_domain_pack('atmospheric-science')
+        for label, original, reply, anchors, repair, accepted in (
+            ('existing valid', source, '测试使用了（200{v0}的电阻。', {'{v0}': ' Ω)'}, True, True),
+            ('source has outer closer', 'The test used ((the resistor 200{v0}).',
+             '测试使用了（（电阻200{v0}）。', {'{v0}': ' Ω)'}, True, True),
+            ('outer closer after source punctuation', 'The test used ((the resistor 200{v0}.)',
+             '测试使用了（200{v0}）的电阻。', {'{v0}': ' Ω)'}, True, False),
+            ('disabled', source, '测试使用了（200{v0}）的电阻。', {'{v0}': ' Ω)'}, False, False),
+            ('wrong number', source, '测试使用了（201{v0}）的电阻。', {'{v0}': ' Ω)'}, True, False),
+            ('missing source punctuation', 'The (200{v0} resistor was used.',
+             '测试使用了（200{v0}）的电阻。', {'{v0}': ' Ω)'}, True, False),
+            ('legitimate outer closer and different error', source,
+             '测试使用了（（200{v0}）的电阻）。', {'{v0}': ' Ω)'}, True, False),
+            ('multiple candidates', source + ' The second resistor (300{v1}.',
+             '测试使用了（200{v0}）的电阻和（300{v1}）的第二个电阻。',
+             {'{v0}': ' Ω)', '{v1}': ' Ω)'}, True, False),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                segments, target = root / 'segments.jsonl', root / 'translations.jsonl'
+                sid = segment_id(original)
+                provider = _MappingProvider({original: reply})
+                write_jsonl_atomic(segments, [{'id': sid, 'source': original}])
+                options = dict(segments_path=segments, translations_path=target, provider=provider,
+                               domain=domain, anchor_text={sid: anchors}, contract_repair=repair)
+                if accepted:
+                    self.assertEqual(translate_segment_file(**options), (0, 1))
+                    row, = read_jsonl(target)
+                    self.assertEqual(row['target'], reply)
+                    self.assertNotIn('normalization', row)
+                else:
+                    with self.assertRaisesRegex(ValueError, '内容校验失败|未通过门禁'):
+                        translate_segment_file(**options)
+                    rejection, = read_jsonl(root / 'rejected_translations.jsonl')
+                    self.assertEqual(rejection['target'], reply)
+                    self.assertEqual(provider.calls, 2 if repair else 1)
+
+    def test_duplicate_anchor_closer_does_not_rewrite_existing_rows(self) -> None:
+        source = 'The test used a resistor (200{v0}.'
+        sid = segment_id(source)
+        for manually_covered in (frozenset(), frozenset({sid})):
+            with self.subTest(manually_covered=manually_covered), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                segments, target = root / 'segments.jsonl', root / 'translations.jsonl'
+                original = {'id': sid, 'source': source, 'target': '测试使用了（200{v0}）的电阻。'}
+                write_jsonl_atomic(segments, [{'id': sid, 'source': source}])
+                write_jsonl_atomic(target, [original])
+                provider = _MappingProvider({source: '测试使用了（200{v0}的电阻。'})
+                result = translate_segment_file(
+                    segments_path=segments, translations_path=target, provider=provider,
+                    domain=load_domain_pack('atmospheric-science'), anchor_text={sid: {'{v0}': ' Ω)'}},
+                    manually_covered=manually_covered,
+                )
+                if manually_covered:
+                    self.assertEqual(result, (1, 0))
+                    self.assertEqual(provider.calls, 0)
+                    self.assertEqual(read_jsonl(target), [original])
+                else:
+                    self.assertEqual(result, (0, 1))
+                    self.assertEqual(provider.calls, 1)
+                    archive, = read_jsonl(root / 'quantity_cache_rejections.jsonl')
+                    self.assertEqual(archive['target'], original['target'])
+                    self.assertNotIn('normalization', read_jsonl(target)[0])
 
     def test_second_contract_failure_keeps_both_attempts(self) -> None:
         """一次定向重试仍失败时停止，并把两轮候选留作审计证据。"""

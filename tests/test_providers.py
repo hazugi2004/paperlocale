@@ -5,8 +5,10 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import subprocess
 import unittest
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 
 from paperlocale.domains import load_domain_pack
@@ -71,6 +73,37 @@ class ProviderTest(unittest.TestCase):
         self.assertEqual(result[0].target, "土壤湿度为10 mm。")
         self.assertEqual(result[0].id, self.segment.id)
 
+    def test_codex_retries_only_known_route_failure_without_an_output_file(self) -> None:
+        provider = CodexLocalProvider(codex_bin="/fake/codex")
+        routing = "space routing discovery failed"
+        for message, output, recover, calls in (
+            (routing, False, True, 2), (routing, False, False, 2),
+            (routing, True, False, 1), ("access denied", False, False, 1),
+        ):
+            with self.subTest(message=message, output=output, recover=recover):
+                commands = []
+
+                def fake_run(command, **kwargs):
+                    commands.append((command, kwargs))
+                    if len(commands) == 2 and recover:
+                        path = Path(command[command.index("--output-last-message") + 1])
+                        path.write_text('{"translations":{"s1":"土壤湿度为10 mm。"}}', encoding="utf-8")
+                        return subprocess.CompletedProcess(command, 0, "", "")
+                    if output:
+                        path = Path(command[command.index("--output-last-message") + 1])
+                        path.write_text("{}", encoding="utf-8")
+                    return subprocess.CompletedProcess(command, 1, "", message)
+
+                with patch("paperlocale.providers.codex_local._run_codex", side_effect=fake_run):
+                    if recover:
+                        self.assertEqual(provider.translate([self.segment], self.context)[0].id, self.segment.id)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, message):
+                            provider.translate([self.segment], self.context)
+                self.assertEqual(len(commands), calls)
+                if calls == 2:
+                    self.assertEqual(commands[0], commands[1])
+
     def test_codex_provenance_records_cli_model_and_effort(self) -> None:
         """运行清单需要足以复核本机会员额度调用的非敏感身份。"""
 
@@ -118,6 +151,65 @@ class ProviderTest(unittest.TestCase):
             [("Brightness temperature", "亮度温度", False)],
         )
         self.assertNotIn("大气边界层", prompt)
+
+    def test_shared_prompt_requires_term_translation_inside_acronym_definition(self) -> None:
+        previous = "NDVI-FPAR（fraction of absorbed photosynthetically active radiation）"
+        error = "领域术语缺失：'photosynthetically active radiation' 必须译为包含 '光合有效辐射'"
+        segments = [Segment("a", "NDVI-FPAR (fraction of absorbed photosynthetically active radiation)")]
+        first_prompt = build_prompt(segments, self.context)
+        first, = json.loads(first_prompt.split("待翻译 JSON：\n", 1)[1])
+        self.assertIn(("photosynthetically active radiation", "光合有效辐射", True), [
+            (term["source"], term["target"], term["required"]) for term in first["terminology"]
+        ])
+        self.assertIn("即使术语出现在括号释义或较长词组中，也须使用给定译名", first_prompt)
+        self.assertIn("保留缩写，并把释义完整译为目标语言", first_prompt)
+        repair_prompt = build_prompt(segments, replace(self.context, repair_feedback={"a": (previous, (error,))}))
+        repaired, = json.loads(repair_prompt.split("待翻译 JSON：\n", 1)[1])
+        self.assertEqual(repaired, {**first, "previous_target": previous, "validation_errors": [error]})
+        self.assertIn("将 previous_target 该处的英文或异译改为 terminology 指定的译名", repair_prompt)
+
+    def test_shared_prompt_keeps_source_anchor_order_and_directs_repair(self) -> None:
+        segments = [Segment("a", "Measure {v0} using instrument LI{v1}."),
+                    Segment("b", "Combine these measurements.")]
+        anchors = {"{v1}": "-850", "{v0}": "CO2"}
+        context = replace(self.context, anchor_text={"a": anchors})
+        first_prompt = build_prompt(segments, context)
+        first, plain = json.loads(first_prompt.split("待翻译 JSON：\n", 1)[1])
+        self.assertEqual(first["fixed_anchor_text"], anchors)
+        self.assertEqual(first["fixed_anchor_order"], ["{v0}", "{v1}"])
+        self.assertIn("相邻锚点也不得因中文语序交换", first_prompt)
+        self.assertIn("先写完整被测量，再说明所用仪器", first_prompt)
+        self.assertIn("后半句用普通名词复指同一量", first_prompt)
+        self.assertIn("原文先给出数值再指明变量时，保留完整数值在前", first_prompt)
+        self.assertIn("仪器型号的文字前缀与锚点仍相连", first_prompt)
+        self.assertNotIn("fixed_anchor_order", plain)
+        self.assertNotIn("改写普通连接语", first_prompt)
+
+        previous = "使用仪器LI{v1}测量{v0}。"
+        error = "restored_content 固定公式/引用锚点的数量或顺序改变"
+        repair_prompt = build_prompt(segments, replace(context, repair_feedback={"a": (previous, (error,))}))
+        repaired, _ = json.loads(repair_prompt.split("待翻译 JSON：\n", 1)[1])
+        self.assertEqual(repaired, {**first, "previous_target": previous, "validation_errors": [error]})
+        self.assertIn("改写普通连接语使顺序合规", repair_prompt)
+        self.assertIn("不能只搬动占位符而把限定挂到另一对象", repair_prompt)
+        self.assertIn("用两个分句恢复被测量与仪器的顺序", repair_prompt)
+        self.assertIn("先给出数值，再说明对应变量", repair_prompt)
+
+    def test_shared_prompt_keeps_parentheses_paired_with_anchor_contents(self) -> None:
+        segments = [Segment("a", "We used the model (see Eq. {v0}."),
+                    Segment("b", "We checked the ratio {v0}, the main measured quantity).")]
+        context = replace(self.context, anchor_text={"a": {"{v0}": "4)"}, "b": {"{v0}": "(X"}})
+        first = build_prompt(segments, context)
+        closed, opened = json.loads(first.split("待翻译 JSON：\n", 1)[1])
+        self.assertEqual(closed["fixed_anchor_text"], {"{v0}": "4)"})
+        self.assertEqual(opened["fixed_anchor_text"], {"{v0}": "(X"})
+        self.assertIn("保留正文中的配对半边，并让它仍包围同一内容", first)
+        self.assertIn("锚点自带右括号时写“（见模型{vN}”", first)
+        self.assertIn("锚点自带左括号时写“{vN}，即相应测量值）”", first)
+        error = "restored_content 还原固定锚点后括号不配对"
+        retry = build_prompt(segments, replace(context, repair_feedback={"a": ("采用模型见式{v0}。", (error,))}))
+        self.assertIn("逐一代回 fixed_anchor_text 检查 source 中的配对位置", retry)
+        self.assertIn("只删除锚点已经提供的重复半边", retry)
 
     def test_openai_compatible_provider_keeps_key_out_of_body(self) -> None:
         api_payload = {

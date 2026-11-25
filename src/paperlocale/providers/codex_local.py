@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import sys
@@ -92,6 +93,7 @@ def _parse_keyed_response(text: str, segments: list[Segment]) -> list[Translatio
             for index, segment in enumerate(segments, 1)]
 
 REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+_ROUTING_FAILURE = {"space routing discovery failed", "ERROR: space routing discovery failed"}
 
 
 def _run_codex(
@@ -240,6 +242,12 @@ class CodexLocalProvider(TranslationProvider):
                 timeout=self.timeout_seconds,
                 cwd=root,
             )
+            # 路由发现发生于模型响应之前。只在已知的终止诊断且尚无输出文件
+            # 时重开一次同一批次，覆盖 App 关闭外层等待的正常启动方式。
+            if (completed.returncode == 1 and not output_path.exists()
+                    and _ROUTING_FAILURE.intersection(completed.stderr.strip().splitlines())):
+                logging.getLogger(__name__).warning("Codex space routing discovery failed; retrying batch once.")
+                completed = _run_codex(command, input=prompt, timeout=self.timeout_seconds, cwd=root)
             if completed.returncode != 0:
                 diagnostic = completed.stderr.strip() or completed.stdout.strip()
                 raise RuntimeError(

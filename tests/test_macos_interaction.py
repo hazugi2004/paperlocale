@@ -84,6 +84,7 @@ import PDFKit
         createPDF(pdf, color: .white)
         try verifySourceIssueMarks(pdf)
         let job = TranslationJob()
+        precondition(job.provider == "codex-local")
         job.workspaceRoot = directory.appendingPathComponent("workspace").path
         let provider = NSItemProvider(contentsOf: pdf)!
         precondition(job.receiveDrop([provider]))
@@ -144,6 +145,16 @@ import PDFKit
         precondition(job.model == "research-custom" && job.selectedModel == "自定义")
         precondition(job.provider == "openai-compatible" && job.baseURL == "https://example.invalid/v1")
         precondition(job.runDirectory.path == run.path && job.review?.manifest.recordedLayout == "legacy")
+
+        // 打开官方 API 断点时保留已记录的模型，并清除上一个服务的临时密钥。
+        job.apiKey = "compatible-test-key"
+        manifest["translation_provider"] = ["provider": "openai-api", "model": "official-model",
+            "endpoint": "https://api.openai.com/v1/responses"]
+        try writeJSON(manifest, to: manifestURL)
+        job.loadRun(run)
+        try await waitForLoad(job, source: pdf)
+        precondition(job.provider == "openai-api" && job.model == "official-model")
+        precondition(job.baseURL.isEmpty && job.apiKey.isEmpty)
 
         // PDF 内容相同但路径不同，也不能取得另一份论文的运行与验收记录。
         let another = directory.appendingPathComponent("another")

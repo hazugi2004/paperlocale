@@ -526,20 +526,19 @@ def wrap_citation_anchors(unit, tokens):
                       for index, start, end in spans if left <= start < end <= right}
     # 内容合同只看完整网址。开始排版后才恢复各源行的可折行片段，
     # 每片保有原字形、原基线和对应的点击区域。
-    grouped_urls = set()
+    physical = {}
     for index, anchor in enumerate(unit['anchors']):
         fragments = anchor.get('url_fragments')
         if not fragments:
             continue
-        grouped_urls.add(index)
         anchors[index] = fragments[0]
-        pieces = ['{v'+str(index)+'}']
+        marker = '{v'+str(index)+'}'
+        pieces = [marker]
         for fragment in fragments[1:]:
-            grouped_urls.add(len(anchors))
             pieces.append('{v'+str(len(anchors))+'}')
             anchors.append(fragment)
-        tokens = [piece for token in tokens for piece in
-                  (pieces if token == '{v'+str(index)+'}' else (token,))]
+        physical[marker] = pieces
+    tokens = [piece for token in tokens for piece in physical.get(token, [token])]
     width = min(f['rect'][2]-f['rect'][0] for f in unit['frames'])
     replacements = {}
     for i, anchor in enumerate(anchors.copy()):
@@ -554,16 +553,13 @@ def wrap_citation_anchors(unit, tokens):
                 all(abs(g['origin'][1]-anchor['baseline']) < .1*anchor['size'] for g in anchor['glyphs'])):
             anchor = {**anchor, 'body_baseline': anchor['baseline']}
             anchors[i] = anchor
-        # 合并后的完整网址可以用路径和查询分隔符自由回流，不再强迫
-        # 译文整段携带英文源行的宽度，避免栏末中文句号被挤到下一行。
-        if (not (citation or url) or not anchor.get('glyphs') or
-                (i not in grouped_urls and anchor['ink'][2]-anchor['ink'][0] < .8*width)):
+        if (not (citation or url) or
+                anchor['ink'][2]-anchor['ink'][0] < .8*width or not anchor.get('glyphs')):
             continue
-        separators = '/&#?.-' if i in grouped_urls else ('/&#' if url else ';')
         groups, current = [], []
         for position, glyph in enumerate(anchor['glyphs']):
             current.append(glyph)
-            if (glyph['text'] in separators and not
+            if (glyph['text'] in ('/&#' if url else ';') and not
                     (url and glyph['text'] == '/' and position+1 < len(anchor['glyphs'])
                      and anchor['glyphs'][position+1]['text'] == '/')):
                 groups.append(current); current = []

@@ -76,6 +76,37 @@ class QuantityTests(unittest.TestCase):
         self.assertEqual(validate_translation('m/s','米/秒'), [])
         self.assertTrue(validate_translation('m s−1','m'))
 
+    def test_gas_exchange_meter_is_an_instrument_not_a_length_unit(self):
+        source = 'We used a gas-exchange meter. The irradiance was 1200 mmol photons m {v0}.'
+        target = '使用气体交换仪测量。辐照度为1200 mmol photons m {v0}。'
+        self.assertEqual(validate_translation(source, target, anchor_text={'{v0}': '−2 s−1'}), [])
+        self.assertTrue(validate_translation(source, target.replace(' m ', ' ')))
+        self.assertEqual(validate_translation('The sensor is 10 meters away.', '传感器距此10米。'), [])
+        self.assertTrue(validate_translation('The sensor is 10 meters away.', '传感器距此10。'))
+
+    def test_leaf_area_meter_and_square_metre_remain_distinct(self):
+        source = 'We used a leaf area meter with 1-mm increments. Buds were counted per square metre.'
+        correct = '我们使用刻度间隔为1毫米的叶面积仪。按每平方米计数芽。'
+        self.assertEqual(validate_translation(source, correct), [])
+        self.assertTrue(validate_translation(source, correct.replace('平方米', '米')))
+        self.assertTrue(validate_translation(source, correct.replace('1毫米', '1米')))
+
+    def test_seconds_per_period_accepts_chinese_denominator_prefix(self):
+        source = 'After 2 days, {v0} is the number of seconds per year and {v1} is the number of seconds per day.'
+        target = '2天后，{v0}为每年的秒数，{v1}为每天的秒数。'
+        self.assertEqual(validate_translation(source, target), [])
+        self.assertEqual(validate_translation(source, target.replace('每天的秒数', '每日秒数')), [])
+        for expression, replacement in (
+            ('每年的秒数', '每天的秒数'),
+            ('每天的秒数', '秒数'),
+            ('每年的秒数', '每年的分钟数'),
+        ):
+            with self.subTest(replacement=replacement):
+                errors = validate_translation(source, target.replace(expression, replacement))
+                self.assertTrue(any(error.startswith('unit ') for error in errors))
+        errors = validate_translation(source, target.replace('2天后', '3天后'))
+        self.assertTrue(any(error.startswith('quantity ') for error in errors))
+
     def test_year_named_plural_events_require_geographic_context(self):
         source = 'such as the 1976 events of the Am region.'
         self.assertEqual(validate_translation(source, '例如Am地区1976年的事件。'), [])
@@ -111,6 +142,13 @@ class QuantityTests(unittest.TestCase):
         self.assertTrue(validate_translation('2 events per year', '每天2次事件'))
         self.assertTrue(validate_translation('event per year', '事件'))
         self.assertTrue(validate_translation('2 events/year', '2个事件/天'))
+
+    def test_second_year_is_an_ordinal_after_its(self):
+        source = 'We recorded growth after 1 year and again in its second year.'
+        target = '我们在1年后记录生长情况，并在第二年再次记录。'
+        self.assertEqual(validate_translation(source, target), [])
+        self.assertTrue(validate_translation(source, target.replace('1年', '2年')))
+        self.assertTrue(validate_translation('The unit is second·year.', '单位是年。'))
 
     def test_wet_day_hour_alternatives_are_not_a_divided_unit(self):
         self.assertEqual(validate_translation(

@@ -49,11 +49,16 @@ def preservation_skip_blocks(root: Path, manifest: dict, items: list) -> set[str
         # 同字可重复出现，必须同时匹配页号、原点和原字框。图表、公式和
         # 已明确保留的区块保持原身份；没有可靠位置时不给出跳过按钮。
         location = locations[0]
+        # 竖排图注对用户显示真实页面坐标；同一错误保留了计划内的精确字框。
+        plan_position = {'origin': item['origin'], 'rect': location.get('rect')}
+        if 'layout_character_position' in item and any(
+                r['page'] == location.get('page') for r in plan.get('rotated_captions', [])):
+            plan_position = item['layout_character_position']
         matches = [block['id'] for block in plan['blocks']
                    if block['kind'] in translated and block['id'] not in skipped
                    and block['page'] == location.get('page')
-                   and any(char['text'] == item['character'] and char['origin'] == item['origin']
-                           and char['rect'] == location.get('rect')
+                   and any(char['text'] == item['character'] and char['origin'] == plan_position['origin']
+                           and char['rect'] == plan_position['rect']
                            for part in block['parts'] for char in part['chars'])]
         if len(matches) != 1 or item.get('source_block', matches[0]) != matches[0]:
             return set()

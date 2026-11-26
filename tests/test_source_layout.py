@@ -191,6 +191,94 @@ class SourceLayoutTests(unittest.TestCase):
             self.assertEqual(blocks[1]['kind'],'preserve',text)
             self.assertEqual(blocks[3]['kind'],'body')
 
+    def test_author_surname_particles_require_a_raised_affiliation_marker(self):
+        from paperlocale.source_layout import _preserve_front_matter
+
+        def block(text, y, size, parts=None):
+            return {'kind': 'body', 'page': 1, 'rect': [0, y, 400, y + size], 'text': text,
+                    'parts': parts or [{'size': size, 'text': text, 'baseline': y + size}]}
+
+        for enabled, marker_size, marker_baseline, expected in (
+            (True, 8.5, 56.7, 'preserve'), (False, 8.5, 56.7, 'body'),
+            (True, 12, 56.7, 'body'), (True, 8.5, 62, 'body'), (True, None, None, 'body'),
+        ):
+            parts = [{'size': 12, 'text': 'Tobias van Elst', 'baseline': 62, 'fixed': False}]
+            if marker_size is not None:
+                parts.append({'size': marker_size, 'text': '38', 'baseline': marker_baseline, 'fixed': True})
+            blocks = [block('Research title', 10, 18), block('Tobias van Elst38', 50, 12, parts),
+                      block('Abstract', 90, 10)]
+            _preserve_front_matter(blocks, paragraph=True, spaced_names=True, surname_particles=enabled)
+            self.assertEqual(blocks[1]['kind'], expected)
+            self.assertEqual(blocks[2]['kind'], 'body')
+
+    def test_royal_society_continued_author_metadata(self):
+        from types import SimpleNamespace
+        from paperlocale.source_layout import _royal_society_author_continuation
+
+        def span(text, size, baseline):
+            return {'chars': [{'c': c} for c in text], 'size': size, 'origin': (42, baseline)}
+
+        page = SimpleNamespace(number=1, rect=fitz.Rect(0, 0, 600, 800))
+        block = {'bbox': (42, 40, 285, 110), 'lines': [
+            {'spans': [span('18', 6.4, 45), span('Department of Geography', 9, 49)]},
+            {'spans': [span('19', 6.4, 66), span('Department of Biology', 9, 70)]},
+        ]}
+        value = '18Department of Geography 19Department of Biology'
+        self.assertIn('作者单位', _royal_society_author_continuation(page, block, value))
+        block['lines'][0]['spans'][0]['origin'] = (42, 49)
+        self.assertIsNone(_royal_society_author_continuation(page, block, value))
+        ids = 'AKl, 0000-0000-0000-0001; LŠ, 0000-0000-0000-0002; TSE-M, 0000-0000-0000-000X;'
+        self.assertIn('ORCID', _royal_society_author_continuation(page, block, ids))
+        self.assertIsNone(_royal_society_author_continuation(page, block, 'Additional details: ' + ids))
+        page.number = 2
+        self.assertIsNone(_royal_society_author_continuation(page, block, ids))
+
+    def test_royal_society_reads_data_statement_above_cross_column_references(self):
+        from paperlocale.source_layout import _preserve_auxiliary_sections
+
+        def block(kind, text, page, y):
+            return {'kind': kind, 'text': text, 'page': page, 'rect': (310, y, 550, y + 20), 'parts': []}
+
+        for enabled, expected in ((True, 'body'), (False, 'preserve')):
+            blocks = [block('reference', 'References', 7, 560),
+                      block('body', 'Data accessibility. The archive is public.', 7, 42),
+                      block('body', 'Data accessibility. Other text.', 7, 590),
+                      block('body', 'Continued bibliography.', 8, 32)]
+            _preserve_auxiliary_sections(blocks, paragraph=True, visual_boundaries=True,
+                                         royal_society=enabled)
+            self.assertEqual([item['kind'] for item in blocks], ['reference', expected, 'preserve', 'preserve'])
+
+    def test_wiley_contact_sidebar_does_not_mark_overlapping_abstract_as_preserved(self):
+        from paperlocale.source_layout import _preserve_auxiliary_sections, _wiley_front_matter
+
+        def block(text, x0, y0, x1, height=10):
+            return {'kind': 'body', 'text': text, 'page': 1, 'page_width': 595,
+                    'rect': (x0, y0, x1, y0 + height), 'parts': []}
+
+        for with_funding in (True, False):
+            abstract = block('Abstract', 203.2, 240, 244)
+            contact = block('Correspondence', 45, 480, 100)
+            email = block('Corresponding author email', 45, 492, 176)
+            prose = [block('Friction velocity and carbon dioxide flux were compared.', 203.1, 496, 540),
+                     block('The result was observed at 34% of analyzed sites.', 203.2, 512, 540)]
+            affiliations = [block(f'{n}Department of Earth Science', 45, y, 175, height=20)
+                            for n, y in enumerate((234, 272, 310), 1)]
+            for affiliation in affiliations:
+                affiliation['parts'] = [{'fixed': True, 'text': affiliation['text'].split(' ')[0]}]
+            blocks = [abstract, contact, email, *prose, *affiliations]
+            if with_funding:
+                blocks.append(block('Funding information', 45, 540, 111))
+            gutter = _wiley_front_matter(blocks)
+            if with_funding:
+                self.assertAlmostEqual(gutter, 202.2)
+            else:
+                self.assertIsNone(gutter)
+            blocks.sort(key=lambda b: (b['rect'][0] >= (gutter or 297.5), b['rect'][1]))
+            _preserve_auxiliary_sections(blocks, paragraph=True, visual_boundaries=True)
+            self.assertEqual(email['kind'], 'preserve')
+            self.assertEqual([p['kind'] for p in prose], ['body' if with_funding else 'preserve'] * 2)
+            self.assertEqual([b['kind'] for b in affiliations], ['preserve' if with_funding else 'body'] * 3)
+
     def test_default_colour_space_survives_text_redaction(self):
         from paperlocale.safe_text import restore_default_color_spaces
         with fitz.open() as source:
@@ -301,7 +389,7 @@ class SourceLayoutTests(unittest.TestCase):
                 doc.save(source)
             modern=extract_layout(source,paragraph=True)
             legacy=extract_layout(source,paragraph=True,symbol_revision=0)
-            self.assertEqual(modern['symbol_revision'],7)
+            self.assertEqual(modern['symbol_revision'],9)
             self.assertEqual(modern['blocks'][0]['kind'],'formula')
             self.assertEqual(legacy['blocks'][0]['kind'],'body')
             path=Path(tmp)/'plan.json';save_json(path,legacy)
@@ -946,7 +1034,7 @@ class SourceLayoutTests(unittest.TestCase):
             for value in ['Jane Doe and John Smith', 'Department of Ecology, Example University']:
                 self.assertEqual(next(b for b in modern['blocks'] if b['text'] == value)['kind'], 'preserve')
                 self.assertEqual(next(b for b in old['blocks'] if b['text'] == value)['kind'], 'body')
-            self.assertEqual(modern['frontmatter_revision'], 2)
+            self.assertEqual(modern['frontmatter_revision'], 4)
             path = Path(directory) / 'plan.json'
             save_json(path, old)
             self.assertEqual(load_plan(source, path, paragraph=True)[0], old)
@@ -1106,6 +1194,41 @@ class SourceLayoutTests(unittest.TestCase):
                 self.assertIn('[1]', doc[1].get_text())
                 self.assertIn('x = 2', doc[1].get_text())
                 self.assertIn('Depth', doc[2].get_text())
+
+    def test_heading_echo_is_removed_only_if_the_remaining_text_passes_contract(self):
+        from paperlocale.preserved_workflow import _heading_without_source_echo
+
+        domain = load_domain_pack('atmospheric-science')
+        block = {'kind': 'body', 'parts': [{'bold': True}]}
+        cases = (
+            ('CONNECTING SILOS: ESTABLISHING DATA TYPES, CONTRIBUTIONS, AND SCOPE', '打通研究壁垒：明确数据类型、贡献和范围'),
+            ('CONFLICT OF INTEREST STATEMENT', '利益冲突声明'),
+            ('SUPPORTING INFORMATION', '补充信息（附录）'),
+            ('GPP AND CO2 DATA', 'GPP和CO2数据'),
+        )
+        for source, target in cases:
+            with self.subTest(source=source):
+                unit = {'source': source, 'anchors': []}
+                self.assertEqual(_heading_without_source_echo(unit, block, f'{target}（{source}）', domain,
+                                                              outlined=True), target)
+
+        for source, target in (('GPP AND CO2 DATA', 'GPP数据'), ('GPP AND CO2 DATA', 'CO2数据'),
+                               ('SCOPE MODEL', '模型（MODEL）'),
+                               ('DATA TYPES, CONTRIBUTIONS, AND SCOPE, the model', '数据类型、贡献和模型'),
+                               ('DATA FOR 10 mm', '数据')):
+            with self.subTest(source=source, target=target):
+                unit = {'source': source, 'anchors': []}
+                self.assertIsNone(_heading_without_source_echo(unit, {**block, 'heading': True},
+                                                               f'{target}({source})', domain))
+
+        unit = {'source': 'SUPPORTING INFORMATION', 'anchors': []}
+        echoed = '补充信息（SUPPORTING INFORMATION）'
+        self.assertIsNone(_heading_without_source_echo(unit, block, echoed, domain))
+        self.assertIsNone(_heading_without_source_echo(unit, {**block, 'kind': 'caption'}, echoed, domain,
+                                                       outlined=True))
+        self.assertIsNone(_heading_without_source_echo(unit, block, '补充信息（INFORMATION）', domain, outlined=True))
+        self.assertIsNone(_heading_without_source_echo({'source': 'DATA {v0}', 'anchors': [{'text': 'NDVI'}]},
+                                                       {**block, 'heading': True}, '数据（DATA {v0}）', domain))
 
     def test_invalid_refinement_has_one_persisted_correction(self):
         class InvalidProvider(TranslationProvider):

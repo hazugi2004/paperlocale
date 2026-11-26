@@ -41,7 +41,7 @@ class SymbolRevision5Tests(unittest.TestCase):
             with patch('paperlocale.source_symbols.REVIEWED_BRACKET_OUTLINES', {identity: '('}):
                 old = extract_layout(source, paragraph=True, symbol_revision=4)
                 modern = extract_layout(source, paragraph=True)
-                self.assertEqual(modern['symbol_revision'], 7)
+                self.assertEqual(modern['symbol_revision'], 9)
                 self.assertIn('ð', ' '.join(block['text'] for block in old['blocks']))
                 self.assertNotIn('ð', ' '.join(block['text'] for block in modern['blocks']))
                 self.assertNotEqual(old, modern)

@@ -9,6 +9,7 @@ from .font_geometry import open_source_pdf
 
 import json
 import math
+import re
 from dataclasses import replace
 from statistics import median
 from pathlib import Path
@@ -16,7 +17,7 @@ from pathlib import Path
 import pymupdf as fitz
 
 
-from .contracts import read_jsonl, write_jsonl_atomic, validate_translation
+from .contracts import CJK_RE, read_jsonl, write_jsonl_atomic, validate_translation
 from .providers import Segment, TranslationContext
 from .pipeline import translate_segment_file, restored_content_errors
 from .manual_revision import occurrence_id, revision_errors
@@ -30,6 +31,32 @@ from .workflow import (load_manifest, save_manifest, _verify_source_pdf,
                        _verify_domain_languages, _domain_provenance,
                        _subset_repair_font, qa_run, _missing_source_vector_drawings,
                        _replay_vector_drawing)
+
+
+def _render_model_target(text: str) -> str:
+    """中文段落自然断行，清除模型在中文字符间插入的不可见断词符。"""
+    # 字体不必为中文断词提示补字。只投影自动译文用于排字的副本，
+    # 保留原模型响应、原 PDF 锚点、人工修订及其他 Unicode 格式字符。
+    return re.sub(r'(?<=[\u3400-\u9fff，。；：！？（）《》])\u200b+(?=[\u3400-\u9fff，。；：！？（）《》])', '', text)
+
+
+def _heading_without_source_echo(unit, block, target, domain, *, outlined=False):
+    """仅为独立标题提出去掉整句重复原文的候选，经合同和真实排版复验后才可写入。"""
+    source = unit['source']
+    if block['kind'] != 'body' or block.get('list_start') or unit['anchors']:
+        return None
+    # 粗体或全大写都可能是正文。只接纳版面标记或与原 PDF 书签逐字匹配的标题。
+    if not (block.get('heading') or outlined):
+        return None
+    echo = re.search(r'(?:\(([^()（）]+)\)|（([^()（）]+)）)\s*$', target)
+    if echo is None or (echo[1] or echo[2]).split() != source.split():
+        return None
+    compact = target[:echo.start()].rstrip()
+    if not CJK_RE.search(compact) or validate_translation(source, compact, domain, anchor_text={}):
+        return None
+    if restored_content_errors(source, compact, {}):
+        return None
+    return compact
 
 
 def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
@@ -47,6 +74,19 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     generate_qa=False 仅省略输出后的机器QA，返回真实的 rendered 状态；
     不跳过写入前完整性检查，也不伪造 qa_generated 或人工验收记录。
     """
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        return _run_preserved(root, provider=provider, domain=domain, plan_path=plan_path,
+                              font_file=font_file, min_font_size=min_font_size,
+                              contract_repair=contract_repair, dpi=dpi, pdftoppm_bin=pdftoppm_bin,
+                              max_segments=max_segments, max_characters=max_characters,
+                              paragraph=paragraph, import_cache_from=import_cache_from,
+                              generate_qa=generate_qa, preflight_only=preflight_only, stack=stack)
+
+
+def _run_preserved(root, *, provider, domain, plan_path, font_file, min_font_size,
+                   contract_repair, dpi, pdftoppm_bin, max_segments, max_characters,
+                   paragraph, import_cache_from, generate_qa, preflight_only, stack):
     from .progress import emit_progress
     from .diagnostics import LocatedError, unit_location
     from .repair_choices import read_choices
@@ -93,15 +133,37 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     emit_progress("加载页面版式识别", .06)
     detections = detect_regions(source, root / 'layout_detection.json',
                                 page_progress=page_progress("识别页面版式", .06, .07))
+    original_source = source
+    caption_space = None
+    # 旧计划按原坐标严格重放。有旋转证据的新计划必须从原 PDF 及原检测结果重建。
+    if paragraph and (not plan_path.exists() or
+                      json.loads(plan_path.read_text(encoding='utf-8')).get('rotated_captions')):
+        from tempfile import TemporaryDirectory
+        from .rotated_caption import prepare_caption_space
+        scratch = Path(stack.enter_context(TemporaryDirectory(prefix='paperlocale-caption-')))
+        caption_space = prepare_caption_space(source, detections, scratch)
+        if caption_space is not None:
+            stack.enter_context(caption_space.display_coordinates())
     if not plan_path.exists():
         emit_progress("识别期刊与正文结构", .07)
         save_json(plan_path, extract_layout(source, detections, paragraph=paragraph, ocr_dir=root / "local_ocr",
+                                          caption_space=caption_space,
                                           page_progress=page_progress("提取正文与保护区", .07, .085)))
     choices = read_choices(root, manifest['source_sha256'])
     emit_progress("核对原文版面计划", .085)
     plan, units = load_plan(source, plan_path, detections, paragraph=paragraph,
+                           caption_space=caption_space,
                            skip_block_ids=set(choices.get('skip_blocks', [])),
                            page_progress=page_progress("核对原文版面计划", .085, .10))
+    if caption_space is not None:
+        source = caption_space.path
+
+    def original_item(item):
+        return caption_space.original_item(item) if caption_space is not None else item
+
+    def original_region(region):
+        return caption_space.original_region(region) if caption_space is not None else region
+
     if plan.get('journal'):
         print('期刊：'+plan['journal']['name']+'；识别依据：'+plan['journal']['evidence'], flush=True)
     locations = []
@@ -110,7 +172,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     skipped_ids = set(choices['skip'])
     for unit in units:
         location = unit_location(unit)
-        revision_id = occurrence_id(location)
+        revision_id = occurrence_id(original_item(location))
         if revision_id in revisions:
             revision = revisions[revision_id]
             if revision['segment_id'] != unit['id'] or revision_id not in remaining_revisions:
@@ -127,7 +189,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                 unit['_manual_revision'] = revision_id
         default_floor = min_font_size if min_font_size is not None else location['font_size']
         unit['_repair_font_floor'] = choices['font_sizes'].get(unit['id'], default_floor)
-        locations.append({**location, 'font_size': unit['_repair_font_floor']})
+        locations.append(original_item({**location, 'font_size': unit['_repair_font_floor']}))
     if remaining_revisions:
         raise ValueError('人工修订的区块已无法在当前版面定位，请恢复修订前的断点。')
     save_json(root / 'source_locations.json', locations)
@@ -171,7 +233,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
             protected.append(block)
     if paragraph:
         from .safe_text import separate_caption_edges
-        protected = separate_caption_edges(source, protected, plan['blocks'])
+        protected = separate_caption_edges(source, protected, plan['blocks'],
+                                           journal_family=(plan.get('journal') or {}).get('family'))
         from .paragraph_layout import bind_inline_glyphs
         bind_inline_glyphs(source, units)
         # 逻辑网址可跨多行，只删除各原字符片段所在区域，不清空跨行外接框。
@@ -223,6 +286,9 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                  'translation_checked': False, 'final_pixels_checked': False}
     if paragraph:
         preflight['checks'].append('canonical_source_pixels')
+    if caption_space is not None:
+        preflight['checks'].append('rotated_caption_original_pixels')
+        preflight['rotated_captions'] = caption_space.records()
     if stroke_removal:
         preflight['checks'].append('declared_inline_stroke_removal')
         preflight['inline_strokes'] = stroke_removal
@@ -255,10 +321,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     targets = {row['id']: row['target'] for row in read_jsonl(translations)} if translations.exists() else {}
     if model_ids - targets.keys() or targets.keys() - unique.keys():
         raise ValueError('正文译文仍有缺口，不能创建候选 PDF')
+
     def target_for(unit):
         if revision_id := unit.get('_manual_revision'):
             return revisions[revision_id]['target']
-        return targets[unit['id']]
+        if '_heading_without_echo' in unit:
+            return unit['_heading_without_echo']
+        return _render_model_target(targets[unit['id']])
     # 普通翻译可能在固定公式/引用之间过长。仅对溢出的逻辑段落自动请求
     # 同一模型进行一次等义精炼，仍验证科学合同和真实字体宽度，不缩短科学事实。
     full_font = fitz.Font(fontfile=str(font_file))
@@ -288,10 +357,35 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     # 预排版与最终子集使用同一份补充字体程序，精炼新增的字形也必须先核对。
     extend_default_fonts(''.join(target_for(unit) for unit in units))
     emit_progress("验证译文与预排版", .72)
+    blocks = {block['id']: block for block in plan['blocks']}
+    headings = set()
+    if contract_repair and paragraph:
+        with fitz.open(original_source) as document:
+            headings = {(page, tuple(title.split())) for _, title, page in document.get_toc()}
+
+    def prefit(unit, target):
+        unit.pop('_heading_without_echo', None)
+        try:
+            fit_selected(unit, target, full_font, min_font_size, bold_font)
+        except ValueError as error:
+            if not contract_repair or not paragraph or '_manual_revision' in unit or len(unit['blocks']) != 1:
+                raise
+            block = blocks[unit['blocks'][0]]
+            outlined = (block['page'], tuple(unit['source'].split())) in headings
+            compact = _heading_without_source_echo(unit, block, target, domain, outlined=outlined)
+            if compact is None:
+                raise
+            try:
+                fit_selected(unit, compact, full_font, min_font_size, bold_font)
+            except ValueError:
+                raise error from None
+            # 片段 ID 可能同时出现于标题和正文。只修改当前排字实例，模型答复保留供回放。
+            unit['_heading_without_echo'] = compact
+
     failed = {}
     for unit in units:
         try:
-            fit_selected(unit, target_for(unit), full_font, min_font_size, bold_font)
+            prefit(unit, target_for(unit))
         except ValueError as error:
             # 用户确认的文字只能由用户再修订，自动等义精炼不处理它。
             if '_manual_revision' in unit:
@@ -362,25 +456,27 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         if errors:
             raise LocatedError('自动版面精炼未通过科学内容校验：' + str(errors), [{**unit_location(unit), 'validation_source': unit['source'],
                                'target': refined, 'errors': errors}], 'translation')
-        extend_default_fonts(refined)
+        render_refined = _render_model_target(refined)
+        extend_default_fonts(render_refined)
         for occurrence in units:
             if occurrence['id'] == sid and '_manual_revision' not in occurrence:
-                fit_selected(occurrence, refined, full_font, min_font_size, bold_font)
+                prefit(occurrence, render_refined)
         targets[sid] = refined
         write_jsonl_atomic(translations, [{**row, 'target': targets[row['id']],
             **({'provider': provider.provenance(), 'previous_translation': row} if row['id'] == sid else {})}
             for row in read_jsonl(translations)])
     # 覆盖报告说明自动翻译范围；机器合同不能证明语义忠实或视觉可接受。
     save_json(root / 'translation_coverage.json', {
-        'user_skipped_segments': [unit_location(u) for u in skipped_units],
+        'user_skipped_segments': [original_item(unit_location(u)) for u in skipped_units],
         'user_skipped_blocks': [b['id'] for b in plan['blocks'] if b['id'] in choices.get('skip_blocks', [])],
         'translation_complete': not skipped_units and not choices.get('skip_blocks'),
         'translated_blocks': sorted({p['source_block'] for u in units for slot in u['slots'] for p in slot if 'source_block' in p}),
         'preserved_blocks': [{'id': b['id'], 'page': b['page'], 'kind': b['kind'],
                               'text': b['text'], 'reason': b.get('preserve_reason') or b['kind'],
-                              'regions': [{'page': b['page'], 'rect': b['rect']}]}
+                              'regions': [original_region({'page': b['page'], 'rect': b['rect']})]}
                              for b in plan['blocks'] if b['kind'] not in translated_kinds],
         'manual_revision_count': sum('_manual_revision' in unit for unit in units),
+        'deduplicated_heading_count': sum('_heading_without_echo' in unit for unit in units),
         'validated_segments': len(unique), 'semantic_review': 'pending', 'visual_review': 'pending'})
     # 预排版使用最终嵌入字体的同一个子集，避免测量原字体、写入子集产生差异。
     font_text = ''.join(target_for(unit) for unit in units) or ' '
@@ -486,12 +582,13 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                 expected_links = relocate_links(written, original, placements)
                 linked = written.tobytes(garbage=1, deflate=True)
             temporary.write_bytes(linked)
-        # Last serialization step: later MuPDF saves would round these values again.
+        # 完成当前坐标系的 MuPDF 写入后恢复精度；竖排图注还原后再按原页核验。
         from .vector_precision import restore_vector_precision
         precision_evidence = restore_vector_precision(source, temporary,
             protected_regions=plan['protected_regions'])
         writing_regions = editable + ([frame for u in units for frame in u['frames']] if paragraph else [])
-        evidence = verify_unchanged(source, temporary, writing_regions, expected_links=expected_links)
+        evidence = (verify_unchanged(source, temporary, writing_regions, expected_links=expected_links)
+                    if caption_space is None else {})
         from .source_watermarks import verify_backgrounds
         with open_source_pdf(source) as original, fitz.open(temporary) as written:
             evidence['watermarks'] = verify_backgrounds(original, written)
@@ -568,8 +665,26 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
                         'pages': [item['page']], 'regions': [{'page':item['page'], 'rect':item['rect']}],
                         'errors': [f'preservation.readback 应写入 {item["target"]!r}；实际回读 {extracted!r}；请核对重叠、缺字或错位。'],
                     }], 'preservation')
+        if caption_space is not None:
+            from .rotated_caption import restore_caption_pages, verify_caption_pages
+            expected = restore_caption_pages(temporary, caption_space)
+            precision_evidence = restore_vector_precision(original_source, temporary,
+                protected_regions=[original_region(p) for p in plan['protected_regions']])
+            edited_pages = {p['page'] for p in placements}
+            evidence['rotated_captions'] = verify_caption_pages(
+                original_source, temporary, caption_space, expected, edited_pages)
+            # 只有独立图注带替代排字掩膜。普通页保留原字符，校验字形越过字符框的实际墨迹。
+            writing_regions = [p for p in writing_regions if p['page'] not in caption_space.pages]
+            writing_regions.extend({'page': number, 'rect': list(page.original_rect)}
+                                   for number, page in caption_space.pages.items() if number in edited_pages)
+            try:
+                evidence.update(verify_unchanged(original_source, temporary, writing_regions,
+                                                 expected_links=expected_links))
+            except LocatedError as error:
+                error.original_page_coordinates = True
+                raise
         evidence['vector_precision'] = precision_evidence
-        evidence.update(source_sha256=digest(source), translated_sha256=digest(temporary),
+        evidence.update(source_sha256=digest(original_source), translated_sha256=digest(temporary),
                         layout_plan_sha256=plan_hash, font=font_evidence,
                         protected_region_count=len(protected), logical_group_count=len(units),
                         body_writing_regions=[{'page': p['page'], 'rect': p.get('writing_rect', p['rect'])}

@@ -6,6 +6,7 @@ import unittest
 import pymupdf as fitz
 
 from paperlocale.journals import identify_journal
+from paperlocale.source_layout import extract_layout, load_plan, save_json
 
 
 class EarthsFutureJournalTests(unittest.TestCase):
@@ -51,7 +52,7 @@ class EarthsFutureJournalTests(unittest.TestCase):
     def test_old_plan_switch_keeps_previous_unknown_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             source = self.make_pdf(Path(directory), pages=("doi:10.1029/2026EF000003",))
-            old = identify_journal(source, earths_future=False)
+            old = identify_journal(source, earths_future=False, rules_version=1)
             self.assertEqual(old, {"name": "unknown", "family": "generic",
                                   "evidence": "没有唯一刊名证据", "rules_version": 1})
 
@@ -59,6 +60,51 @@ class EarthsFutureJournalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = self.make_pdf(Path(directory), pages=("doi:10.1029/2026GL000004",))
             self.assertEqual(identify_journal(source)["name"], "Geophysical Research Letters")
+
+    def test_homepage_acp_markers_take_priority_over_metadata_and_affiliations(self):
+        for marker in ('Atmos. Chem. Phys., 21, 15589–15603, 2021', 'doi:10.5194/acp-21-15589-2021'):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                source = self.make_pdf(Path(directory), metadata={'subject': 'Atmospheric Research 287 (2023)'},
+                                       pages=(marker + '\nLaboratory for Atmospheric Research',))
+                journal = identify_journal(source)
+                self.assertEqual((journal['name'], journal['family'], journal['page']),
+                                 ('Atmospheric Chemistry and Physics', 'copernicus', 1))
+
+    def test_atmospheric_research_requires_publication_evidence(self):
+        for text, expected in (
+            ('Laboratory for Atmospheric Research', 'unknown'),
+            ('Laboratory for\nAtmospheric Research\nWashington State University', 'unknown'),
+            ('Atmospheric Research 287 (2023) 106700', 'Atmospheric Research'),
+            ('doi:10.1016/j.atmosres.2023.106700', 'Atmospheric Research'),
+            ('Global Change Biology Communications', 'Global Change Biology Communications'),
+        ):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as directory:
+                source = self.make_pdf(Path(directory), pages=(text,))
+                self.assertEqual(identify_journal(source)['name'], expected)
+
+    def test_homepage_prose_citation_does_not_supersede_own_masthead(self):
+        for text, expected in (
+            ('Hydrol. Earth Syst. Sci., 28, 3799-3806, 2024\nRelated study: 10.5194/acp-21-4699-2021',
+             'Hydrology and Earth System Sciences'),
+            ('An unlisted journal\nRelated study: 10.5194/acp-21-4699-2021', 'unknown'),
+            ('https://example.org/references/10.5194/acp-21-4699-2021', 'unknown'),
+        ):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as directory:
+                source = self.make_pdf(Path(directory), pages=(text,))
+                self.assertEqual(identify_journal(source)['name'], expected)
+
+    def test_saved_plan_replays_its_journal_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.make_pdf(root, pages=(
+                'Atmos. Chem. Phys., 21, 15589–15603, 2021\nLaboratory for Atmospheric Research',))
+            path = root / 'plan.json'
+            for version, expected in ((1, 'Atmospheric Research'), (2, 'Atmospheric Chemistry and Physics')):
+                with self.subTest(version=version):
+                    plan = extract_layout(source, paragraph=True, journal_rules_version=version)
+                    self.assertEqual(plan['journal']['name'], expected)
+                    save_json(path, plan)
+                    self.assertEqual(load_plan(source, path, paragraph=True)[0], plan)
 
 
 if __name__ == "__main__":

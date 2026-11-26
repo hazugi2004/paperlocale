@@ -37,6 +37,8 @@ NUMBER_RE = re.compile(
     r"\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?"
 )
 ABBREVIATION_RE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Z][A-Z0-9-]{1,})(?![A-Za-z0-9])")
+# 多段下划线字段是可直接用于数据查询的标识符，必须保留完整词元和次数。
+DATA_FIELD_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Z][A-Z0-9]*(?:_[A-Z][A-Z0-9]*){3,}(?![A-Za-z0-9_])")
 # 真实论文常把章节名、出版元数据和图件标签排成全大写。它们是应翻译的
 # 普通英语词，而不是必须逐字保留的变量缩写。这里只列入批量运行中已经
 # 观察到的明确类别；NDVI、MOE、DH、CO 等科学标记仍继续走硬门禁。
@@ -45,6 +47,7 @@ TRANSLATABLE_UPPERCASE_WORDS = frozenset(
         "ABSTRACT",
         "ACCEPTED",
         "ACCESS",
+        "ACKNOWLEDGMENTS",
         "AND",
         "APR",
         "APRIL",
@@ -55,6 +58,8 @@ TRANSLATABLE_UPPERCASE_WORDS = frozenset(
         "AVAILABILITY",
         "BY",
         "CITATION",
+        "CONFLICT",
+        "CONNECTING",
         "CONCLUSION",
         "CONCLUSIONS",
         "CONTRIBUTIONS",
@@ -66,12 +71,15 @@ TRANSLATABLE_UPPERCASE_WORDS = frozenset(
         "DECEMBER",
         "DISCUSSION",
         "EDITED",
+        "ESTABLISHING",
         "EXTREMES",
         "FEB",
         "FEBRUARY",
         "FIGURE",
         "FOR",
         "FUNDING",
+        "INFORMATION",
+        "INTEREST",
         "INTRODUCTION",
         "JAN",
         "JANUARY",
@@ -109,11 +117,15 @@ TRANSLATABLE_UPPERCASE_WORDS = frozenset(
         "SEP",
         "SEPT",
         "SEPTEMBER",
+        "SILOS",
         "SPATIO-TEMPORAL",
         "STATEMENT",
+        "STATEMENTS",
         "SUPPLEMENTARY",
+        "SUPPORTING",
         "TOOLS",
         "TYPE",
+        "TYPES",
         "VOL",
     }
 )
@@ -177,6 +189,12 @@ def protected_counts(text: str, *, domain: DomainPack | None = None) -> dict[str
         "-",
         abbreviation_text,
     )
+    # SCOPE 也是真实模型名。只有处于普通并列标题的末项时，才按“范围”识别。
+    abbreviation_text = re.sub(
+        r"(\bDATA TYPES,\s+CONTRIBUTIONS,\s+AND )SCOPE(?=[.。]?\s*[)）]?\s*$)",
+        r"\1scope",
+        abbreviation_text,
+    )
     address_regions = set(ADDRESS_REGION_RE.findall(abbreviation_text))
     abbreviation_exclusions = (
         TRANSLATABLE_UPPERCASE_WORDS
@@ -193,6 +211,7 @@ def protected_counts(text: str, *, domain: DomainPack | None = None) -> dict[str
         "style": Counter(STYLE_RE.findall(text)),
         "url": _clean_identifiers(URL_RE.findall(identifier_text)),
         "doi": _clean_identifiers(DOI_RE.findall(identifier_text)),
+        "data_field": Counter(DATA_FIELD_RE.findall(text)),
         "number": Counter(NUMBER_RE.findall(text)),
         "abbreviation": Counter(abbreviations),
         "unit": Counter(match.group(0) for match in UNIT_RE.finditer(text)),
@@ -399,7 +418,7 @@ def validate_translation(
             errors.append(f"character 不可见控制字符 U+{ord(character):04X}，译文第 {index+1} 字符；{origin}；上下文 {context!r}")
     source_counts = protected_counts(source)
     target_counts = protected_counts(target)
-    for category in ("formula", "style", "url", "doi"):
+    for category in ("formula", "style", "url", "doi", "data_field"):
         if source_counts[category] != target_counts[category]:
             errors.append(
                 f"{category} 标记不一致：期望 {dict(source_counts[category])!r}，"
@@ -454,8 +473,11 @@ def validate_translation(
     target_free = hide_spans(quantity_target, target_spans)
     source_remaining = protected_counts(source_free, domain=domain)
     target_remaining = protected_counts(target_free)
-    source_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(source_free))
-    target_remaining["unit"] = Counter(label for _a, _b, label in standalone_units(target_free))
+    # “每年的秒数”与“seconds per year”是同一单位关系。只在独立单位计数
+    # 时规范分母前置写法，避免把相邻数字拼成新的数值/单位对，也不改译文。
+    for remaining, text in ((source_remaining, source_free), (target_remaining, target_free)):
+        text = re.sub(r"每([年天日])的?秒数", r"秒/\g<1>", text)
+        remaining["unit"] = Counter(label for _a, _b, label in standalone_units(text))
     # 非物理量区域仍使用既有科学标记门禁，不放宽数字、变量及公式要求。
     for category in ("number", "abbreviation", "unit"):
         missing = source_remaining[category] - target_remaining[category]

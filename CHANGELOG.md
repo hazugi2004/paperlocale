@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.8.9 — 2026-11-27
+
+- Prefer first-page publication DOI and journal masthead over affiliation text and recognize eight additional journals, including Atmospheric Chemistry and Physics.
+- Read split Royal Society abstracts in column order and preserve continued affiliations and ORCID lists.
+- Recover article abstracts beside correspondence or publisher metadata in supported Wiley and CSIRO layouts. Preserve original reference sections and their page continuations.
+- Keep verified Global Change Biology author ORCID lists and both original link targets in place. Separate table captions and CSIRO boxed-text lead-ins from protected figures or tables when the original objects confirm the boundary.
+- Preserve original glyphs in citations with blank discretionary hyphens and in verified overprinted accents. Restore verified degree, multiplication, and division symbols.
+- Translate eligible rotated figure captions in their original page orientation and recognize Chinese expressions such as the number of seconds per year during unit checks.
+- Distinguish ordinal phrases such as “in its second year” from scientific unit expressions.
+- Fit translated section headings by removing a verified duplicate of the source heading when all content checks still pass.
+- Fit overflowing paragraphs within their existing column frames based on available width, keeping fixed citations intact.
+- Recover verified micro signs when a source font incorrectly encodes them as the letter m.
+- Join data fields split across adjacent source lines and validate the full identifier in the translation.
+- See [installation and release details](docs/releases/v0.8.9.md).
+
 ## 0.8.8 — 2026-11-26
 
 - Keep scientific product identifiers such as ERA-5 intact and treat a verified URL continued across source lines as one link.

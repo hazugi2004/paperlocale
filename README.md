@@ -107,15 +107,16 @@ Install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.8.8"
+python -m pip install "paperlocale[layout]==0.8.9"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-PaperLocale 0.8.8 keeps scientific identifiers and verified multi-line URLs intact
-and improves the macOS model picker and repair guidance. New translations use the
-built-in atmospheric-science glossary 2.0.0 by default. The macOS download
-includes a matching CLI wheel and setup command. See the [release notes](docs/releases/v0.8.8.md) and
+PaperLocale 0.8.9 detects journals from publication information on the first page
+and improves preservation of citations, scientific symbols, and rotated figure
+captions. New translations use the built-in atmospheric-science glossary 2.0.0 by
+default. The macOS download
+includes a matching CLI wheel and setup command. See the [release notes](docs/releases/v0.8.9.md) and
 [macOS setup instructions](macos/README.md). To install this checkout from source,
 use `python -m pip install ".[layout]"`.
 

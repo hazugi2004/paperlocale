@@ -183,12 +183,12 @@ class SymbolRevision6Tests(unittest.TestCase):
                 self.assertTrue(any(c['c'] == '\x01' for b in alias for l in b.get('lines', [])
                                     for s in l['spans'] for c in s['chars']))
 
-    def test_real_extract_and_load_keep_revisions_zero_through_six(self):
+    def test_real_extract_and_load_keep_revisions_zero_through_seven(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / 'point.pdf'
             _decimal_fixture(source)
-            for revision in range(7):
+            for revision in range(8):
                 with self.subTest(revision=revision):
                     plan = extract_layout(source, paragraph=True, symbol_revision=revision)
                     text = ' '.join(b['text'] for b in plan['blocks'])
@@ -198,7 +198,7 @@ class SymbolRevision6Tests(unittest.TestCase):
                     checked, _ = load_plan(source, path, paragraph=True)
                     self.assertEqual(checked, plan)
             modern = extract_layout(source, paragraph=True)
-            self.assertEqual(modern['symbol_revision'], 7)
+            self.assertEqual(modern['symbol_revision'], 9)
 
     def test_type1_semantics_require_exact_outline_and_revision(self):
         with tempfile.TemporaryDirectory() as directory:

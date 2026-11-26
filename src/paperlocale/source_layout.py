@@ -115,7 +115,7 @@ def _superscript(span, line, *, paragraph=False):
     return span['size'] < .95*size or span['origin'][1] < baseline-.2*size
 
 
-def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek_variants=True, extended_citations=True, italic_words=False, short_prose=False, script_geometry=False, scientific_identifiers=False, inline_fragments=False) -> list[dict]:
+def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek_variants=True, extended_citations=True, italic_words=False, short_prose=False, ligature_prose=False, script_geometry=False, scientific_identifiers=False, inline_fragments=False) -> list[dict]:
     """按字符坐标分开普通文字和固定锚点，不用白块覆盖公式/引用。
 
     上标、数学字体及明确引文模式保持原对象。普通斜体不能一律当公式，
@@ -162,7 +162,9 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek
                                                   or 'native_text' in char or (not char['c'].isprintable()
                                                       and not (paragraph and char['c'] == '\u00ad'))),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
-                                  re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
+                                  re.search(r'(?:[.-]I|Italic|Oblique)$', span['font']) or
+                                  ligature_prose and re.fullmatch(r'[\ufb00-\ufb06]', char['c'])
+                                  and span['font'].endswith('.I+fb')),
                               'bold': _bold(span, paragraph=paragraph),
                               'superscript': superscript})
         if not chars:
@@ -172,7 +174,12 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek
         # 普通斜体和小字号下标中。按完整变量词元保护基字及上下标，避免
         # 只留下原帽号、却用中文字体重写 β。普通斜体物种名/强调词不适用。
         normal_size = median(c['size'] for c in chars)
-        words = re.findall(r'[A-Za-z]+', text)
+        # 斜体 CFF 的连字可能来自独立 .I+fb 子集，且 flags 不带斜体。
+        # 展开连字仅用于判断整行是否为自然语言；字形坐标及锚点依据不变。
+        prose_text = text
+        if ligature_prose:
+            prose_text = re.sub(r'[\ufb00-\ufb06]', lambda match: unicodedata.normalize('NFKD', match[0]), text)
+        words = re.findall(r'[A-Za-z]+', prose_text)
         italic_prose = (paragraph and sum(len(w) > 3 for w in words) >= 2 and
                         all(c['italic'] for c in chars if c['c'].isalpha()))
         # ϕ/ϑ/ϖ 等数学变体不在 α–ω 范围内；原字形保护不能依赖中文字体覆盖。
@@ -1693,7 +1700,7 @@ def _preserve_vector_math(source, blocks):
     return protected
 
 
-def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, journal_rules_version: int = JOURNAL_RULES_VERSION, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 9, frontmatter_after_cover: int = 4, publisher_font_styles: bool = True, spacing_revision: int = 3, extended_citations: int = 3, middle_dot_names: bool = True, publisher_layout: int = 3, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, reading_structure: int = 5, script_geometry: int = 4, author_details: bool = True, inline_fragments: int = 2, rotated_table_labels: bool = True, native_inline_math: int = 3, backmatter_structure: bool = True, scientific_identifiers: int = 2, url_groups: bool = True, caption_space=None, page_progress: Callable[[int, int], None] | None = None) -> dict:
+def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, journal_rules_version: int = JOURNAL_RULES_VERSION, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 9, frontmatter_after_cover: int = 4, publisher_font_styles: bool = True, spacing_revision: int = 3, extended_citations: int = 3, middle_dot_names: bool = True, publisher_layout: int = 3, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, ligature_prose: bool = True, reading_structure: int = 5, script_geometry: int = 4, author_details: bool = True, inline_fragments: int = 2, rotated_table_labels: bool = True, native_inline_math: int = 3, backmatter_structure: bool = True, scientific_identifiers: int = 2, url_groups: bool = True, caption_space=None, page_progress: Callable[[int, int], None] | None = None) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
@@ -1707,6 +1714,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
         source = caption_space.path
         detections = caption_space.upright_detections(detections)
     corpus_evidence = corpus_evidence and paragraph
+    ligature_prose = paragraph and italic_words and short_prose and ligature_prose
     greek_variants = paragraph and symbol_revision >= 1
     caption_pattern = (APPENDIX_CAPTION if reading_structure >= 3 else CAPTION) if paragraph else LEGACY_CAPTION
     blocks, protected, issues = [], [], []
@@ -2068,7 +2076,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if (number == 1 and rect.y1 < page.rect.height / 2 and value.count(',') >= 4
                         and len(words) > 8 and sum(w[0].isupper() for w in words) / len(words) > .8):
                     kind = 'preserve'
-                parts = _parts(block, number, page_links[number], paragraph=paragraph, greek_variants=greek_variants, extended_citations=paragraph and extended_citations, italic_words=paragraph and italic_words, short_prose=paragraph and short_prose, script_geometry=paragraph and script_geometry, scientific_identifiers=scientific_identifiers, inline_fragments=paragraph and inline_fragments)
+                parts = _parts(block, number, page_links[number], paragraph=paragraph, greek_variants=greek_variants, extended_citations=paragraph and extended_citations, italic_words=paragraph and italic_words, short_prose=paragraph and short_prose, ligature_prose=ligature_prose, script_geometry=paragraph and script_geometry, scientific_identifiers=scientific_identifiers, inline_fragments=paragraph and inline_fragments)
                 if detached_soft_hyphen:
                     # 排印空格可能把原生行框撑满整栏，保护范围应使用连字符本身的字框。
                     marker = next((char for part in parts for char in part['chars']
@@ -2246,7 +2254,8 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 **({'author_separator_revision': 1} if middle_dot_names else {}),
                 **({'publisher_layout_revision': int(publisher_layout)} if publisher_layout else {}),
                 **({'citation_revision': int(extended_citations)} if extended_citations else {}),
-                **({'prose_revision': 2 if short_prose else 1} if italic_words else {}),
+                **({'prose_revision': 3 if ligature_prose else 2 if short_prose else 1}
+                   if italic_words else {}),
                 **({'formula_opener_revision': 1} if formula_openers else {}),
                 **({'dash_list_revision': 1} if dash_lists else {}),
                 **({'author_spacing_revision': 1} if spaced_names else {}),
@@ -2310,8 +2319,9 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
                             spacing_revision=plan.get('spacing_revision', 0),
                             middle_dot_names=plan.get('author_separator_revision') == 1,
                             publisher_layout=publisher_revision if publisher_revision in (1, 2, 3) else 0,
-                            italic_words=plan.get('prose_revision') in {1, 2},
-                            short_prose=plan.get('prose_revision') == 2,
+                            italic_words=plan.get('prose_revision') in {1, 2, 3},
+                            short_prose=plan.get('prose_revision') in {2, 3},
+                            ligature_prose=plan.get('prose_revision') == 3,
                             formula_openers=plan.get('formula_opener_revision') == 1,
                             dash_lists=plan.get('dash_list_revision') == 1,
                             spaced_names=plan.get('author_spacing_revision') == 1,

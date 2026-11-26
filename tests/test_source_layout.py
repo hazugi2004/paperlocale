@@ -119,6 +119,23 @@ class SourceLayoutTests(unittest.TestCase):
         self.assertIn('belonging to land, denoted as', prose)
         self.assertEqual(fixed.strip(), 'x')
 
+    def test_italic_prose_counts_letters_in_a_separate_cff_ligature(self):
+        from paperlocale.source_layout import _parts
+        spans, x = [], 40
+        # 同一行、同一基线，连字回退子集没有独立的斜体 flag。
+        for value, font in [('How to de', 'AdvOTabcd.I'), ('ﬁ', 'AdvOTabcd.I+fb'),
+                            ('ne a seedling?', 'AdvOTabcd.I')]:
+            chars = [{'c': c, 'origin': [x+i*5, 100], 'bbox': [x+i*5, 90, x+(i+1)*5, 103]}
+                     for i, c in enumerate(value)]
+            spans.append({'font': font, 'flags': 0, 'size': 10, 'origin': [x, 100], 'chars': chars})
+            x += len(value)*5
+        block = {'lines': [{'spans': spans}]}
+        old = _parts(block, 1, [], paragraph=True, italic_words=True, short_prose=True)
+        new = _parts(block, 1, [], paragraph=True, italic_words=True, short_prose=True, ligature_prose=True)
+        self.assertTrue(any(p['fixed'] for p in old))
+        self.assertFalse(any(p['fixed'] for p in new))
+        self.assertEqual(''.join(p['text'] for p in new), 'How to deﬁne a seedling?')
+
     def test_vector_fraction_stays_whole_and_ordinary_underline_does_not(self):
         """分子分母与原横线共同保护；单行数学下划线不能被当作分式。"""
         from copy import deepcopy

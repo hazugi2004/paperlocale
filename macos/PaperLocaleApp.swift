@@ -224,6 +224,10 @@ private typealias RepairViewState<Value> = SwiftUI.State<Value>
             Button("更换工作区并新建运行…") { job.selectWorkspace(startNewRun: true) }.buttonStyle(.borderedProminent)
         } else if settingsIssue {
             Button("打开翻译设置…", action: openSettings).buttonStyle(.borderedProminent)
+            // 设置保存后由用户明确发起重试，避免关闭设置就触发计费请求。
+            if code == "service.authentication", action("r") != nil {
+                Button("使用当前设置重试", action: job.retryDiagnostic)
+            }
         } else if code == "service.response" {
             Button("减小请求并继续", action: job.reduceBatchAndRetry)
                 .buttonStyle(.borderedProminent).disabled(job.maxCharacters <= 1000)
@@ -245,7 +249,8 @@ private typealias RepairViewState<Value> = SwiftUI.State<Value>
 
     private var moreActions: some View {
         Menu("其他方式") {
-            if !canChangeOutput, action("r") != nil, settingsIssue || canRestartAnalysis || action("s") != nil {
+            if !canChangeOutput, code != "service.authentication", action("r") != nil,
+               settingsIssue || canRestartAnalysis || action("s") != nil {
                 Button("重试当前步骤", action: job.retryDiagnostic)
             }
             ForEach(report.actions.filter { ["t", "f", "b"].contains($0.key) }) { choice in

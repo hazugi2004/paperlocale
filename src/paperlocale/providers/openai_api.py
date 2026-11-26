@@ -14,9 +14,8 @@ from .base import (
     Translation,
     TranslationContext,
     TranslationProvider,
-    build_prompt,
-    output_schema,
-    parse_payload,
+    _keyed_request,
+    _parse_keyed_response,
 )
 
 _API_HOST = "api.openai.com"
@@ -65,17 +64,17 @@ class OpenAIAPIProvider(TranslationProvider):
         return {"provider": "openai-api", "model": self.model, "endpoint": self.endpoint}
 
     def translate(self, segments: list[Segment], context: TranslationContext) -> list[Translation]:
-        # 使用共享提示和 JSON Schema。HTTP 的 output 数组可能同时包含推理消息，
-        # 只有完成后的译文 JSON 才交给共享 ID 校验和后续科学内容门禁。
+        # 用本批必填短键约束输出，原始片段哈希在本地恢复后才进入内容校验。
+        prompt, schema = _keyed_request(segments, context)
         body = {
             "model": self.model,
-            "input": build_prompt(segments, context),
+            "input": prompt,
             "text": {
                 "format": {
                     "type": "json_schema",
                     "name": "paperlocale_translations",
                     "strict": True,
-                    "schema": output_schema(),
+                    "schema": schema,
                 },
             },
             "store": False,
@@ -151,11 +150,9 @@ class OpenAIAPIProvider(TranslationProvider):
         if not texts:
             raise ValueError("OpenAI API returned no translation text")
         try:
-            translated = json.loads("".join(texts))
+            return _parse_keyed_response("".join(texts), segments)
         except json.JSONDecodeError:
             raise ValueError("OpenAI API did not return a complete JSON translation") from None
-        try:
-            return parse_payload(translated, segments)
         except ValueError:
-            # 共享 ID 门禁仍执行，但不把服务返回的任意字段回显到错误日志。
+            # 短键门禁出错时不把服务返回的任意字段回显到错误日志。
             raise ValueError("OpenAI API translation IDs or value types did not match the requested segments") from None

@@ -249,6 +249,114 @@ def attach_frames(units, plan):
         unit['kind'] = blocks[ids[0]]['kind']
 
 
+def identify_url_fragments(parts, links):
+    """以源链接注释定位字形，保留跨行网址各自的点击矩形。"""
+    links = [(link['uri'], fitz.Rect(link['from'])) for link in links
+             if link.get('uri', '').startswith(('https://', 'http://'))]
+    if not links:
+        return
+    for part in parts:
+        text = part['text'].strip().replace('\u00ad', '')
+        if re.search(r'\s', text):
+            continue
+        # 排印断词符可以没有字形。网址外侧的括号按原样保留，
+        # 但必须位于链接框外才能从目标地址的比对文本中排除。
+        word = [(char['text'], fitz.Rect(char['rect'])) for char in part['chars']
+                if char['text'].strip() and char['text'] != '\u00ad']
+        if not word:
+            continue
+        for uri, rect in links:
+            covered = [(text, (box.tl + box.br) * .5 in rect) for text, box in word]
+            start = int(covered[0] == ('(', False))
+            end = len(covered) - int(covered[-1] == (')', False))
+            chunk = covered[start:end]
+            if chunk and all(inside for _, inside in chunk):
+                visible = ''.join(text for text, _ in chunk)
+                if visible in uri:
+                    part['url_fragment'] = {'uri': uri, 'rect': list(rect), 'text': visible}
+                    break
+
+
+def _join_url_fragments(parts):
+    """只合并连续源片段可无损拼成完整 URI 的一处链接。"""
+    index = 0
+    while index < len(parts):
+        first = parts[index]
+        evidence = first.get('url_fragment')
+        if not evidence or not first['fixed'] or first.get('strokes'):
+            yield first
+            index += 1
+            continue
+        uri = evidence['uri']
+        visible = evidence['text']
+        end = index + 1
+        while uri.startswith(visible) and visible != uri and end < len(parts):
+            previous, part = parts[end - 1:end + 1]
+            following = part.get('url_fragment')
+            gap = part['baseline'] - previous['baseline']
+            if (not following or following['uri'] != uri or part.get('strokes')
+                    or part['page'] != previous['page'] or not -.2 * part['size'] <= gap <= 2 * part['size']):
+                break
+            visible += following['text']
+            end += 1
+        if visible != uri or end == index + 1:
+            yield first
+            index += 1
+            continue
+        # 无网址前缀的中段可能原被归入正文。只有确证完整 URI 后，
+        # 才将这种片段从可译文字改为固定字形，以免误锁可点击的正文。
+        fragments = [{**part, 'fixed': True, 'source_url': uri,
+                      'source_link_rect': part['url_fragment']['rect']}
+                     for part in parts[index:end]]
+        rect = fitz.Rect(first['rect'])
+        for fragment in fragments[1:]:
+            rect |= fitz.Rect(fragment['rect'])
+        yield {**first, 'rect': list(rect), 'text': ''.join(
+            fragment['text'].strip().replace('\u00ad', '') for fragment in fragments),
+            'chars': [char for fragment in fragments for char in fragment['chars']],
+            'url_fragments': fragments}
+        index = end
+
+
+def _linked_url_continuation(page, anchor, next_part, cache):
+    """在下一源行的同目标注释内核对网址尾段，保留原字形和颜色。"""
+    prefix = anchor['text'].removeprefix('(').replace('\u00ad', '')
+    uri = anchor['source_url']
+    if not re.match(r'https?://', prefix) or not uri.startswith(prefix):
+        return None
+    suffix = uri[len(prefix):]
+    if (not suffix or next_part['page'] != anchor['page'] or
+            not 0 < next_part['baseline']-anchor['baseline'] <= 2*anchor['size']):
+        return None
+    chars, text = [], ''
+    for char in next_part['chars']:
+        chars.append(char)
+        text += char['text'].replace('\u00ad', '')
+        if not suffix.startswith(text):
+            return None
+        if text == suffix:
+            break
+    if text != suffix:
+        return None
+    centers = [(r.tl+r.br)*.5 for c in chars if c['text'] != '\u00ad'
+               for r in (fitz.Rect(c['rect']),)]
+    links = [link for link in page.get_links() if link.get('uri') == uri
+             and all(center in link['from'] for center in centers)]
+    if len(links) != 1:
+        return None
+    glyphs = _source_anchor_glyphs(page, chars, cache, allow_blank_soft_hyphen=True)
+    if not glyphs or ''.join(g['text'] for g in glyphs) != suffix:
+        return None
+    ink = fitz.Rect()
+    for glyph in glyphs:
+        glyph['rect'] = list(glyph['rect'])
+        ink |= fitz.Rect(glyph['rect'])
+    return {'text': suffix, 'page': anchor['page'], 'size': next_part['size'],
+            'baseline': next_part['baseline'], 'body_baseline': next_part['baseline'],
+            'glyphs': glyphs, 'ink': list(ink), 'source_url': uri,
+            'source_link_rect': list(links[0]['from'])}
+
+
 def bind_inline_glyphs(source, units):
     """翻译前绑定原嵌入字体字形，拒绝无证据的数学字体替换。
 
@@ -258,9 +366,39 @@ def bind_inline_glyphs(source, units):
     cache = {}
     with open_source_pdf(source) as document:
         for unit in units:
-            for anchor in unit['anchors']:
+            physical_anchors = ((index, fragment) for index, anchor in enumerate(unit['anchors'])
+                                for fragment in anchor.get('url_fragments', [anchor]))
+            for index, anchor in physical_anchors:
                 page = document[anchor['page'] - 1]
-                glyphs = _source_anchor_glyphs(page, anchor['chars'], cache)
+                # 只在匹配源链接时忽略可选断词符。原字符仍用于删除检查，
+                # 实际 URL、可见连字符与其他源字形继续从原 PDF 取证。
+                url_text = anchor['text'].replace('\u00ad', '')
+                soft_break = url_text != anchor['text']
+                url_syntax = re.search(r'[/#&]', url_text)
+                if not anchor.get('source_url') and (soft_break or url_syntax) and not re.search(r'\s', url_text):
+                    url_chars = [c for c in anchor['chars'] if c['text'].strip() and c['text'] != '\u00ad']
+                    # 开括号在链接以外，但仍需正常重放原字形。
+                    if re.match(r'\(https?://', url_text) and url_chars and url_chars[0]['text'] == '(':
+                        url_text, url_chars = url_text[1:], url_chars[1:]
+                    centers = [fitz.Point((x0+x1)/2, (y0+y1)/2)
+                               for x0, y0, x1, y1 in (c['rect'] for c in url_chars)]
+                    for link in page.get_links():
+                        uri = link.get('uri', '')
+                        if not re.match(r'https?://', uri):
+                            continue
+                        covered = [center in link['from'] for center in centers]
+                        candidate = url_text
+                        # 跨行链接可只剩 DOI 路径尾段。闭括号边缘如在
+                        # 链接框外，只从链接匹配文本中去除，原字形照常重放。
+                        if soft_break and covered and not covered[-1] and url_chars[-1]['text'] == ')':
+                            candidate, covered = candidate[:-1], covered[:-1]
+                        matches_uri = candidate in uri if url_syntax else uri.endswith(candidate)
+                        if covered and all(covered) and matches_uri:
+                            anchor['source_url'] = uri
+                            anchor['source_link_rect'] = list(link['from'])
+                            break
+                glyphs = _source_anchor_glyphs(page, anchor['chars'], cache,
+                                               allow_blank_soft_hyphen=bool(anchor.get('source_url')))
                 if not glyphs:
                     # 标准 PDF 字体用于普通出版社与自有回归样例；其 Unicode
                     # 映射必须可打印且每个位置唯一，不能处理未知嵌入字体。
@@ -308,24 +446,14 @@ def bind_inline_glyphs(source, units):
                 if anchor.get('math_island'):
                     # 笔画和上下标沿用源提取已核证的相邻正文基线。
                     anchor['body_baseline'] = anchor['baseline']
-                # A wrapped URL can have no prose on its final native line. Its
-                # real hyperlink and character rectangles prove the continuation;
-                # do not align that line relative to the preceding prose baseline.
-                if re.search(r'[/#&]', anchor['text']) and not re.search(r'\s', anchor['text']):
-                    url_text = anchor['text']
-                    url_chars = [c for c in anchor['chars'] if c['text'].strip()]
-                    # An opening prose parenthesis is outside the hyperlink.
-                    # Keep its native glyph, but prove only the enclosed URL.
-                    if re.match(r'\(https?://', url_text) and url_chars[0]['text'] == '(':
-                        url_text, url_chars = url_text[1:], url_chars[1:]
-                    for link in page.get_links():
-                        uri = link.get('uri', '')
-                        if (re.match(r'https?://', uri) and url_text in uri and
-                                all(fitz.Point((c['rect'][0]+c['rect'][2])/2,
-                                               (c['rect'][1]+c['rect'][3])/2) in link['from']
-                                    for c in url_chars)):
-                            anchor['source_url'] = uri
-                            break
+                # 旧计划可能把链接的下一行识别成正文。仅保存运行时证据，
+                # 以免改变译文占位符、段落 ID 及已校验的翻译缓存。
+                if (anchor.get('source_url') and not unit['anchors'][index].get('url_fragments')
+                        and unit['slots'][index+1]):
+                    continuation = _linked_url_continuation(
+                        page, anchor, unit['slots'][index+1][0], cache)
+                    if continuation:
+                        anchor['linked_continuation'] = continuation
 
 
 def compact_target(text):
@@ -385,11 +513,35 @@ def wrap_citation_anchors(unit, tokens):
         expanded += text
         cursor = marker.end()
     expanded += source[cursor:]
-    citation_parts = {index for match in CITATION.finditer(expanded)
-                      for index, start, end in spans if match.start() <= start < end <= match.end()}
+    citation_ranges = [match.span() for match in CITATION.finditer(expanded)]
+    for match in re.finditer(r'\([^();]+(?:;[^();]+)+\)', expanded):
+        # PDF 字距有时让提取层读成 etal.、al.2024 或 Wang2014。仅在
+        # 括号内每个分号片段均符合作者—年份引文时，用补空格的副本
+        # 确认断行位置；原范围、文字与绘制字形仍按原 PDF。
+        citation = re.sub(r'\betal\.', 'et al.', match[0])
+        citation = re.sub(r'(?<=[A-Za-zÀ-ÖØ-öø-ž.])(?=(?:18|19|20)\d{2}[a-z]?\b)', ' ', citation)
+        if all(CITATION.fullmatch('('+part.strip()+')') for part in citation[1:-1].split(';')):
+            citation_ranges.append(match.span())
+    citation_parts = {index for left, right in citation_ranges
+                      for index, start, end in spans if left <= start < end <= right}
+    # 内容合同只看完整网址。开始排版后才恢复各源行的可折行片段，
+    # 每片保有原字形、原基线和对应的点击区域。
+    physical = {}
+    for index, anchor in enumerate(unit['anchors']):
+        fragments = anchor.get('url_fragments')
+        if not fragments:
+            continue
+        anchors[index] = fragments[0]
+        marker = '{v'+str(index)+'}'
+        pieces = [marker]
+        for fragment in fragments[1:]:
+            pieces.append('{v'+str(len(anchors))+'}')
+            anchors.append(fragment)
+        physical[marker] = pieces
+    tokens = [piece for token in tokens for piece in physical.get(token, [token])]
     width = min(f['rect'][2]-f['rect'][0] for f in unit['frames'])
     replacements = {}
-    for i, anchor in enumerate(unit['anchors']):
+    for i, anchor in enumerate(anchors.copy()):
         citation = ';' in anchor['text'] and (i in citation_parts or CITATION.fullmatch(anchor['text']))
         url = anchor.get('source_url') or re.match(r'\(?https?://', anchor['text']) or (
                                        '&' in anchor['text'] and
@@ -439,8 +591,21 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
     # 人工确认的单段文字保留空格和标点；段落框仍照常自动换行。
     verbatim = '_manual_revision' in unit
     text = target if verbatim else compact_target(target)
+    anchors = list(unit['anchors'])
+    for index, anchor in enumerate(unit['anchors']):
+        continuation = anchor.get('linked_continuation')
+        if not continuation:
+            continue
+        # 只替换紧随原网址占位符且逐字相同的尾段。段落中同名工具
+        # 或其他英文原样排字，未匹配的文本也不做猜测性替换。
+        marker = '{v'+str(index)+'}'
+        suffix = re.escape(continuation['text'])
+        text, replaced = re.subn(re.escape(marker)+r' *'+suffix+r'(?![A-Za-z0-9._~%+/\-])',
+                                 lambda _: marker+'{v'+str(len(anchors))+'}', text, count=1)
+        if replaced:
+            anchors.append(continuation)
     tokens = re.findall(r'\{v\d+\}|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', text)
-    anchors, tokens = wrap_citation_anchors(unit, tokens)
+    anchors, tokens = wrap_citation_anchors({**unit, 'anchors': anchors}, tokens)
     size = median(f['size'] for f in unit['frames'])
     floor = size*.8 if min_size is None else min_size
     if not 0 < floor <= size:
@@ -589,7 +754,8 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
             return merge_text_runs(placed)
     pages = sorted({frame['page'] for frame in unit['frames']})
     page_label = f"第{pages[0]}页" if len(pages) == 1 else f"第{pages[0]}–{pages[-1]}页"
-    raise ValueError(f"{page_label}完整译文无法放入段落框：{unit['id'][:12]}，剩余 {len(remaining)} 个词元")
+    # 失败时 remaining 可能仍包含整框内容，不能将其长度报告为实际溢出量。
+    raise ValueError(f"{page_label}完整译文无法放入段落框")
 
 
 def write_inline(page, item, font_refs):
@@ -737,10 +903,11 @@ def source_text(parts):
     for part in parts:
         value = '{v'+str(anchor_index)+'}' if part['fixed'] else part['text']
         anchor_index += int(part['fixed'])
+        fragments = part.get('url_fragments', [part])
         if previous:
             same_line = (part['page'] == previous['page'] and
-                         abs(part['baseline']-previous['baseline']) < .2*part['size'])
-            gap = part['rect'][0]-previous['rect'][2]
+                         abs(fragments[0]['baseline']-previous['baseline']) < .2*part['size'])
+            gap = fragments[0]['rect'][0]-previous['rect'][2]
             soft_join = (not previous['fixed'] and not part['fixed']
                          and previous['text'].endswith('\u00ad')
                          and bool(re.match(r'[A-Za-z]', value)))
@@ -749,7 +916,8 @@ def source_text(parts):
         if not part['fixed']:
             value = value.replace('\u00ad', '')
         result += value
-        previous = part
+        # 逻辑网址两端分别沿用各自的物理行，紧随末段的句号不因合并被加空格。
+        previous = fragments[-1]
     # 只展开排印合字，不用全局 NFKC 改变上标数值或数学含义。
     for char in ('ﬀ','ﬁ','ﬂ','ﬃ','ﬄ'):
         result = result.replace(char,unicodedata.normalize('NFKC',char))
@@ -762,13 +930,14 @@ def is_bold(parts):
     return sum(len(p['text'].strip()) for p in parts if p['bold']) > total/2
 
 
-def merge_inline_parts(parts):
+def merge_inline_parts(parts, *, join_urls=False):
     """连续的数学字体片段合为同一锚点，保留原有上下标和内部间距。"""
     result = []
-    for part in parts:
+    for part in _join_url_fragments(parts) if join_urls else parts:
         last = result[-1] if result else None
         # 原生公式已有可核证的字形和笔画边界，相邻锚点不能改变它的归属。
         if (last and last['fixed'] and part['fixed'] and not last.get('strokes') and not part.get('strokes')
+                and not last.get('url_fragments') and not part.get('url_fragments')
                 and last['page'] == part['page'] and
                 (-max(part['size'],last['size']) < part['rect'][0]-last['rect'][2] < max(part['size'],last['size'])
                  # 上下标共享横向起点，较长上标后出现的下标仍属于同一
@@ -819,16 +988,27 @@ def relocate_links(document, original, placements):
         for link in source.get_links():
             rect = fitz.Rect(link['from'])
             matches = [p for p in moving if p['inline_anchor']['page'] == source_page and
-                       rect.intersects(fitz.Rect(p['inline_anchor']['ink']))]
+                       rect.intersects(fitz.Rect(p['inline_anchor']['ink'])) and
+                       ('source_link_rect' not in p['inline_anchor'] or
+                        (p['inline_anchor']['source_url'] == link.get('uri') and
+                         p['inline_anchor']['source_link_rect'] == list(rect)))]
             if not matches:
                 continue
             moved_links = []
             for item in matches:
-                glyphs = [g for g in item['inline_anchor']['glyphs'] if rect.intersects(fitz.Rect(g['rect']))]
-                if not glyphs:
+                box = fitz.Rect()
+                for glyph in item['inline_anchor']['glyphs']:
+                    ink = fitz.Rect(glyph['rect'])
+                    # 上一行 g、p 等字形的下伸部分可能擦到下一行网址框。
+                    # 网址按源字形中心确认归属，含引用和链接的混合锚点也适用。
+                    if link.get('uri', '').startswith(('http://', 'https://')):
+                        covered = (ink.tl+ink.br)*.5 in rect
+                    else:
+                        covered = rect.intersects(ink)
+                    if covered:
+                        box |= ink
+                if box.is_empty:
                     continue
-                box = fitz.Rect(glyphs[0]['rect'])
-                for g in glyphs[1:]:box |= fitz.Rect(g['rect'])
                 dx,dy=item['shift'];box=fitz.Rect(box.x0+dx,box.y0+dy,box.x1+dx,box.y1+dy)
                 changed = {k:v for k,v in link.items() if k not in ('xref','id')}
                 changed['from'] = box

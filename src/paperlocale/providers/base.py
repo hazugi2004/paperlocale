@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Mapping
+from dataclasses import dataclass, field, replace
+from typing import Mapping
 
 from ..contracts import (
     FORMULA_RE,
@@ -80,30 +80,6 @@ class TranslationProvider(ABC):
         context: TranslationContext,
     ) -> list[Translation]:
         """翻译一个非空批次，并返回相同 ID 集合。"""
-
-
-def output_schema() -> dict[str, Any]:
-    """Codex 等支持 JSON Schema 的 Provider 共用的严格结构。"""
-
-    return {
-        "type": "object",
-        "properties": {
-            "translations": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string"},
-                        "target": {"type": "string"},
-                    },
-                    "required": ["id", "target"],
-                    "additionalProperties": False,
-                },
-            }
-        },
-        "required": ["translations"],
-        "additionalProperties": False,
-    }
 
 
 def build_prompt(segments: list[Segment], context: TranslationContext) -> str:
@@ -222,6 +198,73 @@ required=false 时参考推荐译名及备注，按原句语境消歧。保留�
 待翻译 JSON：
 {json.dumps(payload, ensure_ascii=False)}
 """
+
+
+def _keyed_request(
+    segments: list[Segment], context: TranslationContext,
+) -> tuple[str, dict[str, object]]:
+    """只让模型填充短键对应的译文，稳定片段哈希始终留在本地。
+
+    s1、s2 等键仅在当前批次有效；每个键都是 schema 中的必填属性，且不允许
+    额外属性。参考文献标记与合同修复反馈按同一映射转移，不修改原 context。
+    磁盘上的片段 ID、缓存、内容验证和其它 Provider 接口继续使用原始哈希。
+    """
+
+    ids = [segment.id for segment in segments]
+    if not ids or len(set(ids)) != len(ids):
+        raise ValueError("Provider 输入批次不能为空或包含重复 ID")
+    aliases = {sid: f"s{index}" for index, sid in enumerate(ids, 1)}
+    wire_segments = [Segment(aliases[s.id], s.source) for s in segments]
+    wire_context = replace(
+        context,
+        reference_segment_ids=frozenset(aliases[sid] for sid in ids
+                                        if sid in context.reference_segment_ids),
+        repair_feedback={aliases[sid]: context.repair_feedback[sid] for sid in ids
+                         if sid in context.repair_feedback},
+        anchor_text={aliases[sid]: context.anchor_text[sid] for sid in ids
+                     if sid in context.anchor_text},
+    )
+    schema = {
+        "type": "object",
+        "properties": {"translations": {
+            "type": "object",
+            "properties": {key: {"type": "string"} for key in aliases.values()},
+            "required": list(aliases.values()),
+            "additionalProperties": False,
+        }},
+        "required": ["translations"],
+        "additionalProperties": False,
+    }
+    prompt = build_prompt(wire_segments, wire_context) + (
+        '\n输出 translations 必须是对象：键为输入的 s1、s2 等短 ID，'
+        '值为对应的完整译文字符串。不要返回数组或 id/target 子对象。\n'
+    )
+    return prompt, schema
+
+
+def _parse_keyed_response(text: str, segments: list[Segment]) -> list[Translation]:
+    """验证短键闭合后恢复本地哈希；不按响应顺序配对，也不做模糊 ID 修补。"""
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Provider 输出重复键：{key}")
+            result[key] = value
+        return result
+
+    # 默认 json.loads 会静默覆盖重复对象键；这里必须在解析时拒绝，避免错配。
+    payload = json.loads(text, object_pairs_hook=unique_object)
+    if not isinstance(payload, dict) or set(payload) != {"translations"}:
+        raise ValueError("Provider 输出必须且只能包含 translations 对象")
+    targets = payload["translations"]
+    expected = {f"s{index}" for index in range(1, len(segments) + 1)}
+    if not isinstance(targets, dict) or set(targets) != expected:
+        raise ValueError("Provider 输出短键集合不闭合；拒绝猜测译文与原文的对应关系")
+    if any(not isinstance(target, str) for target in targets.values()):
+        raise ValueError("Provider 输出的每条译文必须是字符串")
+    return [Translation(segment.id, targets[f"s{index}"])
+            for index, segment in enumerate(segments, 1)]
 
 
 def parse_payload(payload: object, expected: list[Segment]) -> list[Translation]:

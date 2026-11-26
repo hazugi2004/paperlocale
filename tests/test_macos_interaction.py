@@ -127,6 +127,14 @@ import PDFKit
         let anchorInText = "中文(Fig. 3d–i），其余内容。"
         precondition(locks.restoringFigure(in: anchorInText)?.encoded == "中文{v0}d–i），其余内容。")
         precondition(locks.restoringFigure(in: anchorInText + anchorInText) == nil)
+        // 旧断点中的两个网址标记在窗口中合为一个，不改变提交给旧清单的字节或顺序。
+        let groupedJSON = #"{"id":"page9:unit","segment_id":"legacy","source":"ERA-5 (https://example.org/data).","validation_source":"ERA{v0} {v1} {v2}.","target":"来自ERA{v0}，见{v1} {v2}。","anchors":{"{v0}":"-5","{v1}":"(https://example.org/","{v2}":"data)"},"regions":[],"protected_spans":[{"markers":["{v0}"],"encoded":"ERA{v0}","display":"ERA-5"},{"markers":["{v1}","{v2}"],"encoded":"{v1} {v2}","display":"(https://example.org/data)"}]}"#
+        let groupedBlock = try JSONDecoder().decode(RevisionBlock.self, from: Data(groupedJSON.utf8))
+        let grouped = RevisionText.template(for: groupedBlock)!.editing(groupedBlock.target)!
+        precondition(grouped.locks.map(\.display) == ["ERA-5", "(https://example.org/data)"])
+        precondition(grouped.parts == ["来自", "，见", "。"])
+        precondition(grouped.encoded.utf8.elementsEqual(groupedBlock.target.utf8))
+        precondition(grouped.display == "来自ERA-5，见(https://example.org/data)。")
         let request = RevisionRequest(page: 4, origin: .candidate("shown-bytes"))
         precondition(request.arguments(in: directory).suffix(4) ==
             ["--page", "4", "--expected-rendered-sha256", "shown-bytes"])

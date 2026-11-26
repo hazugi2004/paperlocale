@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Callable, TypeVar
 from urllib.error import HTTPError, URLError
 
+from .error_categories import LAYOUT_CAPACITY_GUIDANCE
+
 T = TypeVar('T')
 
 
@@ -52,7 +54,7 @@ def error_details(error: Exception) -> tuple[str, str]:
     if isinstance(error, FileExistsError) and "目标" in message:
         solution = "核对并移走已有目标 PDF，或恢复本运行原导出文件后重试；程序不会覆盖未知文件。"
     elif "完整译文无法放入段落框" in message:
-        solution = "检查上述页码与段落框，修正排版或等义精炼译文；不要删减科学信息。"
+        solution = LAYOUT_CAPACITY_GUIDANCE
     elif isinstance(error, FileNotFoundError):
         solution = "核对报错路径及文件是否存在，再用同一运行目录重试。"
     elif isinstance(error, (ConnectionError, TimeoutError, URLError, HTTPError)):

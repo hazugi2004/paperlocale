@@ -63,7 +63,8 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         if generate_qa:
             qa_run(root, dpi=dpi, pdftoppm_bin=pdftoppm_bin, restore_vectors=False)
         return load_manifest(root)
-    if font_file is None:
+    default_font = font_file is None
+    if default_font:
         from babeldoc.assets.assets import get_font_and_metadata
         try:
             # 新安装也能自动取得同一校验字体，不要求用户事先运行旧版翻译。
@@ -83,14 +84,24 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
     # 提取、删除两道检查共用有缺陷的中间层而同时漏掉正文丢失。
     if paragraph:
         from .font_geometry import verify_canonical_source_pixels
+        emit_progress("核对原 PDF 像素与字体", .04)
         verify_canonical_source_pixels(source)
-    emit_progress("识别期刊与页面版式", .06)
-    detections = detect_regions(source, root / 'layout_detection.json')
+    def page_progress(stage, begin, end):
+        # 页码表示当前处理的页，比例按已处理的页数增长。后端仍使用同一份版面计划。
+        return lambda page, total: emit_progress(f"{stage} · 第 {page}/{total} 页",
+                                                  begin + (end - begin) * (page - 1) / total)
+    emit_progress("加载页面版式识别", .06)
+    detections = detect_regions(source, root / 'layout_detection.json',
+                                page_progress=page_progress("识别页面版式", .06, .07))
     if not plan_path.exists():
-        save_json(plan_path, extract_layout(source, detections, paragraph=paragraph, ocr_dir=root / "local_ocr"))
+        emit_progress("识别期刊与正文结构", .07)
+        save_json(plan_path, extract_layout(source, detections, paragraph=paragraph, ocr_dir=root / "local_ocr",
+                                          page_progress=page_progress("提取正文与保护区", .07, .085)))
     choices = read_choices(root, manifest['source_sha256'])
+    emit_progress("核对原文版面计划", .085)
     plan, units = load_plan(source, plan_path, detections, paragraph=paragraph,
-                           skip_block_ids=set(choices.get('skip_blocks', [])))
+                           skip_block_ids=set(choices.get('skip_blocks', [])),
+                           page_progress=page_progress("核对原文版面计划", .085, .10))
     if plan.get('journal'):
         print('期刊：'+plan['journal']['name']+'；识别依据：'+plan['journal']['evidence'], flush=True)
     locations = []
@@ -163,7 +174,9 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         protected = separate_caption_edges(source, protected, plan['blocks'])
         from .paragraph_layout import bind_inline_glyphs
         bind_inline_glyphs(source, units)
-        editable.extend(part for unit in units for part in unit['anchors'])
+        # 逻辑网址可跨多行，只删除各原字符片段所在区域，不清空跨行外接框。
+        editable.extend(fragment for unit in units for part in unit['anchors']
+                        for fragment in part.get('url_fragments', [part]))
         # 段落框可包含原文绕排的独立公式，连续框合并后仍须避让其真实
         # 墨迹。只增加运行时障碍，不改变源计划、分段ID或已有译文缓存。
         from .font_geometry import source_anchor_ink_rectangles
@@ -258,6 +271,22 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         except SystemExit as error:
             raise RuntimeError('自动获取中文粗体字体失败，等待资源恢复') from error
         bold_font = fitz.Font(fontfile=str(bold_file))
+    regular_data = bold_data = None
+
+    def extend_default_fonts(text):
+        nonlocal full_font, bold_font, regular_data, bold_data
+        if not default_font:
+            return
+        from .unicode_fonts import supplement_default_font
+        if data := supplement_default_font(full_font, text):
+            regular_data = data
+            full_font = fitz.Font(fontbuffer=data)
+        if bold_font is not None and (data := supplement_default_font(bold_font, text, bold=True)):
+            bold_data = data
+            bold_font = fitz.Font(fontbuffer=data)
+
+    # 预排版与最终子集使用同一份补充字体程序，精炼新增的字形也必须先核对。
+    extend_default_fonts(''.join(target_for(unit) for unit in units))
     emit_progress("验证译文与预排版", .72)
     failed = {}
     for unit in units:
@@ -333,6 +362,7 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         if errors:
             raise LocatedError('自动版面精炼未通过科学内容校验：' + str(errors), [{**unit_location(unit), 'validation_source': unit['source'],
                                'target': refined, 'errors': errors}], 'translation')
+        extend_default_fonts(refined)
         for occurrence in units:
             if occurrence['id'] == sid and '_manual_revision' not in occurrence:
                 fit_selected(occurrence, refined, full_font, min_font_size, bold_font)
@@ -354,15 +384,15 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         'validated_segments': len(unique), 'semantic_review': 'pending', 'visual_review': 'pending'})
     # 预排版使用最终嵌入字体的同一个子集，避免测量原字体、写入子集产生差异。
     font_text = ''.join(target_for(unit) for unit in units) or ' '
-    font_bytes, font_evidence = _subset_repair_font(font_file, font_text)
+    font_bytes, font_evidence = _subset_repair_font(font_file, font_text, font_data=regular_data)
     font = fitz.Font(fontbuffer=font_bytes)
-    from .unicode_fonts import unicode_glyph_aliases, insert_text_exact
+    from .unicode_fonts import insert_text_exact, repair_default_tounicode, unicode_glyph_aliases
     font_aliases = unicode_glyph_aliases(font_bytes)
     bold_aliases = {}
     bold_bytes = None
     if bold_file is not None:
         # 粗体也使用最终嵌入的字形子集测量，不能用细体宽度预检后再加粗。
-        bold_bytes, bold_evidence = _subset_repair_font(Path(bold_file), font_text)
+        bold_bytes, bold_evidence = _subset_repair_font(Path(bold_file), font_text, font_data=bold_data)
         bold_font = fitz.Font(fontbuffer=bold_bytes)
         bold_aliases = unicode_glyph_aliases(bold_bytes)
         font_evidence = {'regular': font_evidence, 'bold': bold_evidence}
@@ -375,12 +405,19 @@ def run_preserved(root: Path, *, provider, domain, plan_path: Path | None,
         with fitz.open(stream=reference_bytes, filetype='pdf') as document:
             inline_fonts = {}
             unicode_fonts = {}
+            checked_unicode_maps = set()
             for number, page in enumerate(document, 1):
                 if not any(p['page'] == number for p in editable):
                     continue
                 font_xref = page.insert_font(fontname='PLPreserved', fontbuffer=font_bytes)
+                default_fonts = [(font_xref, font_aliases)]
                 if bold_bytes is not None:
                     bold_xref = page.insert_font(fontname='PLPreservedBold', fontbuffer=bold_bytes)
+                    default_fonts.append((bold_xref, bold_aliases))
+                for reference, aliases in default_fonts:
+                    if reference not in checked_unicode_maps:
+                        repair_default_tounicode(document, reference, aliases)
+                        checked_unicode_maps.add(reference)
                 for item in placements:
                     if item['page'] != number:
                         continue

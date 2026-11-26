@@ -23,3 +23,21 @@ class CaptionEdgeTests(unittest.TestCase):
                 result = separate_caption_edges(source, [region], [caption])[0]
                 self.assertEqual(result['rect'][3], region['rect'][3] if has_graphic else box[1])
                 self.assertEqual(region['rect'][3], box[1]+1)
+
+    def test_only_standalone_continuation_label_can_trim_a_table(self):
+        cases = [('table', '(Continues)', False, True), ('figure', '(Continues)', False, False),
+                 ('table', 'Text (Continues)', False, False), ('table', '(Continues)', True, False)]
+        for kind, text, other_text, should_trim in cases:
+            with self.subTest(kind=kind, text=text, other_text=other_text), tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / 'source.pdf'
+                with fitz.open() as doc:
+                    page = doc.new_page()
+                    page.insert_text((95, 100), text, fontsize=10)
+                    box = list(page.get_text('blocks')[0][:4])
+                    if other_text:
+                        page.insert_text((40, 100), 'Cell', fontsize=10)
+                    doc.save(source)
+                region = {'page': 1, 'kind': kind, 'rect': [10, 10, 200, box[1]+1]}
+                label = {'page': 1, 'kind': 'body', 'text': text, 'rect': box}
+                result = separate_caption_edges(source, [region], [label])[0]
+                self.assertEqual(result['rect'][3], box[1] if should_trim else region['rect'][3])

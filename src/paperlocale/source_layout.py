@@ -14,6 +14,7 @@ import json
 import math
 import re
 import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 from statistics import median
 
@@ -37,6 +38,10 @@ CITATION = re.compile(r'\[\s*\d+(?:\s*[,;–−-]\s*\d+)*\s*\]|'
 LEGACY_CITATION = CITATION
 CITATION = re.compile(CITATION.pattern.replace('[A-Z]', '[A-ZÀ-ÖØ-ÞĀ-ž]').replace('[A-Za-z', '[A-Za-zÀ-ÖØ-öø-ž'))
 MATH_FONT = re.compile(r'math|mth|symbol|cmsy|cmmi|cmex|msam|msbm', re.I)
+SCIENTIFIC_VERSION = re.compile(
+    r'(?<![A-Za-z0-9_])[A-Z][A-Z0-9]*[A-Z][A-Z0-9]*[-‐‑]\d+(?:\.\d+)*'
+    r'(?:[-‐‑][A-Z][A-Za-z0-9]*)*(?![A-Za-z0-9_])'
+)
 # 图注编号后须有标点，或以大写词开启图注正文；正文中的“Figure 5
 # displays”和“Figure 2a”不是图注。罗马数字表号同样构成独立标题，
 # 防止连续的 Table III/IV/V 被合并为一个段落。无标点且小写开头的
@@ -96,7 +101,7 @@ def _superscript(span, line, *, paragraph=False):
     return span['size'] < .95*size or span['origin'][1] < baseline-.2*size
 
 
-def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek_variants=True, extended_citations=True, italic_words=False, short_prose=False, script_geometry=False, inline_fragments=False) -> list[dict]:
+def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek_variants=True, extended_citations=True, italic_words=False, short_prose=False, script_geometry=False, scientific_identifiers=False, inline_fragments=False) -> list[dict]:
     """按字符坐标分开普通文字和固定锚点，不用白块覆盖公式/引用。
 
     上标、数学字体及明确引文模式保持原对象。普通斜体不能一律当公式，
@@ -260,6 +265,13 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek
                         r'[+−-]?(?:\d+(?:\.\d+)?\s*×\s*)?10[−-]\d+']
             for pattern in literals:
                 for match in re.finditer(pattern, text):
+                    for char in chars[match.start():match.end()]:
+                        char['fixed'] = True
+            if scientific_identifiers:
+                # ERA-5、MERRA-2、SSP5-8.5 中的连字符是名称的一部分。
+                # 仅匹配同行紧连、至少含两个大写字母的版本名称，把完整
+                # 词元作为一个锚点；普通负数、变量和数值范围仍沿用上面的规则。
+                for match in SCIENTIFIC_VERSION.finditer(text):
                     for char in chars[match.start():match.end()]:
                         char['fixed'] = True
         ranges = [m.span() for pattern in (CITATION if extended_citations else LEGACY_CITATION, URL_RE) for m in pattern.finditer(text)] + scientific_literal_spans(text)
@@ -1444,7 +1456,7 @@ def _preserve_vector_math(source, blocks):
     return protected
 
 
-def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 7, frontmatter_after_cover: bool = True, publisher_font_styles: bool = True, nonadvancing_spaces: bool = True, extended_citations: int = 2, middle_dot_names: bool = True, publisher_layout: bool = True, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, reading_structure: int = 5, script_geometry: int = 4, author_details: bool = True, inline_fragments: int = 2, rotated_table_labels: bool = True, native_inline_math: int = 3, backmatter_structure: bool = True) -> dict:
+def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 7, frontmatter_after_cover: bool = True, publisher_font_styles: bool = True, spacing_revision: int = 3, extended_citations: int = 2, middle_dot_names: bool = True, publisher_layout: bool = True, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, reading_structure: int = 5, script_geometry: int = 4, author_details: bool = True, inline_fragments: int = 2, rotated_table_labels: bool = True, native_inline_math: int = 3, backmatter_structure: bool = True, scientific_identifiers: bool = True, url_groups: bool = True, page_progress: Callable[[int, int], None] | None = None) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
@@ -1460,6 +1472,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                                visual_exclusions=[r for r in (detections or []) if r['kind'] in {'table','figure'}]
                                                if paragraph and reading_structure >= 5 else None)
     blocks, protected, issues = [], [], []
+    page_links = {}
     from .journals import identify_journal, auxiliary_page, preserve_line, publisher_style_flags
     # 新增刊名证据与作者侧栏规则共同绑定计划版本；旧断点必须按生成时
     # 的识别路径重算，不能因升级而悄悄改变保护区域或已有译文身份。
@@ -1472,6 +1485,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
         from .source_watermarks import background_layers
         watermarks = background_layers(document) if paragraph and corpus_evidence else {}
         for number, page in enumerate(document, 1):
+            if page_progress is not None:
+                page_progress(number, len(document))
+            page_links[number] = page.get_links()
             cover_reason = auxiliary_page(page.get_text(), number) if journal else None
             if page.rotation or list(page.annots(types=(fitz.PDF_ANNOT_REDACT,)) or []):
                 issues.append(f'第{number}页旋转或已有删除标注，尚不受自动源版面模式支持')
@@ -1582,7 +1598,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                for span in line['spans'] for c in span['chars'])]}
                        if 'lines' in b else b for b in raw]
             normalize_traced_spaces(raw, page.get_texttrace(), repeated_spaces=corpus_evidence)
-            if paragraph and nonadvancing_spaces:
+            if paragraph and spacing_revision >= 1:
                 normalize_nonadvancing_spaces(raw)
             if paragraph:
                 from .source_symbols import restore_source_symbols
@@ -1733,7 +1749,13 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if not value:
                     continue
                 kind = block['_role']
-                if kind == 'body' and caption_pattern.match(value):
+                # 独立成块的软连字符只有排印作用。即使视觉模型把它圈在图注内，
+                # 也应保留原字形，避免送译文本在去除断行标记后变成空段。
+                detached_soft_hyphen = (paragraph and spacing_revision >= 2
+                                        and kind in {'body', 'caption'} and value == '\u00ad')
+                if detached_soft_hyphen:
+                    kind = 'preserve'
+                elif kind == 'body' and caption_pattern.match(value):
                     kind = 'caption'
                 elif kind == 'body' and re.fullmatch(r'(?:https?://|www\.)\S+', value):
                     # 独立网址（含句末标点）无需翻译。不能只留下网址对象、
@@ -1769,17 +1791,25 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if (number == 1 and rect.y1 < page.rect.height / 2 and value.count(',') >= 4
                         and len(words) > 8 and sum(w[0].isupper() for w in words) / len(words) > .8):
                     kind = 'preserve'
-                parts = _parts(block, number, page.get_links(), paragraph=paragraph, greek_variants=greek_variants, extended_citations=paragraph and extended_citations, italic_words=paragraph and italic_words, short_prose=paragraph and short_prose, script_geometry=paragraph and script_geometry, inline_fragments=paragraph and inline_fragments)
+                parts = _parts(block, number, page_links[number], paragraph=paragraph, greek_variants=greek_variants, extended_citations=paragraph and extended_citations, italic_words=paragraph and italic_words, short_prose=paragraph and short_prose, script_geometry=paragraph and script_geometry, scientific_identifiers=scientific_identifiers, inline_fragments=paragraph and inline_fragments)
+                if detached_soft_hyphen:
+                    # 排印空格可能把原生行框撑满整栏，保护范围应使用连字符本身的字框。
+                    marker = next((char for part in parts for char in part['chars']
+                                   if char['text'] == '\u00ad'), None)
+                    if marker is not None:
+                        rect = fitz.Rect(marker['rect'])
                 # 只有原位数学/引用锚点的片段没有可翻译正文，直接保护；
                 # 例如被出版社拆成独立文本块的行内下标表达式。
                 if kind == 'body' and parts and all(p['fixed'] for p in parts):
                     kind = 'formula'
                 # 出版社将行内公式拆为独立块，分号/括号仍可能使用正文字体。
                 # 只有确定锚点和数学标点、没有任何可翻译词的块整体保留；
-                # 不把带“where/and”等解释文字的句子误归为公式。
+                # 某些字体将下标附近的排印痕迹提取为独立下划线，随公式原位保留。
                 if (paragraph and symbol_revision >= 2 and kind == 'body' and parts
                         and any(p['fixed'] for p in parts)
-                        and all(p['fixed'] or re.fullmatch(r'[\s,;:().\[\]{}]+', p['text']) for p in parts)):
+                        and all(p['fixed'] or re.fullmatch(r'[\s,;:().\[\]{}]+', p['text'])
+                                or (spacing_revision >= 3 and p['text'].strip() == '_')
+                                for p in parts)):
                     kind = 'formula'
                 if paragraph and number == 1 and (
                         re.match(r'^(?:Received|Accepted)\s+\d', value) or
@@ -1899,7 +1929,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                         c == '\ufffd' or not c.isprintable() and not c.isspace() and c != '\u00ad'
                         for c in block['text']):
                     issues.append(f'第{block["page"]}页待译区域有未解决的异常编码；需核对局部 OCR 与源字形')
-        from .paragraph_layout import paragraph_groups
+        from .paragraph_layout import identify_url_fragments, paragraph_groups
         groups = paragraph_groups(blocks, section_boundaries=section_boundaries,
                                   mixed_first_page=content_geometry, dash_lists=dash_lists,
                                   pipe_headings=reading_structure, structured_headings=reading_structure >= 2,
@@ -1907,10 +1937,16 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                   backmatter_structure=backmatter_structure, math_closures=native_inline_math >= 2)
         if extended_citations >= 2:
             groups = _protect_group_citations(blocks, groups)
+        if url_groups:
+            for block in blocks:
+                if block['kind'] in {'body', 'caption'}:
+                    identify_url_fragments(block['parts'], page_links[block['page']])
         return {'schema': 2, **({'journal': journal} if journal else {}),
                 **({'symbol_revision': symbol_revision} if symbol_revision else {}),
                 **({'frontmatter_revision': 2} if frontmatter_after_cover else {}),
                 **({'reading_structure_revision': int(reading_structure)} if reading_structure else {}),
+                **({'scientific_identifier_revision': 1} if scientific_identifiers else {}),
+                **({'url_group_revision': 1} if url_groups else {}),
                 **({'script_geometry_revision': int(script_geometry)} if script_geometry else {}),
                 **({'author_details_revision': 1} if author_details else {}),
                 **({'inline_fragment_revision': int(inline_fragments)} if inline_fragments else {}),
@@ -1918,7 +1954,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 **({'backmatter_structure_revision': 1} if backmatter_structure else {}),
                 **({'native_inline_math_revision': int(native_inline_math)} if native_inline_math and vector_fractions else {}),
                 **({'publisher_font_revision': 1} if publisher_font_styles else {}),
-                **({'spacing_revision': 1} if nonadvancing_spaces else {}),
+                **({'spacing_revision': spacing_revision} if spacing_revision else {}),
                 **({'author_separator_revision': 1} if middle_dot_names else {}),
                 **({'publisher_layout_revision': 1} if publisher_layout else {}),
                 **({'citation_revision': int(extended_citations)} if extended_citations else {}),
@@ -1959,7 +1995,9 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
             'protected_regions': protected, 'groups': groups, 'issues': issues}
 
 
-def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *, paragraph: bool = False, skip_block_ids: set[str] | None = None) -> tuple[dict, list[dict]]:
+def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *, paragraph: bool = False,
+              skip_block_ids: set[str] | None = None,
+              page_progress: Callable[[int, int], None] | None = None) -> tuple[dict, list[dict]]:
     """核对源页与全覆盖分组；不接受伪造原文、坐标、重复翻译或遗漏正文。"""
     plan = json.loads(path.read_text(encoding='utf-8'))
     if plan.get('schema') != (2 if paragraph else 1) or plan.get('source_sha256') != digest(source):
@@ -1975,7 +2013,7 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
                             frontmatter_after_cover=plan.get('frontmatter_revision') == 2,
                             publisher_font_styles=plan.get('publisher_font_revision') == 1,
                             extended_citations=plan.get('citation_revision', 0),
-                            nonadvancing_spaces=plan.get('spacing_revision') == 1,
+                            spacing_revision=plan.get('spacing_revision', 0),
                             middle_dot_names=plan.get('author_separator_revision') == 1,
                             publisher_layout=plan.get('publisher_layout_revision') == 1,
                             italic_words=plan.get('prose_revision') in {1, 2},
@@ -1987,12 +2025,15 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
                             fraction_labels=plan.get('vector_fraction_revision') in {2, 3},
                             fraction_structure=plan.get('vector_fraction_revision') == 3,
                             reading_structure=plan.get('reading_structure_revision', 0),
+                            scientific_identifiers=plan.get('scientific_identifier_revision') == 1,
+                            url_groups=plan.get('url_group_revision') == 1,
                             script_geometry=plan.get('script_geometry_revision', 0),
                             author_details=plan.get('author_details_revision') == 1,
                             inline_fragments=plan.get('inline_fragment_revision', 0),
                             rotated_table_labels=plan.get('rotated_table_label_revision') == 1,
                             native_inline_math=plan.get('native_inline_math_revision', 0),
-                            backmatter_structure=plan.get('backmatter_structure_revision') == 1)
+                            backmatter_structure=plan.get('backmatter_structure_revision') == 1,
+                            page_progress=page_progress)
     if plan != actual:
         raise ValueError('自动版面计划与源文件/检测结果不一致；拒绝人工改写或过期缓存')
     skip_block_ids = skip_block_ids or set()
@@ -2123,7 +2164,7 @@ def units_from_plan(plan: dict, *, paragraph: bool) -> list[dict]:
                 parts.append(part)
         if paragraph:
             from .paragraph_layout import merge_inline_parts
-            parts = merge_inline_parts(parts)
+            parts = merge_inline_parts(parts, join_urls=plan.get('url_group_revision') == 1)
         source_parts, slots, anchors = [], [[]], []
         for part in parts:
             if part['fixed']:
@@ -2406,7 +2447,10 @@ def verify_unchanged(source: Path, candidate: Path, editable: list[dict], *, sca
                 # 容差；未知字体仍严格失败，邻近固定字形另有独立校验。
                 if body_masks is None:
                     from .font_geometry import source_anchor_masks
-                    body_masks, _ = source_anchor_masks(source, editable, scale=scale)
+                    # 断词标记仅在已证实对应无墨空格时可忽略，避免它阻断
+                    # 同行可译字形的精确掩模；固定区仍沿用严格检查。
+                    body_masks, _ = source_anchor_masks(source, editable, scale=scale,
+                                                         allow_blank_soft_hyphen=True)
                 if number in body_masks:
                     ink = body_masks[number].point(lambda value: 255 if value else 0)
                     diff.paste((0, 0, 0), mask=ink)

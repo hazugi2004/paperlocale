@@ -8,7 +8,7 @@ import pymupdf as fitz
 
 from paperlocale.diagnostics import LocatedError, record_error
 from paperlocale.domains import load_domain_pack
-from paperlocale.manual_revision import manual_revision, revision_errors
+from paperlocale.manual_revision import _legacy_protected_spans, manual_revision, revision_errors
 from paperlocale.preserved_workflow import run_preserved
 from paperlocale.providers import Translation, TranslationProvider
 from paperlocale.source_layout import digest
@@ -81,6 +81,34 @@ class ManualRevisionTests(unittest.TestCase):
             with fitz.open(candidate['rendered_pdf']) as doc:
                 self.assertIn(draft['target'], doc[0].get_text())
 
+    def test_unchanged_oversize_revision_explains_layout_and_can_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, font, run = prepare(Path(directory))
+            provider = LocalProvider('植物生长' * 70 + '平均持续10.43天。')
+            options = self.run_options(provider, font)
+            for second_attempt in (False, True):
+                with self.assertRaises(LocatedError) as failed:
+                    run_preserved(run, **options)
+                report = record_error(failed.exception, run)
+                self.assertEqual(report['classification']['code'], 'layout.capacity')
+                self.assertNotIn('词元', report['message'])
+                version = dict(page=1, error_id=report['error_id'], expected_hash=None)
+                block, = manual_revision(run, **version)['items']
+                draft = {'id': block['id'], 'before': block['target'], 'target': block['target']}
+                before = load_manifest(run)
+                for check_only in (True, False):
+                    result = manual_revision(run, **version, edit=draft, check_only=check_only)
+                    self.assertFalse(result['valid'])
+                    message, = result['errors']
+                    self.assertIn('当前段落仍排不下', message)
+                    self.assertIn('长网址附近可先调整标点', message)
+                    self.assertNotIn('统计分母', message)
+                    self.assertEqual(load_manifest(run), before)
+                draft['target'] = '植物生长平均持续10.43天。' if second_attempt else draft['target'][:-1] + '.'
+                self.assertTrue(manual_revision(run, **version, edit=draft)['valid'])
+            self.assertEqual(run_preserved(run, **options)['status'], 'qa_generated')
+            self.assertEqual(provider.calls, 1)
+
     def test_review_edit_binds_one_occurrence_and_rechecks_accepted_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -97,6 +125,9 @@ class ManualRevisionTests(unittest.TestCase):
             self.assertEqual(first['segment_id'], second['segment_id'])
             self.assertNotEqual(first['id'], second['id'])
             draft = {'id': second['id'], 'before': automatic, 'target': '植物生长平均维持  10.43 天。'}
+            unchanged = {**draft, 'target': automatic}
+            result = manual_revision(run, **version, edit=unchanged, check_only=True)
+            self.assertEqual(result['errors'], ['译文没有改动。请修改后再提交。'])
             invalid = {**draft, 'target': '植物生长平均维持11.43天。'}
             self.assertFalse(manual_revision(run, **version, edit=invalid, check_only=True)['valid'])
             self.assertEqual(load_manifest(run)['status'], 'accepted')
@@ -124,6 +155,19 @@ class ManualRevisionTests(unittest.TestCase):
         self.assertEqual(revision_errors(source, target, self.domain, anchors, None), [])
         errors = revision_errors(source, target.replace('d–i', 'a–c'), self.domain, anchors, None)
         self.assertTrue(any('固定引用的子图编号' in error for error in errors))
+
+    def test_legacy_editor_groups_only_evidenced_links_and_adjacent_model_names(self):
+        source = 'Data come from ERA{v0} and are available {v1} {v2}.'
+        target = '数据来自ERA{v0}，公开于{v1}{v2}。'
+        anchors = {'{v0}': '-5', '{v1}': '(https://example.org/', '{v2}': 'data#era5)'}
+        name = {'markers': ['{v0}'], 'encoded': 'ERA{v0}', 'display': 'ERA-5'}
+        website = {'markers': ['{v1}', '{v2}'], 'encoded': '{v1}{v2}',
+                   'display': '(https://example.org/data#era5)'}
+        urls = {'https://example.org/data#era5'}
+        self.assertEqual(_legacy_protected_spans(source, target, anchors, urls), [name, website])
+        self.assertEqual(_legacy_protected_spans(source, target, anchors, set()), [name])
+        self.assertEqual(_legacy_protected_spans(source, target.replace('{v1}', '{v1}与'), anchors, urls), [name])
+        self.assertEqual(_legacy_protected_spans(source.replace('ERA', 'p'), target, anchors, urls), [website])
 
 
 if __name__ == '__main__':

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.8 — 2026-11-26
+
+- Keep scientific product identifiers such as ERA-5 intact and treat a verified URL continued across source lines as one link.
+- Show complete identifiers and links in the macOS repair editor, including when reopening compatible 0.8.7 checkpoints.
+- List OpenAI API models available to the project and show more specific repair instructions for layout overflow, unchanged drafts, and content checks.
+- See [installation and release details](docs/releases/v0.8.8.md).
+
 ## 0.8.7 — 2026-11-25
 
 - Add the official OpenAI Responses API to the CLI and macOS app. Translate in bounded batches, validating and saving each batch before continuing.

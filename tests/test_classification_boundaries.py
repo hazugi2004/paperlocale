@@ -10,6 +10,71 @@ from paperlocale.source_layout import _definition_rows, extract_layout, load_pla
 
 
 class ClassificationBoundaryTests(unittest.TestCase):
+    def test_detached_soft_hyphen_in_detected_caption_preserves_only_the_glyph_box(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'caption.pdf'
+            with fitz.open() as document:
+                page = document.new_page()
+                page.insert_text((40, 100), 'Ordinary body text remains translatable.')
+                page.insert_text((40, 320), ' ' * 30 + '-')
+                page.insert_text((40, 345), 'Figure 1. The study region.')
+                # 模拟出版社字体的 ToUnicode：字形为连字符，语义是可选断行。
+                cmap = document.get_new_xref()
+                document.update_object(cmap, '<<>>')
+                document.update_stream(cmap, b'begincmap /CMapType 2 def '
+                    b'1 begincodespacerange <00> <FF> endcodespacerange '
+                    b'1 beginbfchar <2D> <00AD> endbfchar endcmap')
+                document.xref_set_key(page.get_fonts()[0][0], 'ToUnicode', f'{cmap} 0 R')
+                document.save(source)
+
+            detections = [{'page': 1, 'kind': 'figure_caption', 'rect': [35, 305, 320, 355]}]
+            old = extract_layout(source, detections, paragraph=True, spacing_revision=1)
+            current = extract_layout(source, detections, paragraph=True)
+            previous_marker = next(b for b in old['blocks'] if b['text'] == '\u00ad')
+            marker = next(b for b in current['blocks'] if b['text'] == '\u00ad')
+            self.assertEqual(previous_marker['kind'], 'caption')
+            self.assertEqual(marker['kind'], 'preserve')
+            self.assertEqual(marker['parts'], previous_marker['parts'])
+            self.assertEqual(marker['rect'], marker['parts'][0]['chars'][-1]['rect'])
+            self.assertLess(marker['rect'][2] - marker['rect'][0], 5)
+            path = root / 'plan.json'
+            save_json(path, current)
+            loaded, units = load_plan(source, path, detections, paragraph=True)
+            self.assertEqual(loaded, current)
+            self.assertEqual([unit['source'] for unit in units],
+                             ['Ordinary body text remains translatable.', 'Figure 1. The study region.'])
+
+    def test_detached_formula_with_underscore_keeps_its_original_geometry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'formula.pdf'
+            with fitz.open() as document:
+                page = document.new_page()
+                # 斜体变量形成固定锚点，下划线模拟正文字体提取的独立痕迹。
+                page.insert_text((40, 100), 'Tv', fontname='tiit', fontsize=10)
+                page.insert_text((51, 100), '_', fontname='tiro', fontsize=10)
+                page.insert_text((40, 170), 'Tv', fontname='tiit', fontsize=10)
+                page.insert_text((51, 170), '_ where temperature changes.', fontname='tiro', fontsize=10)
+                page.insert_text((40, 240), 'The underscore _ belongs to the prose.')
+                document.save(source)
+
+            old = extract_layout(source, paragraph=True, spacing_revision=2)
+            current = extract_layout(source, paragraph=True)
+            previous_formula, formula = old['blocks'][0], current['blocks'][0]
+            self.assertEqual(previous_formula['kind'], 'body')
+            self.assertEqual(formula['kind'], 'formula')
+            self.assertEqual(formula['parts'], previous_formula['parts'])
+            self.assertEqual(formula['rect'], previous_formula['rect'])
+            self.assertEqual(current['spacing_revision'], 3)
+            self.assertEqual(current['blocks'][1:], old['blocks'][1:])
+            translations = [unit['source'] for unit in units_from_plan(current, paragraph=True)]
+            self.assertEqual(translations, ['{v0}_ where temperature changes.',
+                                            'The underscore _ belongs to the prose.'])
+            path = root / 'plan.json'
+            save_json(path, old)
+            self.assertEqual(load_plan(source, path, paragraph=True)[0], old)
+
     def test_math_definition_grid_requires_repeated_aligned_pairs(self):
         def line(text, x, y, font):
             return {'bbox': [x, y, x + len(text) * 5, y + 10],

@@ -1,9 +1,11 @@
 """验证真实 PDF 中共享字形和补充平面字符的逐字回读。"""
 from io import BytesIO
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
+from types import ModuleType
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
@@ -59,10 +61,12 @@ class UnicodeFontTests(unittest.TestCase):
                 _subset_repair_font(base, text)
             latin = Path(directory)/'latin.ttf'
             latin.write_bytes(alias_font((0x0160, 0x10400)))
-            with patch('babeldoc.assets.assets.get_font_and_metadata',
-                       return_value=(latin, {})) as asset:
+            # 基础测试环境没有 layout 依赖。只替换字体来源，后续合并与 PDF 回读仍然实测。
+            asset_module = ModuleType('babeldoc.assets.assets')
+            asset_module.get_font_and_metadata = Mock(return_value=(latin, {}))
+            with patch.dict(sys.modules, {asset_module.__name__: asset_module}):
                 data = supplement_default_font(primary, text, bold=True)
-            asset.assert_called_once_with('NotoSerif-Bold.ttf')
+            asset_module.get_font_and_metadata.assert_called_once_with('NotoSerif-Bold.ttf')
             with TTFont(BytesIO(primary_buffer)) as before, TTFont(BytesIO(data)) as after:
                 original, added = before.getBestCmap(), after.getBestCmap()
                 self.assertEqual(set(added)-set(original), set(map(ord, 'Š𝛹𝜓')))

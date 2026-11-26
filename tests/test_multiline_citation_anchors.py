@@ -115,8 +115,22 @@ class MultilineCitationTests(unittest.TestCase):
         loaded, _ = load_plan(source, path, paragraph=True)
         self.assertEqual(loaded, old)
         current = extract_layout(source, paragraph=True)
-        self.assertEqual(current['citation_revision'], 2)
+        self.assertEqual(current['citation_revision'], 3)
         self.assertEqual(self._fixed_text(current), '(Bezak and Mikoš, 2020)')
+
+    def test_explanation_after_citation_remains_translatable(self):
+        source, plan = self._extract([
+            (40, 100, 'The boundary follows the ecosystem definition (Chapin et al.,'),
+            (40, 112, '2006; i.e., from the soil surface to the overlying atmosphere).')])
+        self.assertEqual(self._fixed_text(plan), 'Chapin et al., 2006')
+        self.assertTrue(any('from the soil surface' in unit['source']
+                            for unit in units_from_plan(plan, paragraph=True)))
+        self._verify_source_characters(source, plan)
+        before = extract_layout(source, paragraph=True, extended_citations=2)
+        path = source.parent / 'before.json'
+        save_json(path, before)
+        self.assertIn('from the soil surface', self._fixed_text(before))
+        self.assertEqual(load_plan(source, path, paragraph=True)[0], before)
 
     def test_standalone_wrapped_citation_has_no_translation_unit(self):
         source, plan = self._extract([

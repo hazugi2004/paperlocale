@@ -16,6 +16,40 @@ from paperlocale.domains import load_domain_pack
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_wrapped_data_field_uses_only_adjacent_lines_of_same_paragraph(self):
+        from paperlocale.paragraph_layout import source_text
+
+        first = {'text': 'The reference variable (GPP_DT_VUT_', 'baseline': 100, 'page': 3,
+                 'size': 9, 'rect': [45, 90, 289, 104], 'fixed': False, 'source_block': 'a'}
+        second = {**first, 'text': 'REF), which incorporates', 'baseline': 112,
+                  'rect': [45, 102, 290, 116]}
+        separated = 'The reference variable (GPP_DT_VUT_ REF), which incorporates'
+        connected = 'The reference variable (GPP_DT_VUT_REF), which incorporates'
+        self.assertEqual(source_text([first, second]), separated)
+        self.assertEqual(source_text([first, second], join_wrapped_identifiers=True), connected)
+        for difference in ({'source_block': 'b'}, {'page': 4}, {'baseline': 130},
+                           {'baseline': 100, 'rect': [305, 90, 420, 104]}):
+            with self.subTest(difference=difference):
+                self.assertEqual(source_text([first, {**second, **difference}],
+                                             join_wrapped_identifiers=True), separated)
+        self.assertEqual(source_text([first, {**second, 'text': 'REF and other values'}],
+                                     join_wrapped_identifiers=True),
+                         'The reference variable (GPP_DT_VUT_ REF and other values')
+
+    def test_data_field_is_not_broken_by_paragraph_line_wrap(self):
+        from paperlocale.paragraph_layout import fit_paragraph
+
+        unit = {'id': 'data-field', 'source': 'Use the daytime partitioning reference variable GPP_DT_VUT_REF.',
+                'anchors': [], 'frames': [{'page': 1, 'rect': [45, 80, 185, 128],
+                                           'size': 10, 'bold': False, 'leading': 12,
+                                           'weight': 20, 'indent': 0}]}
+        target = '使用日间分割参考变量GPP_DT_VUT_REF。'
+        placements = fit_paragraph(unit, target, fitz.Font('china-s'), None, None)
+        written = [item['target'] for item in placements]
+        self.assertGreater(len(written), 1)
+        self.assertEqual(''.join(written), target)
+        self.assertTrue(any('GPP_DT_VUT_REF' in line for line in written))
+
     def test_blank_anchor_reports_its_position_instead_of_crashing(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'blank-anchor.pdf'
@@ -580,6 +614,34 @@ class ParagraphTests(unittest.TestCase):
              'leading':8.37,'indent':0,'weight':89}]}
         placed=fit_paragraph(unit,target,fitz.Font('china-s'),None,None)
         self.assertEqual(''.join(p['target'] for p in placed),target)
+
+    def test_frame_capacity_retry_fits_wide_citation_at_original_size(self):
+        from paperlocale.paragraph_layout import fit_paragraph
+
+        anchor = {'text': '(Chu et al., 2017; Pastorello et al., 2020)',
+                  'ink': [0, 1, 95, 8], 'body_baseline': 8}
+        target = '已有研究说明干旱强度{v0}。'
+        font = fitz.Font('china-s')
+        # 一个宽引文只占一个词元。按词元比例可能挤满前框，也可能给引文留太少空间。
+        for first_width, second_width, first_weight in ((81, 150, 80), (120, 120, 20)):
+            with self.subTest(first_width=first_width):
+                obstacle = fitz.Rect(0, 0, 10, 13)
+                frames = [{'page': page, 'rect': [0, 0, width, 13], 'size': 10, 'bold': False,
+                           'leading': 12, 'weight': weight, 'indent': 0,
+                           'obstacles': [list(obstacle)] if page == 1 else []}
+                          for page, width, weight in ((1, first_width, first_weight), (2, second_width, 20))]
+                unit = {'id': 'wide-citation', 'source': 'Studies explain drought intensity {v0}.',
+                        'anchors': [anchor], 'frames': frames}
+                placed = fit_paragraph(unit, target, font, 10, None)
+                self.assertEqual(''.join(p['target'] for p in placed), target)
+                self.assertEqual({p['page'] for p in placed}, {1, 2})
+                citation, = [p for p in placed if 'inline_anchor' in p]
+                self.assertEqual((citation['page'], citation['inline_anchor']), (2, anchor))
+                for piece in placed:
+                    self.assertEqual(piece['font_size'], 10)
+                    self.assertIn(fitz.Rect(piece['rect']), fitz.Rect(frames[piece['page']-1]['rect']))
+                    if piece['page'] == 1:
+                        self.assertFalse(fitz.Rect(piece['rect']).intersects(obstacle))
 
     def test_caption_translated_and_inline_citation_flows_without_holes(self):
         with tempfile.TemporaryDirectory() as tmp:

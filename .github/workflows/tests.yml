@@ -78,7 +78,9 @@ jobs:
       matrix:
         # 项目声明支持 3.10–3.13，因此 CI 必须覆盖完整范围。
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-    runs-on: ubuntu-latest
+    # 固定安装 Poppler 的 noble 环境，避免 ubuntu-latest 切换到 26.04 后
+    # 预装的 Microsoft 软件源返回 403，在实际运行单测之前中断 apt。
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6

@@ -3,6 +3,7 @@ from .font_geometry import open_source_pdf
 
 import pymupdf as fitz
 import math
+import re
 from PIL import Image, ImageChops
 
 
@@ -12,39 +13,69 @@ def page_pixels(page):
     return Image.frombytes('RGB', (pixmap.width, pixmap.height), pixmap.samples)
 
 
-def separate_caption_edges(source, protected, blocks):
+def separate_caption_edges(source, protected, blocks, *, journal_family=None):
     """收紧误罩住图注或续表标记的检测框，不更改源对象或持久版面计划。
 
-    只处理图表下边界与已识别图注、独立续表标记的重叠；移出的条带必须
-    没有图片、矢量绘制或这些标签以外的字符。证据不足时保留原框。
-    因此不能用该规则裁掉曲线、图内标签或任意正文来让检查通过。
+    处理覆盖了下方图注、续表标记、上方表注或 CSIRO Box 通讯作者说明的检测边界。
+    移出的条带必须没有图形或这些已识别文本以外的字符。证据不足时保留原框。
     """
     result = []
     with open_source_pdf(source) as document:
         for region in protected:
             box = fitz.Rect(region['rect'])
             kind = region.get('kind')
-            labels = [fitz.Rect(b['rect']) for b in blocks if b['page'] == region['page']
-                      and (b['kind'] == 'caption' or (kind == 'table' and b['kind'] == 'body'
-                                                    and b.get('text') == '(Continues)'))
-                      and box.y0 < b['rect'][1] < box.y1 <= b['rect'][3]
-                      and box.x0 < b['rect'][2] and b['rect'][0] < box.x1]
-            if kind not in {'figure', 'table'} or not labels:
+            if kind not in {'figure', 'table'}:
                 result.append(region)
                 continue
-            edge = min(label.y0 for label in labels)
-            strip = fitz.Rect(box.x0, edge, box.x1, box.y1)
+            captions, continuations, box_leadins = [], [], []
+            for block in blocks:
+                if block['page'] != region['page']:
+                    continue
+                label = fitz.Rect(block['rect'])
+                if not box.intersects(label):
+                    continue
+                if block['kind'] == 'caption':
+                    captions.append(label)
+                elif kind == 'table' and block['kind'] == 'body' and block.get('text') == '(Continues)':
+                    continuations.append(label)
+                elif (journal_family == 'csiro' and kind == 'figure' and block['kind'] == 'body'
+                      and label.y0 < box.y0 < label.y1 < box.y1
+                      and block.get('text', '').startswith('The corresponding authors (and email addresses)')
+                      and re.search(r'\{[A-Z]{1,4}\}[^@;]*\([\w.+-]+@[\w.-]+\)', block['text'])
+                      and any(title['page'] == block['page'] and title['kind'] == 'caption'
+                              and re.match(r'Box\s+\d+\.', title.get('text', ''))
+                              and 0 <= label.y0-title['rect'][3] <= 3*label.height
+                              and min(label.x1, title['rect'][2]) - max(label.x0, title['rect'][0]) > .5*label.width
+                              for title in blocks)):
+                    # 编号 Box 和原生邮箱确认是框首说明；后续姓名与邮箱仍在保护区。
+                    box_leadins.append(label)
+            above = [r for r in captions if kind == 'table' and r.y0 <= box.y0 < r.y1 < box.y1]
+            above.extend(box_leadins)
+            below = [r for r in captions + continuations if box.y0 < r.y0 < box.y1 <= r.y1]
+            if not above and not below:
+                result.append(region)
+                continue
+            top = max((r.y1 for r in above), default=box.y0)
+            bottom = min((r.y0 for r in below), default=box.y1)
             page = document[region['page'] - 1]
-            graphics = any(kind in {'fill-image', 'fill-path', 'stroke-path', 'fill-shade'}
-                           and fitz.Rect(rect).intersects(strip)
-                           for kind, rect in page.get_bboxlog())
-            chars = [c for b in page.get_text('rawdict', flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)['blocks']
+            graphics = [fitz.Rect(rect) for paint, rect in page.get_bboxlog()
+                        if paint in {'fill-image', 'fill-path', 'stroke-path', 'fill-shade'}]
+            chars = [fitz.Rect(c['bbox'])
+                     for b in page.get_text('rawdict', flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)['blocks']
                      for line in b.get('lines', []) for span in line['spans'] for c in span['chars']]
-            other_text = any(fitz.Rect(c['bbox']).intersects(strip)
-                             and not any(label.contains(fitz.Rect(c['bbox'])) for label in labels)
-                             for c in chars)
-            if not graphics and not other_text:
-                region = {**region, 'rect': [box.x0, box.y0, box.x1, edge],
+            # 分别核实上下条带。一侧有真实表线或单元格文字，不妨碍另一侧独立核验。
+            for labels, strip in ((above, fitz.Rect(box.x0, box.y0, box.x1, top)),
+                                  (below, fitz.Rect(box.x0, bottom, box.x1, box.y1))):
+                if not labels:
+                    continue
+                blocked = any(r.intersects(strip) for r in graphics) or any(
+                    r.intersects(strip) and not any(label.contains(r) for label in labels) for r in chars)
+                if blocked and labels is above:
+                    top = box.y0
+                elif blocked:
+                    bottom = box.y1
+            if top < bottom and (top, bottom) != (box.y0, box.y1):
+                region = {**region, 'rect': [box.x0, top, box.x1, bottom],
                           'caption_edge_original_rect': list(box)}
             result.append(region)
     return result

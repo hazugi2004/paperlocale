@@ -52,6 +52,14 @@ class TranslationContractTest(unittest.TestCase):
         prose = "The following dataset describes future compound climate extremes. " + source
         self.assertTrue(any("缺少中文" in e for e in validate_translation(prose, prose)))
 
+    def test_data_field_stays_exact_and_copyable(self) -> None:
+        source = "We used the daytime partitioning reference variable (GPP_DT_VUT_REF)."
+        self.assertEqual(validate_translation(source, "采用日间分割参考变量（GPP_DT_VUT_REF）。"), [])
+        for field in ("GPP_DT_VUT_ REF", "GPP_DT_VUT_REF、GPP_DT_VUT_REF", "GPP_VUT_DT_REF"):
+            with self.subTest(field=field):
+                errors = validate_translation(source, f"采用日间分割参考变量（{field}）。")
+                self.assertTrue(any(error.startswith("data_field ") for error in errors))
+
     def test_segment_id_normalizes_line_endings(self) -> None:
         self.assertEqual(segment_id(" A\r\nB "), segment_id("A\nB"))
 

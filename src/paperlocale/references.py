@@ -127,19 +127,31 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     temporary.replace(path)
 
 
+def _csiro_author_year_entry(text: str) -> bool:
+    """CSIRO 的作者缩写省略句点，之后紧接括号包住的四位年份。"""
+    surname = r"[^\W\d_][\w'’‐–-]*"
+    author = rf"{surname}(?:\s+{surname}){{0,2}}\s+[A-Z]{{1,4}}(?:\s+(?:Jr|Sr))?"
+    return bool(re.match(rf"^{author}(?:,\s+{author})*\s+\((?:18|19|20)\d{{2}}[a-z]?\)\s+\S", text))
+
+
 def _reference_geometry(
     source_pdf: Path, *, supplementary_boundary: bool = False, styled_boundaries: bool = False,
     visual_exclusions: list[dict] | None = None,
+    wiley_reference_heading: bool = False,
+    csiro_gutters: dict[int, float] | None = None,
 ) -> tuple[list[int], str | None, tuple[str, ...], list[dict[str, object]]]:
     """返回标题页、标题后区域和由 PDF 坐标确定的左侧稿件行号。
 
     参考文献标题可能与整页书目被 PyMuPDF 合并为一个文本块，
-    因此识别和区域收集都以可见文本行为单位，不依赖块边界。
+    因此识别和区域收集都以可见文本行为单位，不依赖块边界。新版
+    CSIRO 把已有双栏证据的分隔点（以 1 起始的页码和点坐标）一并交回正文排序。
     """
 
     heading_matches = lambda text, numbers: (_heading_block_matches(text, numbers) or
         styled_boundaries and bool(re.fullmatch(r'REFERENCES AND NOTES', text.strip(), re.I)))
     inline_boundaries = set()
+    wiley_headings = set()
+    csiro_splits = csiro_gutters if csiro_gutters is not None else {}
     if visual_exclusions is None:
         document = fitz.open(source_pdf)
     else:
@@ -163,6 +175,9 @@ def _reference_geometry(
             line_entries: list[tuple[float, float, str]] = []
             for block in page.get_text("dict")["blocks"]:
                 for line in block.get("lines", []):
+                    if csiro_gutters is not None and line['dir'] != (1, 0):
+                        # CSIRO 的纵排下载水印原样保留在页边，不属于书目栏。
+                        continue
                     bbox = line["bbox"]
                     if styled_boundaries and line.get('spans'):
                         first = line['spans'][0]
@@ -192,6 +207,10 @@ def _reference_geometry(
                     line_text = "".join(content_parts).strip()
                     if not line_text:
                         continue
+                    if (wiley_reference_heading and line_text == 'REFERENCES' and line['dir'] == (1, 0)
+                            and all(span['flags'] & 16 or re.fullmatch(r'AdvOT[0-9a-fA-F]+[.]B', span['font'])
+                                    for span in line['spans'] if span['text'].strip())):
+                        wiley_headings.add((page_index, float(bbox[0]), float(bbox[1])))
                     text_lines.append(
                         (
                             float(bbox[0]),
@@ -204,6 +223,11 @@ def _reference_geometry(
             # 两栏必须同时有多行、各自完全位于中线一侧的正文证据；
             # 居中的公式、行号或一条短页眉不足以触发栏序重排。
             middle = float(page.rect.width) / 2
+            if csiro_gutters is not None:
+                from .journals import csiro_column_gutter
+                gutter = csiro_column_gutter(page.rect.width, text_lines)
+                if gutter is not None:
+                    middle = csiro_splits[page_index + 1] = gutter
             left_count = sum(line[2] < middle and len(line[4]) >= 40 for line in text_lines)
             right_count = sum(line[0] >= middle and len(line[4]) >= 40 for line in text_lines)
             if left_count >= 3 and right_count >= 3:
@@ -227,6 +251,13 @@ def _reference_geometry(
     finally:
         document.close()
 
+    if wiley_reference_heading and len(headings) > 1:
+        # Ecological Monographs 10.1002/ecm.70011 的正文按字拆行时会出现
+        # 单独的 regular “reference”。用出版商全大写粗体小节标题消歧，
+        # 例如该刊 AdvOT 子集的 .B 后缀可在 PDF 未声明 Bold flag 时取证。
+        verified = [heading for heading in headings if heading[:3] in wiley_headings]
+        if len(verified) == 1:
+            headings = verified
     heading_pages = [page_index + 1 for page_index, _x0, _top, _bottom, _width in headings]
     if len(headings) != 1:
         return heading_pages, None, (), []
@@ -236,7 +267,8 @@ def _reference_geometry(
         line[4] for index, lines in enumerate(page_text_lines) for line in lines
         if line[3] < page_sizes[index][1] * 0.08 or line[1] > page_sizes[index][1] * 0.94
     )
-    heading_starts_in_right_column = heading_x0 >= heading_page_width * 0.45
+    heading_middle = csiro_splits.get(heading_page + 1, heading_page_width / 2)
+    heading_starts_in_right_column = heading_x0 >= csiro_splits.get(heading_page + 1, heading_page_width * 0.45)
     region_parts: list[str] = []
     selected_lines: dict[tuple[int, int], list[tuple]] = {}
     region_boundary: tuple[int, float] | None = None
@@ -253,25 +285,30 @@ def _reference_geometry(
                 follows_in_right_column = (
                     heading_page in two_column_pages
                     and not heading_starts_in_right_column
-                    and line[0] >= heading_page_width / 2
+                    and line[0] >= heading_middle
                 )
                 if follows_in_right_column:
                     # 有些期刊在整页正文之后才开始横跨两栏的书目；右栏上方
                     # 此时是出版商说明的续文。只有右栏首段具备作者-书目开头
                     # 的明确结构才允许回溯到标题上方，不能仅因它位于右栏就保留。
                     right_body = [item for item in page_text_lines[page_index]
-                                  if item[0] >= heading_page_width / 2 and len(item[4]) >= 40
+                                  if item[0] >= heading_middle and len(item[4]) >= 40
                                   and not (item[3] < height * 0.08 and margin_counts[item[4]] > 1)]
                     follows_in_right_column = bool(right_body) and bool(re.match(
                         r"^(?:\d+[.)]?\s+)?[A-ZÀ-ÖØ-Þ][\w'’ -]+,?\s+[A-Z]\.", right_body[0][4]
                     ))
+                    if heading_page + 1 in csiro_splits and right_body and not follows_in_right_column:
+                        # CSIRO 续栏的首条和随后至少一条均须显示原生书目格式；
+                        # 只因右侧有普通正文内引文，不能把它纳入参考文献。
+                        follows_in_right_column = _csiro_author_year_entry(right_body[0][4]) and any(
+                            _csiro_author_year_entry(item[4]) for item in right_body[1:25])
                     if right_body and not follows_in_right_column:
                         # 同一条书目的作者名单可能在左栏底部断开，右栏从名字缩写
                         # 继续（如左栏末尾 Aguilar, / 右栏 E., Brunet, M.）。
                         # 必须同时看到左栏标题后的作者名单及末尾逗号、右栏完整的
                         # “缩写 + 下一个姓氏及缩写”，不把普通出版商续文当成书目。
                         left_tail = [item for item in page_text_lines[page_index]
-                                     if item[2] < heading_page_width / 2
+                                     if item[2] < heading_middle
                                      and item[1] >= heading_bottom and len(item[4]) >= 40
                                      and not (item[1] > height * 0.94
                                               and margin_counts[item[4]] > 1)]
@@ -316,7 +353,8 @@ def _reference_geometry(
                 break
             region_parts.append(line[4])
             # 只对真实文字边界取并集；不能把所有页顶文字排除，书目可从页顶开始。
-            column = int(line[0] >= width / 2) if page_index in two_column_pages else 0
+            middle = csiro_splits.get(page_index + 1, width / 2)
+            column = int(line[0] >= middle) if page_index in two_column_pages else 0
             selected_lines.setdefault((page_index, column), []).append(line)
         if region_boundary is not None:
             break
@@ -339,7 +377,9 @@ def _reference_geometry(
     # 必须一起恢复而不是把英文 References 当成待保护的正文阻止修复。
     for line in page_text_lines[heading_page]:
         if heading_matches(line[4], [entry[2] for entry in page_line_entries[heading_page]]):
-            column = int(line[0] >= heading_page_width / 2) if heading_page in two_column_pages else 0
+            if wiley_reference_heading and (line[0], line[1]) != (heading_x0, heading_top):
+                continue
+            column = int(line[0] >= heading_middle) if heading_page in two_column_pages else 0
             if (heading_page, column) in selected_lines:
                 selected_lines[(heading_page, column)].append(line)
     regions = [

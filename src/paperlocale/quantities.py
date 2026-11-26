@@ -28,7 +28,9 @@ for symbol, aliases in {
 }.items():
     for alias in [symbol, *aliases]:
         _ALIASES[alias] = (symbol, 1)
-for alias, base, power in [('平方米', 'm', 2), ('平方千米', 'km', 2),
+for alias, base, power in [('平方米', 'm', 2), ('square metre', 'm', 2),
+                           ('square metres', 'm', 2), ('square meter', 'm', 2), ('square meters', 'm', 2),
+                           ('平方千米', 'km', 2),
                            ('平方公里', 'km', 2), ('立方米', 'm', 3)]:
     _ALIASES[alias] = (base, power)
 
@@ -42,6 +44,7 @@ _VALUES = re.compile(rf'(?<![A-Za-z0-9_./])(?P<a>{_NUM})(?:\s*[–—~-]\s*(?P<b
 _NON_CJK_LETTER = re.compile(r'[^\W\d_\u3400-\u9fff]')
 _GWP_ABBREVIATION = re.compile(r'GWP(?![^\W\u3400-\u9fff])')
 _BARE = {'m', 'km', 'cm', 'mm', 'kg', 'Pa', 'hPa', 'kPa', 'K', '°C', '°F', '°', '%', 'ppm', 'ppb'}
+_METER_INSTRUMENT_PREFIX = re.compile(r'\b(?:gas(?:[-‐‑]|\s+)exchange|leaf\s+area)\s+$', re.I)
 
 
 # 这里只匹配带明确图标签的子图号。裸写的 3 d 仍是三天，图号中的 3 继续走数字检查。
@@ -244,10 +247,17 @@ def standalone_units(text: str) -> list[tuple[int, int, str]]:
         if parsed is None:
             continue
         end, signature, count = parsed
-        # second 在自然语言“第二次事件”中是序数，不是秒；没有数值、
-        # 乘除号或幂的 second event 不构成单位。显式 second·event、
-        # event s−1 和带数值的量值不走此例外，继续接受完整科学校验。
-        if re.fullmatch(r'second\s+event', text[match.start():end]):
+        # `second event` 及带限定词的 `its second year` 中 second 是序数。
+        # 数值、乘除号或幂提供量纲证据，显式 `second·year` 仍按单位校验。
+        fragment = text[match.start():end]
+        if (re.fullmatch(r'second\s+event', fragment)
+                or re.fullmatch(r'second\s+year', fragment, re.I)
+                and re.search(r'\b(?:the|its|their|his|her|our|your)\s+$', text[:match.start()], re.I)):
+            continue
+        # Gas-exchange meter 和 leaf area meter 是仪器名。只排除有
+        # 明确仪器修饰语的 meter，保留米制长度和带幂的物理单位。
+        if (fragment in ('meter', 'meters')
+                and _METER_INSTRUMENT_PREFIX.search(text, 0, match.start())):
             continue
         # “all-day/hour / wet-day/hour percentiles”中的斜杠列举两种
         # 时间尺度，不是day除以hour。仅排除这个有明确语境的裸词组；

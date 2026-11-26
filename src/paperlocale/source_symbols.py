@@ -5,6 +5,8 @@
 这不是通用 OCR：未知轮廓不替换，原始字符与坐标始终保留供删除/重放核验。
 """
 import hashlib
+import math
+import unicodedata
 
 from fontTools.pens.recordingPen import RecordingPen
 
@@ -168,8 +170,53 @@ REVIEWED_TYPE1_OUTLINES = {
 }
 
 
+# 已在 Madagascar’s grassy biomes 和 plant functional traits handbook 的原页
+# 对照可见字形及嵌入字库。重音只识别为独立绘制部件，合成字母还需同一行的
+# 基字和位置证据。第 8 版规则单独启用，以便逐字复核已保存的旧布局计划。
+REVIEWED_OVERLAY_OUTLINES = {
+    ('cff', 1000, '76f4926235c5981ff5f9e656f2366015a3ffcab2fb0d048aea9a7052f5e3dda4'): '\u0301',
+    ('cff', 1000, '7a3a3c972f88566d8a69f496f9ab3ad77da067d0378206d0d70b6964064cb739'): '°',
+    ('cff', 1000, 'cbe36c03b0179a88a1c9640f2c7478f0cb2cc681e5fcfbe178a66981155cb07a'): '×',
+    ('cff', 1000, '786bdc62f32820e07a2cd66c9f62d700adb2f1de500b1601b46bb588356446d5'): '÷',
+}
+
+
+# Australian Journal of Botany 植物功能性状手册，第 14 页正文的微摩尔符号
+# 与同页图轴一致。原 AdvP697C 的 0x6D/GID 6 写成 Latin m，但实际 CFF
+# 绘出带下伸笔画的 µ。以原程序、真实 GID 和 1000 em 轮廓共同核对。
+_CSIRO_MICRO_SIGN_FONT = 'b9d6ef35dc6e4462eec47d6792fdb18affc5982fc047f7024d86ea94e25505e1'
+_CSIRO_MICRO_SIGN_OUTLINE = ('cff', 1000, 'd75eac9a1dde07756f23b7f8d4b1202d01db028b9c82d58faaefeb25608ccb6a')
+
+
+def _compose_overlaid_acute(line):
+    """将一个已验证的重音及其紧邻基字合成单个 NFC 字母。"""
+    chars = [(char, span['size']) for span in line['spans'] for char in span['chars']]
+    consumed = set()
+    for (mark, mark_size), (base, size) in zip(chars, chars[1:]):
+        if mark['c'] != '\u0301' or mark.get('native_text') != '\x01':
+            continue
+        # 两份源 PDF 最远一对相隔约 0.054 em。要求字级次序、字号和原点
+        # 同时匹配，避免把独立的重音字形拼到别的单词或科学变量上。
+        if (base['c'] not in {'a', 'o', 'c'} or 'native_text' in base
+                or abs(mark_size - size) > .02 or math.dist(mark['origin'], base['origin']) > .06*size):
+            continue
+        base['native_text'] = base['c']
+        base['c'] = unicodedata.normalize('NFC', base['c'] + mark['c'])
+        base['native_prefix'] = mark
+        consumed.add(id(mark))
+    for char, _ in chars:
+        if id(char) not in consumed and char['c'] == '\u0301' and char.get('native_text') == '\x01':
+            # 未配对的原字符照常经过版面诊断，不向正文添加推断的字母。
+            char['c'] = char.pop('native_text')
+    if consumed:
+        for span in line['spans']:
+            span['chars'] = [char for char in span['chars'] if id(char) not in consumed]
+        line['spans'] = [span for span in line['spans'] if span['chars']]
+
+
 def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_math=False,
-                             reviewed_brackets=False, reviewed_decimals=False, reviewed_type1=False):
+                             reviewed_brackets=False, reviewed_decimals=False, reviewed_type1=False,
+                             reviewed_overlays=False, reviewed_micro_sign=False):
     """新计划专用：已核验异常轮廓恢复语义；无墨迹字符恢复空白。
 
     不推断未知控制码，也不向模型传入乱码。空白要由实际原字形的空
@@ -177,13 +224,16 @@ def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_ma
     """
     for block in raw:
         for line in block.get('lines', []):
+            overlaid_acute = False
             for span in line['spans']:
                 # MTEX 的原编码 p 可能绘制根号。字体名仅筛选候选，避免对普通
                 # 正文的 p 重做字形查询。是否修复仍取决于完整轮廓。
                 type1_math = reviewed_type1 and span['font'].startswith('MTEX')
                 for char in span['chars']:
+                    micro_candidate = reviewed_micro_sign and span['font'] == 'AdvP697C' and char['c'] == 'm'
                     if (char['c'].isprintable() and not (printable_math and char['c'] in 'ðÞ¼' or latin_math and char['c'] == 'q'
-                            or reviewed_decimals and char['c'] == ':' or type1_math and char['c'] == 'p')
+                            or reviewed_decimals and char['c'] == ':' or type1_math and char['c'] == 'p'
+                            or micro_candidate)
                             or char['c'].isspace() or char['c'] == '\u00ad'):
                         continue
                     native = {'text': char['c'], 'rect': char['bbox'], 'origin': char['origin']}
@@ -211,7 +261,7 @@ def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_ma
                     # 也防止新表命中/旧表None在不同修订间互相污染。
                     decimal_candidate = reviewed_decimals and char['c'] == ':'
                     key = ('corpus-semantic', glyph['xref'], glyph['name'], reviewed_brackets,
-                           reviewed_decimals, decimal_candidate, reviewed_type1)
+                           reviewed_decimals, decimal_candidate, reviewed_type1, reviewed_overlays, micro_candidate)
                     if key not in cache:
                         pen = RecordingPen()
                         outlines[glyph['name']].draw(pen)
@@ -224,7 +274,17 @@ def restore_verified_symbols(page, raw, cache, *, printable_math=False, latin_ma
                             semantic = REVIEWED_DECIMAL_OUTLINES.get(identity)
                         if semantic is None and reviewed_type1:
                             semantic = REVIEWED_TYPE1_OUTLINES.get(identity)
+                        if semantic is None and reviewed_overlays:
+                            semantic = REVIEWED_OVERLAY_OUTLINES.get(identity)
+                        if (semantic is None and micro_candidate and glyph['glyph_id'] == 6 and glyph['name'] == 'm'
+                                and identity == _CSIRO_MICRO_SIGN_OUTLINE):
+                            _, _, _, program = page.parent.extract_font(glyph['xref'])
+                            if hashlib.sha256(program).hexdigest() == _CSIRO_MICRO_SIGN_FONT:
+                                semantic = 'µ'
                         cache[key] = semantic
                     semantic = cache[key]
-                    if semantic:
+                    if semantic and (semantic != '\u0301' or char['c'] == '\x01'):
                         char['native_text'], char['c'] = char['c'], semantic
+                        overlaid_acute |= semantic == '\u0301'
+            if overlaid_acute:
+                _compose_overlaid_acute(line)

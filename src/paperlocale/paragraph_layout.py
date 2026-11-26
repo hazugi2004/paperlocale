@@ -10,10 +10,12 @@ from .font_geometry import open_source_pdf
 
 import math
 import re
+from itertools import product
 from statistics import median
 
 import pymupdf as fitz
 
+from .contracts import DATA_FIELD_RE
 from .font_geometry import line_ink, _source_anchor_glyphs
 from .source_layout import CAPTION, APPENDIX_CAPTION, MAIN_HEADING, NO_LINE_START, NO_LINE_END, anchor_errors
 
@@ -357,6 +359,35 @@ def _linked_url_continuation(page, anchor, next_part, cache):
             'source_link_rect': list(links[0]['from'])}
 
 
+def _bind_accent_words(chars, glyphs):
+    """限定 ActualText 到重叠重音所在的单词，按实际绘制记录设置边界。"""
+    def position(char, text):
+        return tuple(round(v, 3) for v in char['origin']), text
+
+    native_glyphs = {position(glyph, glyph['text']): glyph for glyph in glyphs}
+    bound, letters = [], []
+    # 源声明字宽帮助阅读器从字形位置还原空格。组合重音自身不推进字距。
+    for char in chars:
+        text = char.get('semantic_text', char['text'])
+        glyph = native_glyphs.get(position(char, text))
+        bound.append(glyph)
+        letters.append('\u0301' if 'accent_overlay' in char else text)
+        if glyph is not None:
+            if 'accent_overlay' in char:
+                glyph['accent_overlay'] = True
+            else:
+                glyph['reading_width'] = round((char['rect'][2]-char['rect'][0])*1000/glyph['size'], 4)
+    word_pattern = r"(?:\u0301?[^\W\d_])+(?:[’'-](?:\u0301?[^\W\d_])+)*"
+    for word in re.finditer(word_pattern, ''.join(letters)):
+        members = [glyph for glyph in bound[word.start():word.end()] if glyph is not None]
+        # 用原字序为整词提供 NFC 文本。若 ActualText 覆盖整段引文，部分
+        # 阅读器会把英文词间空格也分配给单个绘制字形，反而在词内插空。
+        if any(glyph.get('accent_overlay') for glyph in members):
+            members[0]['actual_text'] = ''.join(char.get('semantic_text', char['text'])
+                                                for char in chars[word.start():word.end()])
+            members[-1]['actual_text_end'] = True
+
+
 def bind_inline_glyphs(source, units):
     """翻译前绑定原嵌入字体字形，拒绝无证据的数学字体替换。
 
@@ -397,8 +428,11 @@ def bind_inline_glyphs(source, units):
                             anchor['source_url'] = uri
                             anchor['source_link_rect'] = list(link['from'])
                             break
+                # 可选断词符也可能出现在引文人名中。仅当原点、原字宽与
+                # 空轮廓的空格绘制记录均核对一致时，才略过该无墨迹字符。
                 glyphs = _source_anchor_glyphs(page, anchor['chars'], cache,
-                                               allow_blank_soft_hyphen=bool(anchor.get('source_url')))
+                                               allow_blank_soft_hyphen=any(
+                                                   c['text'] == '\u00ad' for c in anchor['chars']))
                 if not glyphs:
                     # 标准 PDF 字体用于普通出版社与自有回归样例；其 Unicode
                     # 映射必须可打印且每个位置唯一，不能处理未知嵌入字体。
@@ -431,6 +465,8 @@ def bind_inline_glyphs(source, units):
                     raise LocatedError(
                         f"第{anchor['page']}页行内固定片段缺少可核验字形，请核对相邻公式或引文边界",
                         [location], 'source-glyph')
+                if any('accent_overlay' in char for char in anchor['chars']):
+                    _bind_accent_words(anchor['chars'], glyphs)
                 for g in glyphs:
                     g['rect'] = list(g['rect'])
                 ink = fitz.Rect(glyphs[0]['rect'])
@@ -604,25 +640,33 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                                  lambda _: marker+'{v'+str(len(anchors))+'}', text, count=1)
         if replaced:
             anchors.append(continuation)
-    tokens = re.findall(r'\{v\d+\}|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', text)
+    # 让数据字段整体换行，保留 PDF 回读时可直接复制的完整字段名。
+    tokens = re.findall(r'\{v\d+\}|' + DATA_FIELD_RE.pattern + r'|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', text)
     anchors, tokens = wrap_citation_anchors({**unit, 'anchors': anchors}, tokens)
     size = median(f['size'] for f in unit['frames'])
     floor = size*.8 if min_size is None else min_size
     if not 0 < floor <= size:
         raise ValueError('最小字号必须为正数且不大于原字号')
-    for step in range(math.ceil((size-floor)*10)+1):
-        current = max(floor, size-step/10)
+    sizes = [max(floor, size-step/10) for step in range(math.ceil((size-floor)*10)+1)]
+    frames = unit['frames']
+    # 先保留按原字数比例分配的版面。只有所有允许字号均失败时，才按
+    # 同一批框的真实可写容量顺序排字。引文和网址占一个词元，但可能占满一行。
+    flows = (False, True) if len(frames) > 1 else (False,)
+    for flow, current in product(flows, sizes):
         remaining, placed = list(tokens), []
-        for fi, frame in enumerate(unit['frames']):
+        for fi, frame in enumerate(frames):
             rect = fitz.Rect(frame['rect'])
             obstacles = [fitz.Rect(b) for b in frame.get('obstacles', [])]
             face = bold_font if frame['bold'] and bold_font is not None else font
             leading = max(current*1.13, frame['leading']*current/size)
-            # 跨物理边界保留两侧的内容；分配完整连续词元，不另起逻辑段落。
-            share = frame['weight']/sum(f['weight'] for f in unit['frames'][fi:])
-            limit = len(remaining) if fi == len(unit['frames'])-1 else max(1, round(len(remaining)*share))
-            if limit < len(remaining):
-                limit = frame_boundary(remaining, limit, anchors)
+            # 跨物理边界分配连续词元。容量重试沿用实际墨迹、禁则和障碍物检查。
+            last_frame = fi == len(frames)-1
+            limit = len(remaining)
+            if not flow and not last_frame:
+                share = frame['weight']/sum(f['weight'] for f in frames[fi:])
+                limit = max(1, round(len(remaining)*share))
+                if limit < len(remaining):
+                    limit = frame_boundary(remaining, limit, anchors)
             while limit < len(remaining) and (remaining[limit][0] in NO_LINE_START or remaining[limit-1][-1] in NO_LINE_END):
                 limit += 1
             portion = remaining[:limit]
@@ -742,13 +786,15 @@ def fit_paragraph(unit, target, font, min_size, bold_font):
                     continue
                 previous_bottom = max(p['rect'][3] for p in line_items)
                 if previous_bottom > rect.y1 + .001:
-                    cursor = 0
+                    cursor = line_start
                     break
                 placed.extend(line_items)
                 baseline += leading
                 row += 1
             if cursor < len(portion):
-                break
+                if not flow or last_frame or not cursor:
+                    break
+                limit = cursor
             del remaining[:limit]
         if not remaining:
             return merge_text_runs(placed)
@@ -763,13 +809,16 @@ def write_inline(page, item, font_refs):
     document = page.parent
     commands = []
     dx, dy = item['shift']
-    for g in item['inline_anchor']['glyphs']:
+    anchor = item['inline_anchor']
+    for g in anchor['glyphs']:
         x, y = g['origin'][0]+dx, g['origin'][1]+dy
         color = tuple(g['color'])
         if 'base14' in g:
             page.insert_text((x,y), g['text'], fontsize=g['size'], fontname=g['base14'].lower(), color=color)
             continue
-        key = (g['xref'], g['name'], g['text'])
+        text = '\u0301' if g.get('accent_overlay') else g['text']
+        width = g.get('reading_width', 0)
+        key = (g['xref'], g['name'], text, width)
         if key not in font_refs:
             original = g['xref']
             base = document.xref_get_key(original, 'BaseFont')[1]
@@ -782,7 +831,7 @@ def write_inline(page, item, font_refs):
             name = ''.join(chr(c) if 33 <= c <= 126 and chr(c) not in '#%()/<>[]{}' else f'#{c:02X}' for c in g['name'].encode())
             cmap = document.get_new_xref()
             document.update_object(cmap, '<<>>')
-            unicode = g['text'].encode('utf-16-be').hex()
+            unicode = text.encode('utf-16-be').hex()
             code = g.get('source_code', '0000' if g.get('truetype') else '00')
             limit = 'f' * len(code)
             document.update_stream(cmap, ('/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n'
@@ -808,7 +857,7 @@ def write_inline(page, item, font_refs):
                     f'/Encoding /Identity-H /DescendantFonts [{descendant} 0 R] /ToUnicode {cmap} 0 R >>')
             else:
                 document.update_object(ref, f'<< /Type /Font /Subtype /Type1 /BaseFont {base} '
-                    f'/FontDescriptor {descriptor} /FirstChar 0 /LastChar 0 /Widths [0] '
+                    f'/FontDescriptor {descriptor} /FirstChar 0 /LastChar 0 /Widths [{width:.10f}] '
                     f'/Encoding << /Type /Encoding /Differences [0 /{name}] >> /ToUnicode {cmap} 0 R >>')
             font_refs[key] = ref
         ref = font_refs[key]
@@ -829,8 +878,14 @@ def write_inline(page, item, font_refs):
         # 坐标。height-y 只适用于 CropBox 原点为零的页面。非零裁切边距
         # 必须逆变换，否则所有重放引文会一起偏移到栏外（HESS 实例）。
         pdf_point = fitz.Point(x, y) * ~page.transformation_matrix
+        if 'actual_text' in g:
+            # 原重音和基字各绘制一次，搜索或复制时只读到一个 NFC 字母。
+            actual_text = g['actual_text'].encode('utf-16-be').hex()
+            commands.append(f'/Span <</ActualText <feff{actual_text}>>> BDC')
         commands.append(f'q {paint} BT /{alias} {g["size"]:.10f} Tf 1 0 0 1 '
                         f'{pdf_point.x:.10f} {pdf_point.y:.10f} Tm <{g.get("source_code", "0000" if g.get("truetype") else "00")}> Tj ET Q')
+        if g.get('actual_text_end'):
+            commands.append('EMC')
     if commands:
         ref = document.get_new_xref()
         document.update_object(ref, '<<>>')
@@ -891,7 +946,7 @@ def merge_text_runs(placements):
     return result
 
 
-def source_text(parts):
+def source_text(parts, *, join_wrapped_identifiers=False):
     """从保留源字符/坐标的片段生成语义文本，复原合字与可选断词。
 
     U+00AD 仅在普通正文中作为排印控制移除，原始 parts 不变，供逐字
@@ -911,7 +966,21 @@ def source_text(parts):
             soft_join = (not previous['fixed'] and not part['fixed']
                          and previous['text'].endswith('\u00ad')
                          and bool(re.match(r'[A-Za-z]', value)))
-            if (not same_line or gap > .15*part['size']) and not soft_join:
+            # 括号可核对字段边界，例如 (GPP_DT_VUT_ / REF)。仅将同一段内
+            # 左沿对齐、相邻两行的字段拼回，不改变原字形、字框或删除范围。
+            identifier_join = (
+                join_wrapped_identifiers and not same_line and not previous['fixed'] and not part['fixed']
+                and part['page'] == previous['page'] and 'source_block' in part
+                and part['source_block'] == previous.get('source_block')
+                and abs(part['size'] - previous['size']) < .1
+                and abs(part['rect'][0] - previous['rect'][0]) < .5 * part['size']
+                and .8 * part['size'] <= part['baseline'] - previous['baseline'] <= 1.8 * part['size']
+                and re.search(r'\([A-Z][A-Z0-9]*(?:_[A-Z][A-Z0-9]*){2,}_$', previous['text'].rstrip())
+                and re.match(r'[A-Z][A-Z0-9]*(?:_[A-Z][A-Z0-9]*)*\)', value)
+            )
+            if identifier_join:
+                result = result.rstrip()
+            elif (not same_line or gap > .15*part['size']) and not soft_join:
                 result += ' '
         if not part['fixed']:
             value = value.replace('\u00ad', '')

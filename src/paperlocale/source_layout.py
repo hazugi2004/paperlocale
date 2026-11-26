@@ -21,12 +21,13 @@ from statistics import median
 import pymupdf as fitz
 from PIL import Image, ImageChops, ImageDraw
 
-from .contracts import FORMULA_RE, URL_RE, segment_id, scientific_literal_spans
+from .contracts import DATA_FIELD_RE, FORMULA_RE, URL_RE, segment_id, scientific_literal_spans
 from .references import _reference_geometry
 from .image_geometry import visible_image_regions
 from .safe_text import writing_rectangles, fixed_text_rectangles
 from .font_geometry import line_ink, open_source_for_editing
 from .quantities import find_quantities, standalone_units
+from .journals import JOURNAL_RULES_VERSION
 
 CITATION = re.compile(r'\[\s*\d+(?:\s*[,;–−-]\s*\d+)*\s*\]|'
                       r'\(\s*refs?\.?\s*\d+(?:\s*[,;–−-]\s*\d+)*\s*\)|'
@@ -54,6 +55,19 @@ APPENDIX_CAPTION = re.compile(CAPTION.pattern.replace(r'\d+|', r'[A-Z]?\d+|'))
 METADATA = re.compile(r'^(?:Received:|Accepted:|Published online:|Check for updates$)', re.I)
 NO_LINE_START = set('，。、；：？！）》」』】％‰,.;:!?%)]}')
 NO_LINE_END = set('（《「『【([{')
+
+
+def _citation_spans(text, revision):
+    """保留作者与年份，同时让引文后明确的解释仍可翻译。"""
+    pattern = CITATION if revision else LEGACY_CITATION
+    for match in pattern.finditer(text):
+        explanation = re.search(r';\s*i\.e\.(?=[,\s])', match.group(), re.I) if revision >= 3 else None
+        if explanation:
+            # 外层括号和分号包住引文与解释，由译文统一处理；只锁定
+            # 分号前的作者与年份，保持其原字形。同行、跨行使用同一边界。
+            yield match.start() + 1, match.start() + explanation.start()
+        else:
+            yield match.span()
 
 
 def digest(path: Path) -> str:
@@ -101,7 +115,7 @@ def _superscript(span, line, *, paragraph=False):
     return span['size'] < .95*size or span['origin'][1] < baseline-.2*size
 
 
-def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek_variants=True, extended_citations=True, italic_words=False, short_prose=False, script_geometry=False, scientific_identifiers=False, inline_fragments=False) -> list[dict]:
+def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek_variants=True, extended_citations=True, italic_words=False, short_prose=False, ligature_prose=False, script_geometry=False, scientific_identifiers=False, inline_fragments=False) -> list[dict]:
     """按字符坐标分开普通文字和固定锚点，不用白块覆盖公式/引用。
 
     上标、数学字体及明确引文模式保持原对象。普通斜体不能一律当公式，
@@ -148,7 +162,9 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek
                                                   or 'native_text' in char or (not char['c'].isprintable()
                                                       and not (paragraph and char['c'] == '\u00ad'))),
                               'size': span['size'], 'italic': bool(span['flags'] & 2 or
-                                  re.search(r'(?:[.-]I|Italic|Oblique)$', span['font'])),
+                                  re.search(r'(?:[.-]I|Italic|Oblique)$', span['font']) or
+                                  ligature_prose and re.fullmatch(r'[\ufb00-\ufb06]', char['c'])
+                                  and span['font'].endswith('.I+fb')),
                               'bold': _bold(span, paragraph=paragraph),
                               'superscript': superscript})
         if not chars:
@@ -158,7 +174,12 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek
         # 普通斜体和小字号下标中。按完整变量词元保护基字及上下标，避免
         # 只留下原帽号、却用中文字体重写 β。普通斜体物种名/强调词不适用。
         normal_size = median(c['size'] for c in chars)
-        words = re.findall(r'[A-Za-z]+', text)
+        # 斜体 CFF 的连字可能来自独立 .I+fb 子集，且 flags 不带斜体。
+        # 展开连字仅用于判断整行是否为自然语言；字形坐标及锚点依据不变。
+        prose_text = text
+        if ligature_prose:
+            prose_text = re.sub(r'[\ufb00-\ufb06]', lambda match: unicodedata.normalize('NFKD', match[0]), text)
+        words = re.findall(r'[A-Za-z]+', prose_text)
         italic_prose = (paragraph and sum(len(w) > 3 for w in words) >= 2 and
                         all(c['italic'] for c in chars if c['c'].isalpha()))
         # ϕ/ϑ/ϖ 等数学变体不在 α–ω 范围内；原字形保护不能依赖中文字体覆盖。
@@ -274,7 +295,8 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek
                 for match in SCIENTIFIC_VERSION.finditer(text):
                     for char in chars[match.start():match.end()]:
                         char['fixed'] = True
-        ranges = [m.span() for pattern in (CITATION if extended_citations else LEGACY_CITATION, URL_RE) for m in pattern.finditer(text)] + scientific_literal_spans(text)
+        ranges = (list(_citation_spans(text, extended_citations))
+                  + [m.span() for m in URL_RE.finditer(text)] + scientific_literal_spans(text))
         # 实测 (r: 0.79–0.99; p < 0.01) 曾只保留斜体 r/p，数字和
         # 运算符却被重新排字。括号内完全由短变量、数字和数学分隔符构成
         # 且含关系运算符时，保护整个表达式。含自然语言说明的括号不适用。
@@ -385,6 +407,14 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek
                         and -.2*normal_size <= char['bbox'][0]-left['bbox'][2] <= .35*normal_size
                         and -.2*normal_size <= right['bbox'][0]-char['bbox'][2] <= .35*normal_size):
                     char['fixed'] = True
+        if any('native_prefix' in char for char in chars):
+            # 原字形需要随完整词元重放，例如 Fernández-García 和 Kulić。
+            # 科学文本与正则索引使用 NFC，删除和排版仍使用两个绘制记录。
+            for word in re.finditer(r"[^\W\d_]+(?:[’'-][^\W\d_]+)*", text):
+                letters = chars[word.start():word.end()]
+                if any('native_prefix' in char for char in letters):
+                    for char in letters:
+                        char['fixed'] = True
         runs = []
         for char in chars:
             if not runs or (runs[-1][0]['fixed'], runs[-1][0]['bold']) != (char['fixed'], char['bold']):
@@ -394,15 +424,23 @@ def _parts(block: dict, page_number: int, links: list, *, paragraph=False, greek
             value = ''.join(c['c'] for c in run)
             if not value.strip():
                 continue
-            result.append({'page': page_number, 'rect': _rect_union(run),
+            source_chars, marks = [], []
+            for char in run:
+                if mark := char.get('native_prefix'):
+                    marks.append(mark)
+                    source_chars.append({'text': mark['native_text'], 'rect': list(mark['bbox']),
+                                         'origin': list(mark['origin']), 'semantic_text': '',
+                                         'accent_overlay': char['c']})
+                source_chars.append({'text': char.get('native_text', char['c']),
+                                     'rect': list(char['bbox']), 'origin': list(char['origin']),
+                                     **({'semantic_text': char['c']} if 'native_text' in char else {}),
+                                     **({'source_blank': char['source_blank']} if 'source_blank' in char else {})})
+            result.append({'page': page_number, 'rect': _rect_union(run + marks),
                            'text': value, 'fixed': run[0]['fixed'],
                            'bold': run[0]['bold'],
                            'size': median(c['size'] for c in run),
                            'baseline': median(c['origin'][1] for c in run),
-                           'chars': [{'text': c.get('native_text', c['c']), 'rect': list(c['bbox']), 'origin': list(c['origin']),
-                                      **({'semantic_text': c['c']} if 'native_text' in c else {}),
-                                      **({'source_blank': c['source_blank']} if 'source_blank' in c else {})}
-                                     for c in run]})
+                           'chars': source_chars})
     if paragraph and script_geometry >= 4:
         result = _protect_enclosed_scripts(result)
     return result
@@ -466,7 +504,7 @@ def _protect_enclosed_scripts(parts):
     return parts
 
 
-def _protect_group_citations(blocks, groups):
+def _protect_group_citations(blocks, groups, citation_revision):
     """Match complete citations in established reading order, retaining glyph runs."""
     by_id = {b['id']: b for b in blocks}
     for group in groups:
@@ -483,8 +521,8 @@ def _protect_group_citations(blocks, groups):
                     text += value
                     locations.extend([(sid, index, offset)] * len(value))
                 previous = part
-        fixed = {location for match in CITATION.finditer(text)
-                 for location in locations[match.start():match.end()] if location is not None}
+        fixed = {location for start, end in _citation_spans(text, citation_revision)
+                 for location in locations[start:end] if location is not None}
         for sid in group:
             parts = []
             for index, part in enumerate(by_id[sid]['parts']):
@@ -538,7 +576,7 @@ MAIN_HEADING = re.compile(
     r"[.:]?$", re.I)
 
 
-def _preserve_front_matter(blocks: list[dict], *, paragraph=False, first_page=1, middle_dot_names=False, asce_credentials=False, spaced_names=False, pipe_names=False) -> None:
+def _preserve_front_matter(blocks: list[dict], *, paragraph=False, first_page=1, middle_dot_names=False, asce_credentials=False, spaced_names=False, pipe_names=False, accented_names=False, surname_particles=False) -> None:
     """保护显著大号主标题下、摘要/长正文之前的作者与机构。
 
     短作者名单不一定带多个逗号，不能仅依赖人数。这里联合字号、页面位置
@@ -577,9 +615,23 @@ def _preserve_front_matter(blocks: list[dict], *, paragraph=False, first_page=1,
             name_text = re.sub(r'\s*,?\s*(?:Aff\.)?M\.ASCE\b', '', name_text)
         if pipe_names:
             name_text = name_text.replace("|", ";")
+        if accented_names:
+            # 仅在姓名匹配副本中去除可分解的重音，使 Jiří、Šigut 沿用
+            # 同一姓名结构检查；原文和字形保持出版者的姓名拼写。
+            name_text = ''.join(c for c in unicodedata.normalize('NFD', name_text)
+                                if not unicodedata.combining(c))
         names = re.sub(r"[\d*†‡]+", "", name_text).strip()
         names = re.split(r"\s*(?:,|;|&|·|\band\b)\s*" if middle_dot_names else r"\s*(?:,|;|&|\band\b)\s*", names)
-        name_pattern = r"(?:[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*\s+){1,5}[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*"
+        name_word = r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*"
+        name_pattern = rf"(?:{name_word}\s+){{1,5}}{name_word}"
+        if paragraph and surname_particles:
+            # 姓氏中的小写虚词只在标题下的姓名块有独立、小字号且抬高的单位编号时启用。
+            # 例如 Tobias van Elst 的 38 必须是已固定的上标，普通小标题不能据此保留。
+            normal = max(block['parts'], key=lambda p: p['size'])
+            if any(p.get('fixed') and re.fullmatch(r'\d+(?:\s*,\s*\d+)*', p['text'].strip())
+                   and p['size'] < .85 * normal['size']
+                   and p['baseline'] < normal['baseline'] - .08 * normal['size'] for p in block['parts']):
+                name_pattern = rf"{name_word}\s+(?:(?:{name_word}|van|von|de|del|der|den|da|dos|di|la|le)\s+){{0,4}}{name_word}"
         is_name = (all(re.fullmatch(name_pattern, name.strip()) for name in names if name.strip())
                    if paragraph else all(re.fullmatch(name_pattern, name) for name in names))
         # 多作者名单可能超过25词；先验证每个分隔项都是姓名，再应用
@@ -593,7 +645,8 @@ def _preserve_front_matter(blocks: list[dict], *, paragraph=False, first_page=1,
 
 
 def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False,
-                                 visual_boundaries=False, frontiers_sidebar_page=None) -> None:
+                                 visual_boundaries=False, frontiers_sidebar_page=None,
+                                 royal_society=False) -> None:
     """原位设置辅助文本分类；小标题与跨页后续内容都不发给翻译器。
 
     输入为已按阅读顺序排列的源块。依赖明确章节名称，不根据一般正文中
@@ -619,6 +672,8 @@ def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False,
         r"^(?:references|bibliography|literature cited|author (?:information|affiliations?)|"
         r"affiliations?|publisher[’']s note|open access|correspondence|peer review information|"
         r"reprints and permissions)(?:[.:]?(?:\s|$))", re.I)
+    reference_top = {b['page']: b['rect'][1] for b in blocks if royal_society
+                     and b['kind'] == 'reference' and re.fullmatch(r'References\.?', b['text'], re.I)}
     for block in blocks:
         if (sidebar_right is not None and block['page'] == frontiers_sidebar_page
                 and block['rect'][2] <= sidebar_right):
@@ -632,6 +687,12 @@ def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False,
         if visual_boundaries and block['kind'] in {'table','figure','formula','caption','header-footer'}:
             continue
         value = block['text']
+        # Royal Society 的数据声明和后续简短声明可排在右栏，双栏书目从下方
+        # 跨栏起排。左栏阅读顺序先碰到书目标题时，页内真实上下关系仍优先。
+        if (block['kind'] == 'body' and block['page'] in reference_top
+                and block['rect'][3] < reference_top[block['page']]
+                and re.match(r'^Data accessibility[.:](?:\s|$)', value, re.I)):
+            continue
         match = AUXILIARY_HEADING.match(value)
         # 附录可能放在致谢后、书目前，仍含需要翻译的科学论证。仅接受
         # 短的明确附录标题，不能因正文提到 Appendix 就结束辅助区保护。
@@ -648,6 +709,189 @@ def _preserve_auxiliary_sections(blocks: list[dict], *, paragraph=False,
             auxiliary = not paragraph or bool(preserved_heading.match(value))
         if auxiliary and block['kind'] == 'body':
             block['kind'] = 'preserve'
+
+
+def _royal_society_author_continuation(page, native, text):
+    """核实第 2 页左栏续排的作者单位和 ORCID，保留原有拼写及链接。"""
+    rect = fitz.Rect(native['bbox'])
+    if page.number != 1 or rect.x1 > page.rect.width / 2:
+        return None
+    # 缩写可能含出版者保留的重音字母（如 LŠ）或姓名连字符。
+    marker = r'[^\W\d_](?:[^\W\d_]|-){0,7},\s+\d{4}-\d{4}-\d{4}-[0-9X]{4}'
+    if re.fullmatch(rf'{marker}(?:;\s+{marker})+;?', text):
+        return 'Royal Society 作者 ORCID 名录原样保留'
+    # 单位编号在续页从 1 以上继续。至少两行均需有确切的数字上标、正常
+    # 字号的地址与机构关键词，避免把左栏的普通编号列表当作作者单位。
+    markers = []
+    for line in native['lines']:
+        spans = line['spans']
+        if len(spans) < 2:
+            continue
+        raised, address = spans[:2]
+        value = ''.join(c['c'] for c in raised['chars']).strip()
+        if (re.fullmatch(r'\d{1,2}', value) and raised['size'] < .85 * address['size']
+                and raised['origin'][1] < address['origin'][1] - .08 * address['size']):
+            markers.append(int(value))
+    if (len(markers) >= 2 and markers[0] > 1 and all(a < b for a, b in zip(markers, markers[1:]))
+            and len(re.findall(r'(?<![A-Za-z])(?:department|institute|university|laboratory|centre|center)\b',
+                               text, re.I)) >= 2):
+        return 'Royal Society 续排作者单位原样保留'
+    return None
+
+
+_ORCID_URI = re.compile(r'https://orcid\.org/(?:[0-9]{4}-){3}[0-9]{3}[0-9X]')
+
+
+def _ecological_monographs_orcid(native, links):
+    """核对斜体姓名及其原始 ORCID 链接，识别有标题的名录及同样排版的续页。"""
+    if len(links) < 2:
+        return None
+    identities = set()
+    has_name = False
+    active_uri, remainder = '', ''
+    for index, line in enumerate(native['lines']):
+        chars = [c for s in line['spans'] for c in s['chars']]
+        value = ''.join(c['c'] for c in chars).strip()
+        if not value:
+            continue
+        if tuple(line['dir']) != (1, 0):
+            return None
+        if index == 0 and value == 'ORCID' and all(_bold(s, paragraph=True) for s in line['spans']):
+            continue
+        x0, y0, x1, y1 = _rect_union([c for c in chars if c['c'].strip()])
+        center = fitz.Point((x0 + x1) / 2, (y0 + y1) / 2)
+        targets = {link['uri'] for link in links if center in link['from']}
+        if targets:
+            if len(targets) != 1:
+                return None
+            uri = targets.pop()
+            # URL 可以折到下一行。逐行对应原 PDF 中同一目标的链接注释，
+            # 并核对完整可见文字，避免只因正文中引用了 ORCID 就保护整块。
+            if not remainder:
+                if not has_name or not value.startswith('https://orcid.org/'):
+                    return None
+                active_uri, remainder = uri, uri
+                has_name = False
+            if uri != active_uri or not remainder.startswith(value):
+                return None
+            remainder = remainder[len(value):]
+            if not remainder:
+                identities.add(uri)
+        elif (remainder
+              or not all(s['flags'] & 2 or re.fullmatch(r'AdvOT[^.]+\.I', s['font'])
+                         for s in line['spans'] if any(c['c'].strip() for c in s['chars']))
+              or not all(c.isalpha() or c in " .'’-" for c in value)):
+            return None
+        else:
+            has_name = True
+    if len(identities) >= 2 and not has_name and not remainder:
+        return 'Ecological Monographs 作者 ORCID 名录原样保留'
+    return None
+
+
+def _global_change_biology_orcid_row(native, links, icons, size):
+    """核对同一原生块中的斜体姓名、徽标和可见网址。"""
+    lines = native['lines']
+    if len(lines) != 2 or any(tuple(line['dir']) != (1, 0) for line in lines):
+        return None
+    name, address = [[s for s in line['spans'] if any(not c['c'].isspace() for c in s['chars'])]
+                     for line in lines]
+    if not name or not address or not all(s['flags'] & 2 for s in name):
+        return None
+    name_chars, url_chars = [[c for s in spans for c in s['chars'] if not c['c'].isspace()]
+                             for spans in (name, address)]
+    if not all(c['c'].isalpha() or c['c'] in " .'’–-\u00ad" for c in name_chars):
+        return None
+    baseline = name[0]['origin'][1]
+    if any(abs(s['origin'][1] - baseline) > .1 * size for s in name + address):
+        return None
+    name_rect, url_rect = map(fitz.Rect, (_rect_union(name_chars), _rect_union(url_chars)))
+    uri = ''.join(c['c'] for s in address for c in s['chars']).strip()
+    matches = [link['from'] for link in links if link['uri'] == uri]
+    url_center = (url_rect.tl + url_rect.br) / 2
+    text_links = [rect for rect in matches if url_center in rect]
+    if len(text_links) != 1:
+        return None
+    # 徽标是夹在姓名和网址之间的独立绿色圆形。徽标和可见网址
+    # 各有一个注释，同一目标的两片点击区必须能分别覆盖各自的对象。
+    for icon in icons:
+        if (name_rect.x1 <= icon.x0 and icon.x1 <= url_rect.x0
+                and abs(icon.y1 - baseline) <= .2 * size and .8 * size <= icon.width <= 1.3 * size
+                and abs(icon.width - icon.height) <= .1 * size
+                and any(rect != text_links[0] and icon in rect for rect in matches)):
+            return uri
+    return None
+
+
+def _global_change_biology_orcid(page, raw, links):
+    """只保护独立 ORCID 标题后同栏连续出现的作者名录。"""
+    if len(links) < 4:
+        return set()
+    text = [(index, block) for index, block in enumerate(raw) if block.get('lines')]
+    for position, (index, block) in enumerate(text):
+        lines = block['lines']
+        if len(lines) != 1 or tuple(lines[0]['dir']) != (1, 0):
+            continue
+        spans = lines[0]['spans']
+        value = ''.join(c['c'] for s in spans for c in s['chars']).strip()
+        if value != 'ORCID' or not all(_bold(s, paragraph=True) for s in spans):
+            continue
+        # Wiley 的 ORCID 徽标用标准绿色和四段曲线绘制。仅在找到
+        # 独立标题后读取矢量图元，不搜索同页其他绿色标记。
+        icons = [d['rect'] for d in page.get_drawings() if d.get('fill') and len(d['fill']) == 3
+                 and all(abs(a - b) < .005 for a, b in zip(d['fill'], (.647, .804, .224)))
+                 and len(d['items']) == 4 and all(item[0] == 'c' for item in d['items'])]
+        size = max(s['size'] for s in spans)
+        heading = previous = fitz.Rect(block['bbox'])
+        rows, identities = set(), set()
+        for row_index, row in text[position + 1:]:
+            rect = fitz.Rect(row['bbox'])
+            # 同栏左沿对齐，且行带连续。两节之间较大的段间距终止名录。
+            if abs(rect.x0 - heading.x0) > .1 * size or not 0 <= rect.y0 - previous.y1 <= .5 * size:
+                break
+            uri = _global_change_biology_orcid_row(row, links, icons, size)
+            if uri is None or uri in identities:
+                return set()
+            rows.add(row_index)
+            identities.add(uri)
+            previous = rect
+        if len(rows) >= 2:
+            return rows | {index}
+    return set()
+
+
+def _wiley_front_matter(blocks):
+    """用左侧通讯/经费标题与右侧宽摘要正文核定首页栏界，保护确认的作者单位。"""
+    first = [b for b in blocks if b['page'] == 1 and b['kind'] == 'body']
+    labels = ('abstract', 'correspondence', 'funding information')
+    matches = [[b for b in first if b['text'].strip().casefold() == label] for label in labels]
+    if any(len(items) != 1 for items in matches):
+        return None
+    abstract, contact, funding = [items[0] for items in matches]
+    a, c, f = [fitz.Rect(b['rect']) for b in (abstract, contact, funding)]
+    width = abstract['page_width']
+    if (not .25 * width < a.x0 < .5 * width or not a.y1 < c.y0 < f.y0
+            or max(c.x1, f.x1) >= a.x0 - 4 or abs(c.x0 - f.x0) > 3):
+        return None
+    # 先核实两栏在同一高度确实各有独立内容，避免仅凭两个标题改变阅读顺序。
+    gutter = a.x0 - 1
+    if sum(r.x0 >= gutter and r.width > .45 * width and c.y0 <= r.y0 < f.y0
+           for r in (fitz.Rect(b['rect']) for b in first)) < 2:
+        return None
+    addresses = sorted((b for b in first if abs(b['rect'][0] - c.x0) < 3
+                        and b['rect'][2] < gutter and a.y0 - 12 <= b['rect'][1] < c.y0
+                        and b['rect'][3] <= c.y0), key=lambda b: b['rect'][1])
+    # 只接受与通讯栏对齐、逐条从 1 编号且以机构地址为内容的完整列表；
+    # 编号须在每条记录的首个固定片段中，普通左栏正文不会触发。
+    if (len(addresses) >= 3 and all(b['parts'] and b['parts'][0]['fixed']
+            and re.match(rf'{n}(?!\d)', b['parts'][0]['text'])
+            for n, b in enumerate(addresses, 1))
+            and sum(bool(re.search(r'\b(?:department|institute|university|station|centre|center)\b',
+                                   b['text'].lstrip('0123456789'), re.I)) for b in addresses) >= len(addresses) - 1):
+        for block in addresses:
+            block['kind'] = 'preserve'
+            block['preserve_reason'] = 'Wiley 首页作者单位原样保留'
+    return gutter
 
 
 def _preserve_author_sidebars(blocks: list[dict], first_page: int) -> None:
@@ -1456,7 +1700,7 @@ def _preserve_vector_math(source, blocks):
     return protected
 
 
-def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 7, frontmatter_after_cover: bool = True, publisher_font_styles: bool = True, spacing_revision: int = 3, extended_citations: int = 2, middle_dot_names: bool = True, publisher_layout: bool = True, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, reading_structure: int = 5, script_geometry: int = 4, author_details: bool = True, inline_fragments: int = 2, rotated_table_labels: bool = True, native_inline_math: int = 3, backmatter_structure: bool = True, scientific_identifiers: bool = True, url_groups: bool = True, page_progress: Callable[[int, int], None] | None = None) -> dict:
+def extract_layout(source: Path, detections: list[dict] | None = None, *, paragraph: bool = False, ocr_dir: Path | None = None, journal_adapt: bool = True, journal_rules_version: int = JOURNAL_RULES_VERSION, section_boundaries: bool = True, reference_line_starts: bool = True, content_geometry: bool = True, corpus_evidence: bool = True, symbol_revision: int = 9, frontmatter_after_cover: int = 4, publisher_font_styles: bool = True, spacing_revision: int = 3, extended_citations: int = 3, middle_dot_names: bool = True, publisher_layout: int = 3, italic_words: bool = True, formula_openers: bool = True, dash_lists: bool = True, spaced_names: bool = True, vector_fractions: bool = True, fraction_labels: bool = True, fraction_structure: bool = True, short_prose: bool = True, ligature_prose: bool = True, reading_structure: int = 5, script_geometry: int = 4, author_details: bool = True, inline_fragments: int = 2, rotated_table_labels: bool = True, native_inline_math: int = 3, backmatter_structure: bool = True, scientific_identifiers: int = 2, url_groups: bool = True, caption_space=None, page_progress: Callable[[int, int], None] | None = None) -> dict:
     """收集所有可见文本块，自动分类并形成跨区域逻辑段落断点。
 
     图表矩形与书目通过源文几何提取；扫描页/旋转文字不猜测性 OCR。
@@ -1464,19 +1708,33 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     """
     # preserved 旧断点逐字核对旧自动计划；修复只用于新的段落模式，
     # 避免改变已发布旧引擎的保护区域和缓存身份。
+    original_source = source
+    if caption_space is not None:
+        # 检测结果与文件身份仍绑定真实源 PDF，只有排版几何进入临时坐标。
+        source = caption_space.path
+        detections = caption_space.upright_detections(detections)
     corpus_evidence = corpus_evidence and paragraph
+    ligature_prose = paragraph and italic_words and short_prose and ligature_prose
     greek_variants = paragraph and symbol_revision >= 1
     caption_pattern = (APPENDIX_CAPTION if reading_structure >= 3 else CAPTION) if paragraph else LEGACY_CAPTION
+    blocks, protected, issues = [], [], []
+    page_links = {}
+    from .journals import (identify_journal, auxiliary_page, preserve_line, publisher_style_flags,
+                           royal_society_abstract_tables, csiro_front_matter)
+    # 新增刊名证据与作者侧栏规则共同绑定计划版本；旧断点必须按生成时
+    # 的识别路径重算，不能因升级而悄悄改变保护区域或已有译文身份。
+    journal = (identify_journal(original_source, earths_future=author_details, rules_version=journal_rules_version)
+               if paragraph and journal_adapt else None)
+    csiro = bool(publisher_layout >= 3 and journal and journal['family'] == 'csiro')
+    ecological_monographs = bool(publisher_layout >= 3 and journal and journal['name'] == 'Ecological Monographs')
+    global_change_biology = bool(publisher_layout >= 3 and journal and journal['name'] == 'Global Change Biology')
+    reading_gutters = {}
     _, _, _, references = _reference_geometry(source, supplementary_boundary=paragraph and reading_structure,
                                                styled_boundaries=paragraph and reading_structure >= 2,
                                                visual_exclusions=[r for r in (detections or []) if r['kind'] in {'table','figure'}]
-                                               if paragraph and reading_structure >= 5 else None)
-    blocks, protected, issues = [], [], []
-    page_links = {}
-    from .journals import identify_journal, auxiliary_page, preserve_line, publisher_style_flags
-    # 新增刊名证据与作者侧栏规则共同绑定计划版本；旧断点必须按生成时
-    # 的识别路径重算，不能因升级而悄悄改变保护区域或已有译文身份。
-    journal = identify_journal(source, earths_future=author_details) if paragraph and journal_adapt else None
+                                               if paragraph and reading_structure >= 5 else None,
+                                               wiley_reference_heading=ecological_monographs,
+                                               csiro_gutters=reading_gutters if csiro else None)
     symbol_cache = {}
     # 版面计划沿用源描述符坐标，保持已有段落身份与译文缓存；只有实际
     # 删除及安全删除范围计算使用修正后的临时描述符，不能混入持久计划。
@@ -1484,23 +1742,33 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
     with document:
         from .source_watermarks import background_layers
         watermarks = background_layers(document) if paragraph and corpus_evidence else {}
+        csiro_page, csiro_abstract, csiro_abandon, csiro_metadata = (
+            csiro_front_matter(document, detections or []) if csiro else (0, None, set(), {}))
         for number, page in enumerate(document, 1):
             if page_progress is not None:
                 page_progress(number, len(document))
             page_links[number] = page.get_links()
+            orcid_links = [link for link in page_links[number] if (ecological_monographs or global_change_biology)
+                           and _ORCID_URI.fullmatch(link.get('uri', ''))]
             cover_reason = auxiliary_page(page.get_text(), number) if journal else None
             if page.rotation or list(page.annots(types=(fitz.PDF_ANNOT_REDACT,)) or []):
                 issues.append(f'第{number}页旋转或已有删除标注，尚不受自动源版面模式支持')
             images = visible_image_regions(page, detections or [])
             boxes = list(images)
+            native_tables = page.find_tables().tables
+            # 本刊摘要底色的矩形边会产生假表格，只撤销原生表格分类；
+            # 视觉模型保护区域及源 PDF 的填色对象仍走原流程。
+            abstract_boxes = (royal_society_abstract_tables(page, native_tables, detections or [])
+                              if publisher_layout >= 2 and journal and journal['family'] == 'royal-society' else set())
             boxes.extend({'page': number, 'rect': list(t.bbox), 'kind': 'table'}
-                         for t in page.find_tables().tables)
+                         for t in native_tables if tuple(t.bbox) not in abstract_boxes)
             boxes.extend({**r, 'kind': 'reference'} for r in references if r['page'] == number)
             visual_kinds = {'figure': 'figure', 'table': 'table', 'isolate_formula': 'formula',
                             'formula_caption': 'formula', 'figure_caption': 'caption',
                             'table_caption': 'caption', 'abandon': 'header-footer'}
             boxes.extend({'page': number, 'rect': r['rect'], 'kind': visual_kinds[r['kind']]}
-                         for r in (detections or []) if r['page'] == number and r['kind'] in visual_kinds)
+                         for r in (detections or []) if r['page'] == number and r['kind'] in visual_kinds
+                         and not (number == csiro_page and r['kind'] == 'abandon' and tuple(r['rect']) in csiro_abandon))
             # PDF 允许图片外框超出 CropBox；可见保护区域必须裁切到页面。
             # 但透明图片的大外框可能同时覆盖正文，不能因裁切合法就认定为图内文字。
             boxes = [{**box, 'rect': list(fitz.Rect(box['rect']) & page.rect)} for box in boxes
@@ -1607,13 +1875,20 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                     from .source_symbols import restore_verified_symbols
                     restore_verified_symbols(page, raw, symbol_cache, printable_math=symbol_revision >= 3, latin_math=symbol_revision >= 4,
                                              reviewed_brackets=symbol_revision >= 5, reviewed_decimals=symbol_revision >= 6,
-                                             reviewed_type1=symbol_revision >= 7)
+                                             reviewed_type1=symbol_revision >= 7, reviewed_overlays=symbol_revision >= 8,
+                                             reviewed_micro_sign=symbol_revision >= 9)
             text_blocks = []
             if paragraph and backmatter_structure:
                 raw = [piece for native in raw for piece in _definition_rows(native)]
-            for native in raw:
+            global_change_orcid = (_global_change_biology_orcid(page, raw, orcid_links)
+                                   if global_change_biology else set())
+            for native_index, native in enumerate(raw):
                 if not native.get('lines'):
                     continue
+                # 姓名与网址可能同基线但属于独立原生行，在后续合并前核对链接。
+                orcid_reason = _ecological_monographs_orcid(native, orcid_links) if ecological_monographs else None
+                if native_index in global_change_orcid:
+                    orcid_reason = 'Global Change Biology 作者 ORCID 名录原样保留'
                 if paragraph:
                     # 一个视觉行可能因上下标被MuPDF拆为多个“行”，而
                     # 这些片段仍在同一原生块内。只合并同一水平行带、
@@ -1649,6 +1924,16 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 split = []
                 native_text = _plain(' '.join(''.join(c['c'] for s in line['spans'] for c in s['chars'])
                                              for line in native['lines']))
+                author_reason = (_royal_society_author_continuation(page, native, native_text)
+                                 if paragraph and publisher_layout >= 2 and journal
+                                 and journal['family'] == 'royal-society' else None)
+                author_reason = author_reason or next((reason for rect, reason in csiro_metadata.get(number, [])
+                    if (rect + (-.5, -.5, .5, .5)).contains(native['bbox'])), None)
+                author_reason = author_reason or orcid_reason
+                # CSIRO 把同一基线上的粗体 Abstract. 和正文写入两个原生行。
+                # 已验证跨页续接的整块共同分段，仍按缩进和行距识别真正的段落边界。
+                abstract_leadin = (number == csiro_page and csiro_abstract is not None
+                                   and (csiro_abstract + (-.5, -.5, .5, .5)).contains(native['bbox']))
                 # 独立符号行可能用错误Unicode表示圆点（例如提取为“&”）。
                 # 依据同行、左侧悬挂位置识别标记并原位保留字形，不猜测
                 # 字符编码；其后的正文明确作为新列表项开始。
@@ -1711,7 +1996,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                         role = 'preserve'
                     reason = _nonprinting_line(page, line, paint) if role == 'body' else None
                     journal_reason = preserve_line(journal, page, line, cover_reason, publication_labels=reading_structure >= 2) if journal else None
-                    reason = journal_reason or reason
+                    reason = author_reason or journal_reason or reason
                     if reason:
                         role = 'preserve'
                     # 同一个 PDF 文本块可能先有两行大号粗体章节标题，再接
@@ -1724,7 +2009,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                              sum(s[1] for s in style_chars) > len(style_chars) / 2) if style_chars else (0, False)
                     if reading_structure >= 4:
                         style += (all(s['flags'] & 2 for s in line['spans']),)
-                    changed = (split and role == 'body' and not caption_pattern.match(native_text) and
+                    changed = (split and role == 'body' and not abstract_leadin and not caption_pattern.match(native_text) and
                                (abs(split[-1]['_style'][0] - style[0]) > .6 or split[-1]['_style'][1] != style[1]
                                 or reading_structure >= 4 and style[1] and split[-1]['_style'][2] != style[2]))
                     paragraph_break = False
@@ -1791,7 +2076,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 if (number == 1 and rect.y1 < page.rect.height / 2 and value.count(',') >= 4
                         and len(words) > 8 and sum(w[0].isupper() for w in words) / len(words) > .8):
                     kind = 'preserve'
-                parts = _parts(block, number, page_links[number], paragraph=paragraph, greek_variants=greek_variants, extended_citations=paragraph and extended_citations, italic_words=paragraph and italic_words, short_prose=paragraph and short_prose, script_geometry=paragraph and script_geometry, scientific_identifiers=scientific_identifiers, inline_fragments=paragraph and inline_fragments)
+                parts = _parts(block, number, page_links[number], paragraph=paragraph, greek_variants=greek_variants, extended_citations=paragraph and extended_citations, italic_words=paragraph and italic_words, short_prose=paragraph and short_prose, ligature_prose=ligature_prose, script_geometry=paragraph and script_geometry, scientific_identifiers=scientific_identifiers, inline_fragments=paragraph and inline_fragments)
                 if detached_soft_hyphen:
                     # 排印空格可能把原生行框撑满整栏，保护范围应使用连字符本身的字框。
                     marker = next((char for part in parts for char in part['chars']
@@ -1905,19 +2190,27 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 break
     if paragraph and inline_fragments:
         blocks = _join_inline_fragments(blocks)
+    if global_change_biology:
+        gutter = _wiley_front_matter(blocks)
+        if gutter is not None:
+            reading_gutters[1] = gutter
     # 页内先判断是否确有双栏，再按栏阅读。通栏标题必须与下方双栏分开；
     # 这仍是自动排序启发式，不代表任意版式的语义完整性已得到证明。
-    blocks.sort(key=lambda b: (b['page'], int(b['rect'][0] >= b['page_width'] / 2), b['rect'][1]))
+    blocks.sort(key=lambda b: (b['page'], int(b['rect'][0] >= reading_gutters.get(b['page'], b['page_width'] / 2)),
+                               b['rect'][1]))
     # 机构封面可占 PDF 第1页，真正的文章首页在第2/3页。只沿用已有
     # 姓名/机构证据和标题边界，不能把“第1个PDF页面”等同于文章首页。
     first_article = min((b['page'] for b in blocks if b['kind'] == 'body'), default=1) if paragraph and frontmatter_after_cover else 1
     _preserve_front_matter(blocks, paragraph=paragraph, first_page=first_article, middle_dot_names=middle_dot_names,
                            asce_credentials=publisher_layout and journal and journal['family'] == 'asce',
-                           spaced_names=spaced_names, pipe_names=reading_structure)
+                           spaced_names=spaced_names, pipe_names=reading_structure,
+                           accented_names=paragraph and frontmatter_after_cover >= 3,
+                           surname_particles=paragraph and frontmatter_after_cover >= 4)
     _preserve_auxiliary_sections(blocks, paragraph=paragraph,
         visual_boundaries=paragraph and reading_structure >= 5,
         frontiers_sidebar_page=first_article if paragraph and reading_structure >= 5
-        and journal and journal['family'] == 'frontiers' else None)
+        and journal and journal['family'] == 'frontiers' else None,
+        royal_society=paragraph and publisher_layout >= 2 and journal and journal['family'] == 'royal-society')
     if paragraph and author_details:
         _preserve_author_sidebars(blocks, first_article)
     if paragraph:
@@ -1936,16 +2229,19 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                                   appendix_captions=reading_structure >= 3, heading_styles=reading_structure >= 4,
                                   backmatter_structure=backmatter_structure, math_closures=native_inline_math >= 2)
         if extended_citations >= 2:
-            groups = _protect_group_citations(blocks, groups)
+            groups = _protect_group_citations(blocks, groups, extended_citations)
         if url_groups:
             for block in blocks:
                 if block['kind'] in {'body', 'caption'}:
                     identify_url_fragments(block['parts'], page_links[block['page']])
+        if caption_space is not None:
+            caption_space.check_plan_scope(blocks, groups)
         return {'schema': 2, **({'journal': journal} if journal else {}),
+                **({'rotated_captions': caption_space.records()} if caption_space is not None else {}),
                 **({'symbol_revision': symbol_revision} if symbol_revision else {}),
-                **({'frontmatter_revision': 2} if frontmatter_after_cover else {}),
+                **({'frontmatter_revision': max(2, frontmatter_after_cover)} if frontmatter_after_cover else {}),
                 **({'reading_structure_revision': int(reading_structure)} if reading_structure else {}),
-                **({'scientific_identifier_revision': 1} if scientific_identifiers else {}),
+                **({'scientific_identifier_revision': int(scientific_identifiers)} if scientific_identifiers else {}),
                 **({'url_group_revision': 1} if url_groups else {}),
                 **({'script_geometry_revision': int(script_geometry)} if script_geometry else {}),
                 **({'author_details_revision': 1} if author_details else {}),
@@ -1956,9 +2252,10 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 **({'publisher_font_revision': 1} if publisher_font_styles else {}),
                 **({'spacing_revision': spacing_revision} if spacing_revision else {}),
                 **({'author_separator_revision': 1} if middle_dot_names else {}),
-                **({'publisher_layout_revision': 1} if publisher_layout else {}),
+                **({'publisher_layout_revision': int(publisher_layout)} if publisher_layout else {}),
                 **({'citation_revision': int(extended_citations)} if extended_citations else {}),
-                **({'prose_revision': 2 if short_prose else 1} if italic_words else {}),
+                **({'prose_revision': 3 if ligature_prose else 2 if short_prose else 1}
+                   if italic_words else {}),
                 **({'formula_opener_revision': 1} if formula_openers else {}),
                 **({'dash_list_revision': 1} if dash_lists else {}),
                 **({'author_spacing_revision': 1} if spaced_names else {}),
@@ -1970,7 +2267,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
                 **({'evidence_revision': 1, 'watermarks': [
                     {'page': n, 'text': value['text'], 'sha256': value['sha256']}
                     for n, value in watermarks.items()]} if corpus_evidence and paragraph else {}),
-                'source_sha256': digest(source), 'blocks': blocks,
+                'source_sha256': digest(original_source), 'blocks': blocks,
                 'protected_regions': protected,
                 'groups': groups, 'issues': issues}
     bodies = [b for b in blocks if b['kind'] == 'body']
@@ -1997,6 +2294,7 @@ def extract_layout(source: Path, detections: list[dict] | None = None, *, paragr
 
 def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *, paragraph: bool = False,
               skip_block_ids: set[str] | None = None,
+              caption_space=None,
               page_progress: Callable[[int, int], None] | None = None) -> tuple[dict, list[dict]]:
     """核对源页与全覆盖分组；不接受伪造原文、坐标、重复翻译或遗漏正文。"""
     plan = json.loads(path.read_text(encoding='utf-8'))
@@ -2004,20 +2302,26 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
         raise ValueError('版面计划不属于当前源 PDF 或 schema 不受支持')
     # 旧断点按生成时的分组规则严格复核，不能暗改已有译文对应的段落。
     # 新计划显式记录标题边界规则；尚未翻译的任务可备份后重新提取。
+    if bool(plan.get('rotated_captions')) != bool(caption_space):
+        raise ValueError('版面计划中的竖排图注与源页取证结果不一致')
+    publisher_revision = plan.get('publisher_layout_revision', 0)
     actual = extract_layout(source, detections, paragraph=paragraph, journal_adapt="journal" in plan,
+                            caption_space=caption_space,
+                            journal_rules_version=plan.get("journal", {}).get("rules_version", 1),
                             section_boundaries=plan.get('grouping_revision') == 2,
                             reference_line_starts=plan.get('reference_revision') == 2,
                             content_geometry=plan.get('geometry_revision') == 2,
                             corpus_evidence=plan.get('evidence_revision') == 1,
                             symbol_revision=plan.get('symbol_revision', 0),
-                            frontmatter_after_cover=plan.get('frontmatter_revision') == 2,
+                            frontmatter_after_cover=plan.get('frontmatter_revision', 0),
                             publisher_font_styles=plan.get('publisher_font_revision') == 1,
                             extended_citations=plan.get('citation_revision', 0),
                             spacing_revision=plan.get('spacing_revision', 0),
                             middle_dot_names=plan.get('author_separator_revision') == 1,
-                            publisher_layout=plan.get('publisher_layout_revision') == 1,
-                            italic_words=plan.get('prose_revision') in {1, 2},
-                            short_prose=plan.get('prose_revision') == 2,
+                            publisher_layout=publisher_revision if publisher_revision in (1, 2, 3) else 0,
+                            italic_words=plan.get('prose_revision') in {1, 2, 3},
+                            short_prose=plan.get('prose_revision') in {2, 3},
+                            ligature_prose=plan.get('prose_revision') == 3,
                             formula_openers=plan.get('formula_opener_revision') == 1,
                             dash_lists=plan.get('dash_list_revision') == 1,
                             spaced_names=plan.get('author_spacing_revision') == 1,
@@ -2025,7 +2329,7 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
                             fraction_labels=plan.get('vector_fraction_revision') in {2, 3},
                             fraction_structure=plan.get('vector_fraction_revision') == 3,
                             reading_structure=plan.get('reading_structure_revision', 0),
-                            scientific_identifiers=plan.get('scientific_identifier_revision') == 1,
+                            scientific_identifiers=plan.get('scientific_identifier_revision', 0),
                             url_groups=plan.get('url_group_revision') == 1,
                             script_geometry=plan.get('script_geometry_revision', 0),
                             author_details=plan.get('author_details_revision') == 1,
@@ -2082,7 +2386,7 @@ def load_plan(source: Path, path: Path, detections: list[dict] | None = None, *,
     by_id = {b['id']: b for b in blocks}
     protected = list(plan['protected_regions'])
     protected.extend(b for b in blocks if b['kind'] not in translated_kinds)
-    with open_source_pdf(source) as document:
+    with open_source_pdf(caption_space.path if caption_space is not None else source) as document:
         for region in protected:
             number, values = region['page'], region['rect']
             if type(number) is not int or not 1 <= number <= len(document):
@@ -2180,7 +2484,7 @@ def units_from_plan(plan: dict, *, paragraph: bool) -> list[dict]:
                 source_parts.append(part['text'])
         if paragraph:
             from .paragraph_layout import source_text
-            text = source_text(parts)
+            text = source_text(parts, join_wrapped_identifiers=plan.get('scientific_identifier_revision', 0) >= 2)
         else:
             text = _plain(' '.join(source_parts))
         # 跨行/页断词仅在英文小写续词前连接，保留减号与科学表达式。
@@ -2359,7 +2663,7 @@ def fit_unit(unit: dict, target: str, font: fitz.Font, min_size: float | None,
             compact = chunk if '_manual_revision' in unit else re.sub(
                 r'(?<=[\u3400-\u9fff]) +(?=[A-Za-z0-9])|(?<=[A-Za-z0-9]) +(?=[\u3400-\u9fff])',
                 '', _plain(chunk))
-            rest = re.findall(r'https?://\S+|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', compact)
+            rest = re.findall(r'https?://\S+|' + DATA_FIELD_RE.pattern + r'|[A-Za-z0-9]+(?:[.−–/-][A-Za-z0-9]+)*|.', compact)
             # 已有范围线/连字符是合法换行点，例如窄行中的（1981–2014）。
             # 不拆英文单词或小数，不增删连字符；各行重新连接仍是完整原标记。
             rest = [piece for token in rest for piece in

@@ -13,24 +13,26 @@ def page_pixels(page):
 
 
 def separate_caption_edges(source, protected, blocks):
-    """收紧误罩住图注顶部的图表检测框，不更改源对象或持久版面计划。
+    """收紧误罩住图注或续表标记的检测框，不更改源对象或持久版面计划。
 
-    只处理图表下边界与已识别图注的重叠；移出的条带必须没有图片、
-    矢量绘制或非图注字符。证据不充分时保留原框，让后续保护检查报错。
+    只处理图表下边界与已识别图注、独立续表标记的重叠；移出的条带必须
+    没有图片、矢量绘制或这些标签以外的字符。证据不足时保留原框。
     因此不能用该规则裁掉曲线、图内标签或任意正文来让检查通过。
     """
     result = []
     with open_source_pdf(source) as document:
         for region in protected:
             box = fitz.Rect(region['rect'])
-            captions = [fitz.Rect(b['rect']) for b in blocks
-                        if b['page'] == region['page'] and b['kind'] == 'caption'
-                        and box.y0 < b['rect'][1] < box.y1 <= b['rect'][3]
-                        and box.x0 < b['rect'][2] and b['rect'][0] < box.x1]
-            if region.get('kind') not in {'figure', 'table'} or not captions:
+            kind = region.get('kind')
+            labels = [fitz.Rect(b['rect']) for b in blocks if b['page'] == region['page']
+                      and (b['kind'] == 'caption' or (kind == 'table' and b['kind'] == 'body'
+                                                    and b.get('text') == '(Continues)'))
+                      and box.y0 < b['rect'][1] < box.y1 <= b['rect'][3]
+                      and box.x0 < b['rect'][2] and b['rect'][0] < box.x1]
+            if kind not in {'figure', 'table'} or not labels:
                 result.append(region)
                 continue
-            edge = min(c.y0 for c in captions)
+            edge = min(label.y0 for label in labels)
             strip = fitz.Rect(box.x0, edge, box.x1, box.y1)
             page = document[region['page'] - 1]
             graphics = any(kind in {'fill-image', 'fill-path', 'stroke-path', 'fill-shade'}
@@ -39,7 +41,7 @@ def separate_caption_edges(source, protected, blocks):
             chars = [c for b in page.get_text('rawdict', flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)['blocks']
                      for line in b.get('lines', []) for span in line['spans'] for c in span['chars']]
             other_text = any(fitz.Rect(c['bbox']).intersects(strip)
-                             and not any(caption.contains(fitz.Rect(c['bbox'])) for caption in captions)
+                             and not any(label.contains(fitz.Rect(c['bbox'])) for label in labels)
                              for c in chars)
             if not graphics and not other_text:
                 region = {**region, 'rect': [box.x0, box.y0, box.x1, edge],
@@ -74,7 +76,8 @@ def verify_fixed_ink(source, written, reference_bytes, protected, editable):
     """
     from .font_geometry import source_anchor_masks
     fixed_masks, supported = source_anchor_masks(source, protected)
-    body_masks, _ = source_anchor_masks(source, editable)
+    # 已证实为空轮廓的换行软连字符不应使同一正文行的真实墨迹丢失。
+    body_masks, _ = source_anchor_masks(source, editable, allow_blank_soft_hyphen=True)
     evidence = []
     with open_source_pdf(source) as original, fitz.open(written) as output, \
             fitz.open(stream=reference_bytes, filetype='pdf') as reference:

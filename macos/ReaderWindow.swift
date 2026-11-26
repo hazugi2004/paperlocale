@@ -506,7 +506,7 @@ private struct TranslationSettings: View {
                             Text("Qwen（翻译模型）").tag("qwen-mt")
                         }
                         if job.provider == "openai-api" {
-                            TextField("API 模型名称", text: $job.model)
+                            openAIModelPicker
                         } else {
                             Picker("具体模型", selection: Binding(get: { job.selectedModel }, set: { job.selectedModel = $0; job.changeModel() })) {
                                 ForEach(job.modelChoices, id: \.self) { Text($0) }
@@ -522,7 +522,7 @@ private struct TranslationSettings: View {
                     if job.provider != "codex-local" {
                         if job.provider == "openai-api" {
                             LabeledContent("API 地址", value: "api.openai.com")
-                            Text("使用 OpenAI API 项目密钥与项目可用的模型。开始翻译后，待译文本会发送到 OpenAI，并按 API 用量计费。")
+                            Text("请选择支持 Responses API 结构化输出的模型。开始翻译后，待译文本会发送到 OpenAI，并按 API 用量计费。")
                                 .font(.caption).foregroundStyle(.secondary)
                         } else {
                             TextField("API 地址", text: $job.baseURL).disabled(job.hasRecordedProvider)
@@ -572,8 +572,45 @@ private struct TranslationSettings: View {
             }.padding(14)
         }
         .frame(width: 550, height: 555)
-        .onAppear { initialCLI = job.cli }
+        .onAppear {
+            initialCLI = job.cli
+            job.loadOpenAIModels(automatically: true)
+        }
         .onDisappear { if initialCLI != job.cli { job.saveCLIPath() } }
+    }
+
+    @ViewBuilder private var openAIModelPicker: some View {
+        let models = job.openAIModelState.models
+        HStack {
+            Picker("API 模型", selection: Binding(get: { job.model }, set: job.selectOpenAIModel)) {
+                if job.model.isEmpty {
+                    Text("请选择模型").tag("")
+                } else if !models.contains(job.model) {
+                    Text(job.model).tag(job.model)
+                }
+                ForEach(models, id: \.self) { Text($0).tag($0) }
+            }
+            .disabled(models.isEmpty)
+            Button(models.isEmpty ? "获取模型" : "刷新模型") { job.loadOpenAIModels() }
+                .disabled(job.openAIModelState.isLoading)
+        }
+        switch job.openAIModelState {
+        case .idle:
+            Text("输入 API 密钥后获取模型列表，也可使用 App 启动环境中的 OPENAI_API_KEY。")
+                .font(.caption).foregroundStyle(.secondary)
+        case .loading:
+            ProgressView("正在获取项目模型…").controlSize(.small)
+        case .loaded(let models) where models.isEmpty:
+            Text("此 API 密钥没有返回适合文本任务的模型。")
+                .font(.caption).foregroundStyle(.secondary)
+        case .loaded(let models) where !job.model.isEmpty && !models.contains(job.model):
+            Text("当前所选模型未在本次列表中返回。可从列表选择其他模型。")
+                .font(.caption).foregroundStyle(.secondary)
+        case .failed(let reason):
+            Text(reason).font(.caption).foregroundStyle(.orange)
+        default:
+            EmptyView()
+        }
     }
 }
 

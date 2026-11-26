@@ -23,7 +23,6 @@ from paperlocale.contracts import segment_id
 from paperlocale.domains import load_domain_pack
 from paperlocale.error_categories import classify
 from paperlocale.providers import OpenAIAPIProvider, Segment, TranslationContext
-from paperlocale.providers.base import output_schema
 from paperlocale.providers.openai_api import _NoRedirect, _responses_opener
 from paperlocale.recovery import _transient
 
@@ -55,8 +54,9 @@ class OpenAIAPITest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.context = TranslationContext("en", "zh-CN", load_domain_pack("atmospheric-science"))
-        cls.segments = [Segment("s1", "Soil moisture was 10 mm.")]
-        cls.translation = [{"id": "s1", "target": "土壤湿度为10 mm。"}]
+        source = "Soil moisture was 10 mm."
+        cls.segments = [Segment(segment_id(source), source)]
+        cls.translation = {"s1": "土壤湿度为10 mm。"}
         cls.fake_key = "unit-test-fake-key-only"
 
     def provider(self):
@@ -84,16 +84,24 @@ class OpenAIAPITest(unittest.TestCase):
         self.assertNotIn("temperature", body)
         self.assertEqual(body["text"]["format"], {
             "type": "json_schema", "name": "paperlocale_translations", "strict": True,
-            "schema": output_schema(),
+            "schema": {
+                "type": "object",
+                "properties": {"translations": {
+                    "type": "object", "properties": {"s1": {"type": "string"}},
+                    "required": ["s1"], "additionalProperties": False,
+                }},
+                "required": ["translations"], "additionalProperties": False,
+            },
         })
         self.assertIn("待翻译 JSON", body["input"])
+        self.assertNotIn(self.segments[0].id, request.data.decode())
         self.assertNotIn(self.fake_key, request.data.decode())
         self.assertNotIn(self.fake_key, json.dumps(provider.provenance()))
         self.assertEqual(provider.provenance()["provider"], "openai-api")
-        self.assertEqual(result[0].target, self.translation[0]["target"])
+        self.assertEqual((result[0].id, result[0].target), (self.segments[0].id, self.translation["s1"]))
 
     def test_reasoning_is_requested_only_for_known_model_repair(self):
-        repair = replace(self.context, repair_feedback={"s1": ("土壤湿度为20 mm。", ("Wrong value",))})
+        repair = replace(self.context, repair_feedback={self.segments[0].id: ("土壤湿度为20 mm。", ("Wrong value",))})
         http, opener = self.mock_http(_completed(self.translation))
         with http:
             provider = OpenAIAPIProvider(api_key=self.fake_key, model="gpt-5.4")
@@ -105,17 +113,37 @@ class OpenAIAPITest(unittest.TestCase):
         self.assertEqual(gpt54_repair["reasoning"], {"effort": "low"})
         self.assertNotIn("reasoning", other_repair)
 
-    def test_response_order_uses_existing_id_contract(self):
-        segments = [Segment("a", "One."), Segment("b", "Two.")]
-        http, _ = self.mock_http(_completed([{"id": "b", "target": "二。"}, {"id": "a", "target": "一。"}]))
+    def test_response_keys_restore_original_ids_and_follow_remapped_context(self):
+        segments = [Segment(segment_id(source), source) for source in ("One.", "Two {v0}.")]
+        second_id = segments[1].id
+        context = replace(self.context, reference_segment_ids=frozenset({second_id}),
+                          repair_feedback={second_id: ("Previous target", ("Wrong value",))},
+                          anchor_text={second_id: {"{v0}": "10 mm"}})
+        http, opener = self.mock_http(_completed({"s2": "二{v0}。", "s1": "一。"}))
         with http:
-            self.assertEqual([x.id for x in self.provider().translate(segments, self.context)], ["a", "b"])
+            translations = self.provider().translate(segments, context)
+        self.assertEqual([(row.id, row.target) for row in translations],
+                         [(segments[0].id, "一。"), (second_id, "二{v0}。")])
+        body = json.loads(opener.open.call_args.args[0].data)
+        schema = body["text"]["format"]["schema"]["properties"]["translations"]
+        self.assertEqual(schema["required"], ["s1", "s2"])
+        rows = json.JSONDecoder().raw_decode(body["input"].split("待翻译 JSON：\n", 1)[1])[0]
+        self.assertEqual([row["id"] for row in rows], ["s1", "s2"])
+        self.assertNotIn("previous_target", rows[0])
+        self.assertEqual(rows[1]["kind"], "reference")
+        self.assertEqual(rows[1]["previous_target"], "Previous target")
+        self.assertEqual(rows[1]["fixed_anchor_text"], {"{v0}": "10 mm"})
 
     def test_id_and_value_contract_rejects_invalid_results_without_echoing_response(self):
-        for rows in [[], [{"id": "s1", "target": "一。"}] * 2,
-                     [{"id": self.fake_key, "target": "unexpected"}], [{"id": "s1", "target": None}]]:
-            with self.subTest(rows=rows):
-                http, opener = self.mock_http(_completed(rows))
+        bodies = [json.dumps({"translations": rows}) for rows in (
+            {}, {"s1": "一。", self.fake_key: "unexpected"}, {"s1": None}, [{"id": "s1", "target": "一。"}],
+        )]
+        bodies.append('{"translations":{"s1":"一。","s1":"二。"}}')
+        for text in bodies:
+            with self.subTest(text=text):
+                payload = _completed(self.translation)
+                payload["output"][1]["content"][0]["text"] = text
+                http, opener = self.mock_http(payload)
                 with http, self.assertRaisesRegex(ValueError, "IDs or value types") as raised:
                     self.provider().translate(self.segments, self.context)
                 self.assertNotIn(self.fake_key, str(raised.exception))
@@ -306,7 +334,7 @@ class OpenAIAPITest(unittest.TestCase):
             segments.write_text(json.dumps({"id": sid, "source": source}) + "\n")
             argv = ["paperlocale", "translate-segments", "--segments", str(segments),
                     "--translations", str(target), "--provider", "openai-api", "--model", "test-model"]
-            http, opener = self.mock_http(_completed([{"id": sid, "target": "土壤湿度为10 mm。"}]))
+            http, opener = self.mock_http(_completed({"s1": "土壤湿度为10 mm。"}))
             with http, patch.dict("os.environ", {"OPENAI_API_KEY": self.fake_key}, clear=True), \
                  patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main(), 0)
@@ -325,7 +353,7 @@ class OpenAIAPITest(unittest.TestCase):
             segments.write_text(json.dumps({"id": sid, "source": source}) + "\n")
             args = build_parser().parse_args(["translate-segments", "--segments", str(segments),
                 "--translations", str(target), "--provider", "openai-api", "--model", "test-model", "--no-contract-repair"])
-            http, opener = self.mock_http(_completed([{"id": sid, "target": "土壤湿度为11 mm。"}]))
+            http, opener = self.mock_http(_completed({"s1": "土壤湿度为11 mm。"}))
             with http, patch.dict("os.environ", {"OPENAI_API_KEY": self.fake_key}, clear=True), self.assertRaises(ValueError):
                 cli._execute(args)
             self.assertFalse(target.exists())
@@ -343,8 +371,7 @@ class OpenAIAPITest(unittest.TestCase):
             argv = ["paperlocale", "translate-segments", "--segments", str(segments),
                     "--translations", str(target), "--provider", "openai-api", "--model", "test-model",
                     "--max-segments", "1"]
-            first, second = [_Response(_completed([{"id": sid, "target": f"土壤湿度为{mm} mm。"}]))
-                             for sid, mm in zip(ids, (10, 20))]
+            first, second = [_Response(_completed({"s1": f"土壤湿度为{mm} mm。"})) for mm in (10, 20)]
             http, opener = self.mock_http(None)
             opener.open.side_effect = [first,
                 urllib.error.HTTPError(OpenAIAPIProvider.endpoint, 429, self.fake_key, {}, io.BytesIO()),

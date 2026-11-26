@@ -10,7 +10,8 @@ import time
 
 from .contracts import read_jsonl, unresolved_statistical_denominator, validate_translation
 from .domains import load_domain_pack
-from .error_categories import rule_detail
+from .error_categories import LAYOUT_CAPACITY_GUIDANCE, rule_detail
+from .font_geometry import open_source_pdf
 from .pipeline import restored_content_errors
 from .repair_choices import read_choices, snapshot_run
 from .source_layout import digest
@@ -39,6 +40,45 @@ def revision_errors(source: str, target: str, domain, anchors: dict, confirmatio
             if tail and not re.search(re.escape(marker + tail[1]) + r'(?=[)）])', target):
                 errors.append(f'固定引用的子图编号须保留 {anchor}{tail[1]}。')
     return errors
+
+
+def _legacy_protected_spans(source: str, target: str, anchors: dict, urls: set[str]) -> list[dict]:
+    """按旧占位符提交原字串，但在编辑器中合并已证实为同一实体的内容。"""
+    source_markers = list(re.finditer(r'\{v\d+\}', source))
+    target_markers = list(re.finditer(r'\{v\d+\}', target))
+    if [m[0] for m in source_markers] != [m[0] for m in target_markers]:
+        return []
+    spans = []
+    covered = set()
+    for index, marker in enumerate(source_markers):
+        if index in covered:
+            continue
+        first = target_markers[index]
+        label = anchors[marker[0]]
+        if urls and re.match(r'^[（(]?https?://', label):
+            # 必须与 PDF 中的点击目标逐字相同。只跨过源文和译文中的空白，
+            # 不能把后来加在网址碎片之间的正文藏进锁定控件。
+            joined = label
+            for end in range(index, len(source_markers)):
+                if end > index:
+                    following = source_markers[end]
+                    if (source[source_markers[end-1].end():following.start()].strip()
+                            or target[target_markers[end-1].end():target_markers[end].start()].strip()):
+                        break
+                    joined += anchors[following[0]]
+                if joined in urls or (joined[0] in '(（' and joined[-1] in ')）' and joined[1:-1] in urls):
+                    if end > index:
+                        spans.append({'markers': [m[0] for m in source_markers[index:end+1]],
+                                      'encoded': target[first.start():target_markers[end].end()], 'display': joined})
+                        covered.update(range(index + 1, end + 1))
+                    break
+        if re.fullmatch(r'[-‐‑−][0-9][a-zA-Z0-9]*', label):
+            prefix = re.search(r'(?<![A-Za-z0-9_])[A-Z][A-Z0-9]+$', source[:marker.start()])
+            target_prefix = re.search(r'(?<![A-Za-z0-9_])[A-Z][A-Z0-9]+$', target[:first.start()])
+            if prefix and target_prefix and prefix[0] == target_prefix[0]:
+                spans.append({'markers': [marker[0]], 'encoded': prefix[0] + first[0],
+                              'display': prefix[0] + label})
+    return spans
 
 
 def manual_revision(root: Path, *, page: int, error_id: str | None,
@@ -75,12 +115,14 @@ def manual_revision(root: Path, *, page: int, error_id: str | None,
             return {'valid': True, 'errors': [], 'item': None}
 
     report_items = None
+    layout_capacity = False
     if error_id is not None:
         report = json.loads((root / 'error_report.json').read_text(encoding='utf-8'))
         if (manifest['status'] != 'collected' or report['error_id'] != error_id or
                 report['source_sha256'] != manifest['source_sha256'] or
                 'e' not in {action['key'] for action in report['actions']}):
             raise ValueError('当前错误或断点已更新，请重新打开问题。')
+        layout_capacity = report.get('classification', {}).get('code') == 'layout.capacity'
         report_items = {}
         for diagnostic in report['items']:
             if isinstance(diagnostic.get('target'), str) and diagnostic.get('regions'):
@@ -125,6 +167,19 @@ def manual_revision(root: Path, *, page: int, error_id: str | None,
                           'target': target, 'anchors': anchors, 'rule_details': [rule_detail(e) for e in errors],
                           'unresolved_denominator': unresolved_statistical_denominator(source)})
     if edit is None:
+        # 旧断点没有逻辑网址标记。仅在有旧式网址起始锚点时读取真实 PDF 链接。
+        url_pages = {p for item in items for p in item['pages']
+                     if any(re.match(r'^[（(]?https?://', value) for value in item['anchors'].values())}
+        links_by_page = {}
+        if url_pages:
+            with open_source_pdf(Path(manifest['source_pdf'])) as document:
+                for p in url_pages:
+                    links_by_page[p] = {link['uri'] for link in document[p-1].get_links() if link.get('uri')}
+        for item in items:
+            urls = set().union(*(links_by_page.get(p, set()) for p in item['pages']))
+            spans = _legacy_protected_spans(item['validation_source'], item['target'], item['anchors'], urls)
+            if spans:
+                item['protected_spans'] = spans
         return {'items': items}
 
     item = next((item for item in items if item['id'] == edit['id']), None)
@@ -133,9 +188,13 @@ def manual_revision(root: Path, *, page: int, error_id: str | None,
     target = edit['target']
     confirmation = edit.get('confirm_denominator')
     errors = revision_errors(item['validation_source'], target, domain, item['anchors'], confirmation)
-    if ((expected_hash or item['id'] in revisions) and item['target'] == target and
+    # 实际内容问题优先。正文和确认状态都未改动时，按当前操作解释为何无法继续。
+    if (not errors and (layout_capacity or expected_hash or item['id'] in revisions) and item['target'] == target and
             confirmation == revisions.get(item['id'], {}).get('confirmed_denominator')):
-        errors.append('请修改译文或确认待核对的统计分母。')
+        if layout_capacity:
+            errors.append('译文没有改动，当前段落仍排不下。' + LAYOUT_CAPACITY_GUIDANCE)
+        else:
+            errors.append('译文没有改动。请修改后再提交。')
     result = {'valid': not errors, 'errors': errors, 'item': {**item, 'target': target}}
     if errors or check_only:
         return result

@@ -48,14 +48,19 @@ def _offer_preservation_skip(root: Path, report: dict, manifest: dict) -> None:
 
 def inspect_repair(root: Path, error_id: str) -> dict:
     """读取当前报告并补充新版支持的操作。查看不会写回旧报告或运行。"""
-    from .error_categories import classify
+    from .error_categories import classify, rule_detail
     root = root.expanduser().resolve()
     report = json.loads((root / 'error_report.json').read_text())
     if report['error_id'] != error_id:
         raise ValueError('当前错误已更新，请重新打开诊断。')
-    if report.get('classification', {}).get('code', 'operation.other') == 'operation.other':
+    code = report.get('classification', {}).get('code', 'operation.other')
+    if code in {'operation.other', 'layout.capacity'}:
         classification = classify(ValueError(report['message']), report['category'])
         report.update(classification=classification, solution=classification['guidance'])
+    if code == 'layout.capacity':
+        # 已保存的断点也显示新的排版指引。诊断文件仍保留当时的原始证据。
+        for item in report['items']:
+            item['rule_details'] = [rule_detail(reason) for reason in item.get('errors', [])]
     if report['category'] == 'preservation':
         manifest = json.loads((root / 'run_manifest.json').read_text())
         if report.get('source_sha256') != manifest.get('source_sha256'):
@@ -140,8 +145,8 @@ def record_error(error: Exception, root: Path, *, command: str | None = None) ->
         if not any(item.get('manual_revision') for item in resolved):
             actions.append({'key': 't', 'label': '仅清除失败片段缓存并重新翻译（可能计费）'})
         if classification['code'] == 'layout.capacity' and all(i.get('font_size', 0) > 6 for i in resolved):
-            floors = sorted({round(float(i['font_size']), 2) for i in resolved})
-            actions.append({'key': 'f', 'label': f'仅降低失败段落字号下限 10%（当前 {floors} pt，最低 6 pt）'})
+            floors = '、'.join(f'{size:g} pt' for size in sorted({round(float(i['font_size']), 2) for i in resolved}))
+            actions.append({'key': 'f', 'label': f'降低失败段落字号下限并重试（当前 {floors}，每次降低 10%，最低 6 pt）'})
         actions.append({'key': 's', 'label': '跳过这些片段，保留原文并记录未翻译项'})
     if category == 'extraction' and resolved and not manifest.get('translation_provider'):
         actions.append({'key': 's', 'label': '保留这些异常区域的原文，不猜测或改写字形'})

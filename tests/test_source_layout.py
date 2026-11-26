@@ -384,23 +384,24 @@ class SourceLayoutTests(unittest.TestCase):
         self.assertEqual(''.join(p['text'] for p in parts if not p['fixed']), 'SD of samples;  and ')
 
     def test_body_ink_overhang_is_editable_but_neighboring_ink_is_not(self):
-        """自造负左侧承CFF：字框外正文可删，邻近图形任一像素仍须拒绝。"""
+        """排印软连字符不阻断原字形掩模，邻近图形的像素仍须保留。"""
         import re
         from fontTools.fontBuilder import FontBuilder
         from fontTools.pens.t2CharStringPen import T2CharStringPen
         from paperlocale.source_layout import verify_unchanged
         builder = FontBuilder(1000, isTTF=False)
-        builder.setupGlyphOrder(['.notdef','j'])
-        builder.setupCharacterMap({106:'j'})
+        builder.setupGlyphOrder(['.notdef','space','j'])
+        builder.setupCharacterMap({32:'space',106:'j'})
         strings = {}
-        for name in ['.notdef','j']:
-            pen = T2CharStringPen(500,None)
+        advances = {'.notdef': 500, 'space': 250, 'j': 500}
+        for name, advance in advances.items():
+            pen = T2CharStringPen(advance,None)
             if name == 'j':
                 pen.moveTo((-200,-100)); pen.lineTo((300,-100))
                 pen.lineTo((300,700)); pen.lineTo((-200,700)); pen.closePath()
             strings[name] = pen.getCharString()
         builder.setupCFF('Overhang',{'FullName':'Overhang','FamilyName':'Overhang','Weight':'Regular'},strings,{})
-        builder.setupHorizontalMetrics({n:(500,0) for n in strings})
+        builder.setupHorizontalMetrics({name:(advance,0) for name,advance in advances.items()})
         builder.setupHorizontalHeader(ascent=800,descent=-200)
         builder.setupNameTable({'familyName':'Overhang','styleName':'Regular'})
         builder.setupOS2(sTypoAscender=800,sTypoDescender=-200,usWinAscent=800,usWinDescent=200)
@@ -416,14 +417,24 @@ class SourceLayoutTests(unittest.TestCase):
                 descriptor = int(doc.xref_get_key(descendant,'FontDescriptor')[1].split()[0])
                 stream = int(doc.xref_get_key(descriptor,'FontFile3')[1].split()[0])
                 doc.xref_set_key(stream,'Subtype','/Type1C')
-                doc.update_object(font,f'<< /Type /Font /Subtype /Type1 /BaseFont /Overhang /FirstChar 106 /LastChar 106 /Widths [500] /Encoding /WinAnsiEncoding /FontDescriptor {descriptor} 0 R >>')
+                widths = ' '.join(map(str, [250] + [500] * 74))
+                doc.update_object(font,f'<< /Type /Font /Subtype /Type1 /BaseFont /Overhang /FirstChar 32 /LastChar 106 /Widths [{widths}] /Encoding /WinAnsiEncoding /FontDescriptor {descriptor} 0 R >>')
                 text_stream = p.get_contents()[0]
-                doc.update_stream(text_stream,doc.xref_stream(text_stream).replace(b'<0001>',b'<6a>'))
+                program = b'BT /Overhang 10 Tf 1 0 0 1 100 100 Tm <6a> Tj ET\n'
+                # Wiley 将不同字宽的断词空格写在同一原点，再用 ActualText 标为软连字符。
+                program += b'/Span << /ActualText <FEFF00AD> >> BDC\n'
+                program += b'BT /Overhang 10 Tf 1 0 0 1 100 100 Tm <20> Tj ET\nEMC'
+                doc.update_stream(text_stream,program)
                 p.draw_rect((90,95,92,100),fill=(0,0,0))
                 doc.save(source)
-            edits = [{'page':1,'rect':[100,90,105,103],
-                      'chars':[{'text':'j','origin':[100,100],'rect':[100,90,105,103]}]}]
             with fitz.open(source) as doc:
+                chars = [{'text': c['c'], 'origin': c['origin'], 'rect': c['bbox']}
+                         for block in doc[0].get_text('rawdict')['blocks']
+                         for line in block.get('lines', []) for span in line['spans'] for c in span['chars']]
+                self.assertEqual([c['text'] for c in chars], ['j', '\u00ad'])
+                self.assertEqual(chars[0]['origin'], chars[1]['origin'])
+                self.assertNotEqual(chars[0]['rect'][2], chars[1]['rect'][2])
+                edits = [{'page':1,'rect':[100,90,105,103],'chars':chars}]
                 doc[0].add_redact_annot((100,90,105,103),fill=False)
                 doc[0].apply_redactions(images=0,graphics=0)
                 doc.save(target)

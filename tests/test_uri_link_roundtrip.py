@@ -111,6 +111,35 @@ class UriLinkRoundtripTests(unittest.TestCase):
             self.assertEqual(len(named), 1)
             self.assertEqual(named[0]['nameddest'], 'keep')
 
+    def test_descender_touching_next_url_does_not_acquire_its_target(self):
+        first, second = 'https://example.org/first', 'https://example.org/second'
+        with fitz.open() as seed:
+            page = seed.new_page()
+            for uri, rect in ((first, [30, 40, 150, 50]), (second, [90, 48, 150, 59])):
+                page.insert_link({'kind': fitz.LINK_URI, 'from': fitz.Rect(rect), 'uri': uri})
+            data = seed.tobytes()
+        # 同一固定片段同时包含引文与网址。上行 g 的下伸墨迹碰到下行
+        # 链接框，但原字形中心仍属于上行的网址。
+        preceding = _placement(1, [12, 41, 100, 49], [20, 80])
+        preceding['inline_anchor']['glyphs'] = [
+            {'text': 'A', 'rect': [12, 41, 17, 47]},
+            {'text': 'o', 'rect': [88, 43, 93, 47]},
+            {'text': 'g', 'rect': [94, 43, 100, 49]},
+        ]
+        following = _placement(1, [101, 50, 114, 56], [25, 95])
+        self.assertTrue(fitz.Rect(94, 43, 100, 49).intersects(fitz.Rect(90, 48, 150, 59)))
+        with fitz.open(stream=data, filetype='pdf') as original, \
+                fitz.open(stream=data, filetype='pdf') as output:
+            expected = relocate_links(output, original, [preceding, following])
+            result = output.tobytes()
+        with fitz.open(stream=result, filetype='pdf') as written:
+            links = written[0].get_links()
+            self.assertTrue(links_equal(expected[1], links))
+            self.assertEqual([(link['uri'], link['from']) for link in links], [
+                (first, fitz.Rect(108, 123, 120, 129)),
+                (second, fitz.Rect(126, 145, 139, 151)),
+            ])
+
 
 if __name__ == '__main__':
     unittest.main()

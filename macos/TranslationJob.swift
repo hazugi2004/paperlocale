@@ -3,6 +3,20 @@ import AppKit
 import UniformTypeIdentifiers
 import PDFKit
 
+enum OpenAIModelState {
+    case idle, loading, loaded([String]), failed(String)
+
+    var models: [String] {
+        if case .loaded(let models) = self { return models }
+        return []
+    }
+
+    var isLoading: Bool {
+        if case .loading = self { return true }
+        return false
+    }
+}
+
 // Swift 只管理阅读与交互。翻译、修复、质量检查和最终写入仍走同一份 PaperLocale CLI。
 @MainActor final class TranslationJob: ObservableObject {
     @Published private(set) var pdf = ""
@@ -28,7 +42,10 @@ import PDFKit
     let codexModels = CodexModelChoice.load()
     @Published var selectedModel = "gpt-6-sol"
     @Published var baseURL = ""
-    @Published var apiKey = ""
+    @Published var apiKey = "" {
+        didSet { if provider == "openai-api", oldValue != apiKey { clearOpenAIModels() } }
+    }
+    @Published private(set) var openAIModelState = OpenAIModelState.idle
     @Published var outputPDF = ""
     @Published var model = "gpt-6-sol"
     @Published var effort = "medium"
@@ -49,6 +66,8 @@ import PDFKit
     private var inspection = UUID()
     private var receivedReport: RepairReport?
     private var importCacheFrom = ""
+    private var openAIModelTask: Task<Void, Never>?
+    private var selectedOpenAIModel = ""
     private var pendingConfiguration: (layout: String, domain: String, referencePolicy: String)?
     // 保留被管道切开的 UTF-8 字符和 JSON 行，后台按读取顺序提交，结束后再加载最终清单。
     private var pending = Data()
@@ -262,8 +281,12 @@ import PDFKit
         selectedModel = modelChoices.contains(model) ? model : "自定义"
         effort = recorded.reasoning_effort ?? effort
         baseURL = recorded.base_url ?? ""
+        if provider == "openai-api" { selectedOpenAIModel = model }
         // 仅在服务或地址变化时清空内存密钥，避免把一个服务的密钥发给另一个地址。
-        if previousService != (provider, baseURL) { apiKey = "" }
+        if previousService != (provider, baseURL) {
+            clearOpenAIModels()
+            apiKey = ""
+        }
     }
 
     func newRun(importCache: Bool = false, in workspace: URL? = nil) {
@@ -344,10 +367,56 @@ import PDFKit
     }
 
     func changeProvider() {
+        clearOpenAIModels()
         selectedModel = provider == "codex-local" && modelChoices.contains("gpt-6-sol") ? "gpt-6-sol" : modelChoices[0]
         changeModel()
         baseURL = provider == "qwen-mt" ? "https://dashscope.aliyuncs.com/compatible-mode/v1" : ""
         apiKey = ""
+        if provider == "openai-api" { model = selectedOpenAIModel }
+        loadOpenAIModels(automatically: true)
+    }
+
+    private func clearOpenAIModels() {
+        openAIModelTask?.cancel()
+        openAIModelTask = nil
+        openAIModelState = .idle
+    }
+
+    private var openAIAPIKey: String {
+        TranslationOptions.keyEnvironment(ProcessInfo.processInfo.environment,
+            provider: "openai-api", key: apiKey, includeKey: true)["OPENAI_API_KEY"] ?? ""
+    }
+
+    var hasOpenAIAPIKey: Bool { !openAIAPIKey.isEmpty }
+
+    func loadOpenAIModels(automatically: Bool = false) {
+        guard provider == "openai-api", !running, !hasRecordedProvider, !openAIModelState.isLoading else { return }
+        let key = openAIAPIKey
+        if automatically {
+            guard case .idle = openAIModelState, !key.isEmpty else { return }
+        }
+        openAIModelState = .loading
+        // 输入密钥只清空旧列表并取消在途请求。用户完成输入后手动获取，
+        // 旧密钥的异步响应不能覆盖新密钥对应的状态或所选模型。
+        openAIModelTask = Task { [weak self] in
+            let result: OpenAIModelState
+            do {
+                result = .loaded(try await OpenAIProjectModels.load(apiKey: key))
+            } catch let error as OpenAIProjectModels.RequestError {
+                result = .failed(error.localizedDescription)
+            } catch {
+                result = .failed("无法连接 OpenAI 获取模型列表。请检查网络后重试。")
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.openAIModelState = result
+            self.openAIModelTask = nil
+        }
+    }
+
+    func selectOpenAIModel(_ id: String) {
+        guard provider == "openai-api", !hasRecordedProvider, openAIModelState.models.contains(id) else { return }
+        model = id
+        selectedOpenAIModel = id
     }
 
     func selectCLI() {
@@ -480,9 +549,18 @@ import PDFKit
             return
         }
         guard runProblem == nil, candidateDocument == nil else { return }
-        guard !pdf.isEmpty, FileManager.default.isReadableFile(atPath: pdf),
-              !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            notice = "请确认源文件存在，并在翻译设置中填写模型。"
+        guard !pdf.isEmpty, FileManager.default.isReadableFile(atPath: pdf) else {
+            notice = "源 PDF 无法读取。请重新打开源文件。"
+            return
+        }
+        guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            notice = provider == "openai-api" ? "请在「翻译设置」获取并选择 OpenAI API 模型。"
+                : "请在「翻译设置」选择或填写模型。"
+            return
+        }
+        // 新任务在版面分析前检查凭据。已有断点仍走原恢复流程，包括缓存渲染。
+        if provider == "openai-api", !hasRecordedProvider, !hasOpenAIAPIKey {
+            notice = "请在「翻译设置」输入 OpenAI API 密钥。"
             return
         }
         if provider != "codex-local" && provider != "openai-api"
@@ -641,7 +719,7 @@ import PDFKit
                 return
             }
             if checkOnly {
-                self.revisionFeedback = "内容检查通过。可以采用这段文字。"
+                self.revisionFeedback = "内容检查通过。采用修订后会重新排版，检查译文能否放入原段落框。"
                 return
             }
             self.revisionFeedback = ""

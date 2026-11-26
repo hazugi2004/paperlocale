@@ -1,5 +1,10 @@
 """面向修复台的稳定分类。分类说明不代替原始校验原因，也不放宽内容合同。"""
 
+LAYOUT_CAPACITY_GUIDANCE = (
+    '请保留网址、数值和单位。长网址附近可先调整标点或语序，也可在保持原意的前提下精炼译文。'
+    '采用修订后会重新检查实际排版。'
+)
+
 RULES = {
     'preservation.pixels': ('source.pixels', '保护区像素差异', '查看 PDF 中高亮的实际差异范围；重新分析版面后仍须重新通过保护检查，不能直接忽略该错误。'),
     'preservation.readback': ('source.readback', '译文写入与回读差异', '比较应写入文本和实际回读文本；多出字符可能是另一段重叠，不能仅删除原文来消除报错。'),
@@ -27,7 +32,7 @@ def rule_detail(message: str) -> dict:
                 'guidance': '查看原 PDF 中的真实符号；若属于原生公式，使用重新分析版面；若是译文字符，选择覆盖该字符的字体或纠正错误输入。不能猜换数学符号。'}
     if '无法放入段落框' in message:
         return {'code': 'layout.capacity', 'title': '段落容量', 'message': message,
-                'guidance': '对照高亮区域核对标题和正文是否误合并；可重新分析版面，或等义精炼失败译文，保存后再次检查实际排版。'}
+                'guidance': LAYOUT_CAPACITY_GUIDANCE}
     key = next((key for key in RULES if message.startswith(key)), None)
     code, title, guidance = RULES.get(key, ('content.other', '内容校验', '结合原文、失败译文和具体规则修订；校验通过后仍会检查实际排版。'))
     return {'code': code, 'title': title, 'message': message, 'guidance': guidance}
@@ -42,7 +47,7 @@ def classify(error: Exception, category: str) -> dict:
     elif category == 'layout' and '字体缺少字形' in message:
         values = ('layout.font', '中文字体缺字', '核对缺少的具体字符，纠正译文控制字符或在应用设置选择包含该字形的中文字体；缩小字号无效。')
     elif category == 'layout':
-        values = ('layout.capacity', '译文排版容量', '先核对 PDF 区域，再等义修订译文或降低该片段字号；不能删减科学信息。')
+        values = ('layout.capacity', '译文放不进原段落框', LAYOUT_CAPACITY_GUIDANCE)
     elif category in {'extraction', 'source-glyph', 'preservation'}:
         values = ('source.'+category, '源 PDF 提取或保护', '先到原文查看异常。可唯一定位到待译区块时，可保留该区块原文并继续；结果会标为部分翻译。')
     elif any(t in message for t in ('源 pdf 不存在', '源 pdf 在运行初始化后发生变化', '已绑定另一份源 pdf')):

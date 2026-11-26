@@ -100,7 +100,8 @@ def _native_font_evidence(document, xref, cache):
     return cache[key]
 
 
-def _source_anchor_glyphs(page, characters, cache, *, include_empty=False):
+def _source_anchor_glyphs(page, characters, cache, *, include_empty=False,
+                          allow_blank_soft_hyphen=False):
     """按嵌入 Type 1/CFF/TrueType 字形轮廓核验锚点，排除相邻正文墨迹。
 
     返回每个非空字形的完整墨迹矩形，不合并上下标/标点的空白角落。
@@ -187,6 +188,37 @@ def _source_anchor_glyphs(page, characters, cache, *, include_empty=False):
             resolved_spans[key] = min(next(iter(matches.values()))) if len(matches) == 1 else None
         return resolved_spans[key]
 
+    def has_empty_outline(span, item):
+        # 空格绘制记录可能单独成段，无法按上下文区分同名子集。
+        # 先用绘制记录的实际推进宽度排除其他 GID，再要求所有匹配
+        # 子集的该字形都不画墨迹。
+        resolved = font_for_span(span, item)
+        refs = {resolved} if resolved is not None else font_candidates.get(span['font'], ())
+        identity = fitz.mupdf.FzMatrix(1, 0, 0, 1, 0, 0)
+        found = False
+        for ref in refs:
+            native = _native_font_evidence(page.parent, ref, cache)
+            if native is None:
+                return False
+            if item[1] not in native['codes']:
+                continue
+            advance = fitz.mupdf.fz_advance_glyph(native['font'], item[1], 0)*span['size']
+            if abs(advance-(item[3][2]-item[3][0])) >= .001:
+                continue
+            found = True
+            key = ('empty-outline', ref, item[1])
+            if key not in cache:
+                # fz_bound_glyph 对无墨迹字也会返回极小的非空矩形。
+                # 直接量原字体的填充路径，可确认该 GID 没有墨迹。
+                path = fitz.mupdf.fz_outline_glyph(native['font'], item[1], identity)
+                cache[key] = False
+                if path.m_internal is not None:
+                    bound = fitz.mupdf.ll_fz_bound_path(path.m_internal, None, identity.internal())
+                    cache[key] = bool(fitz.mupdf.ll_fz_is_empty_rect(bound))
+            if not cache[key]:
+                return False
+        return found
+
     traces = {}
     continuations = {}
     for span in page.get_texttrace():
@@ -235,6 +267,15 @@ def _source_anchor_glyphs(page, characters, cache, *, include_empty=False):
                 previous['text'] += char.get('semantic_text', char['text'])
                 continue
         matches = traces.get(key, [])
+        if not matches and allow_blank_soft_hyphen and key[0] == 0xAD and 'rect' in char:
+            # 提取层可将空格读为软连字符；即使有其他字形共用原点，
+            # 也只接受与字宽一致、且无可见轮廓的空格绘制记录。
+            at_width = [value for trace_key, values in traces.items() if trace_key[1:] == key[1:]
+                        for value in values if abs(value[1][3][0]-char['rect'][0]) < .001
+                        and abs(value[1][3][2]-char['rect'][2]) < .001]
+            if at_width and all(item[0] == 0x20 and has_empty_outline(span, item)
+                                for span, item in at_width):
+                continue
         if not matches:
             # 同一 CFF 程序在不同公式中可有不同 ToUnicode，rawdict 与
             # texttrace 的 Unicode 可能不一致。以唯一原点及实际字宽
@@ -368,7 +409,7 @@ def source_anchor_ink_rectangles(page, characters, cache):
     return [g['rect'] for g in glyphs] if glyphs else None
 
 
-def source_anchor_masks(source, regions, scale=4):
+def source_anchor_masks(source, regions, scale=4, *, allow_blank_soft_hyphen=False):
     """用原嵌入字体生成固定字形的独立透明掩模，不重绘或替换交付 PDF。
 
     实际字形的矩形仍可能包住旁边正文（尤其斜体 f）。掩模沿用原 CFF
@@ -385,7 +426,8 @@ def source_anchor_masks(source, regions, scale=4):
             page = original[region['page'] - 1]
             if page.rotation or page.rect.x0 or page.rect.y0:
                 continue
-            glyphs = _source_anchor_glyphs(page, fixed_characters(region), cache)
+            glyphs = _source_anchor_glyphs(page, fixed_characters(region), cache,
+                                          allow_blank_soft_hyphen=allow_blank_soft_hyphen)
             if glyphs:
                 supported.add(index)
                 bucket = pages.setdefault(region['page'], {})
@@ -409,8 +451,9 @@ def _remove_placeholder_actualtext(document):
     """移除出版社误用的辅助替代文本，仅作用于内存副本。
 
     Springer 把真实公式的 /ActualText 写成 inline-eq-IEq1 等内部 ID，
-    或把空白写成零宽空间，rawdict 因此丢失真实字符坐标。只移除这两种
-    明确占位内容；保留其他辅助文本以及所有原绘制操作、字体与图形。
+    或把空白写成零宽空间，rawdict 因此丢失真实字符坐标。另有出版商在
+    段落、图注的结构父节点填入空串，把整段文字屏蔽。仅清理这些已识别
+    的占位，保留有内容的辅助文本以及所有原绘制操作、字体与图形。
     """
     import re
     import pymupdf as fitz
@@ -432,11 +475,39 @@ def _remove_placeholder_actualtext(document):
                if fitz.mupdf.ll_pdf_get_xref_entry(pdf.m_internal, r).type in {'n', 'o'}]
     forms = [r for r in objects
              if document.xref_get_key(r, 'Subtype')[1] == '/Form']
+    tree_kind, tree = document.xref_get_key(document.pdf_catalog(), 'StructTreeRoot')
+    tree_ref = int(tree.split()[0]) if tree_kind == 'xref' else None
+
+    def empty_text_parent(ref):
+        # Wiley 的 /BCnoindent 等自定义段落经 RoleMap 映射到 /P。
+        # 只处理包含子项的文本结构节点，保留图形等有意留空的标签。
+        if tree_ref is None or document.xref_get_key(ref, 'Pg')[0] != 'xref':
+            return False
+        kind, kids = document.xref_get_key(ref, 'K')
+        if kind != 'array' or not kids.strip('[]').strip():
+            return False
+        kind, role = document.xref_get_key(ref, 'S')
+        if kind != 'name':
+            return False
+        if role not in {'/P', '/Caption'}:
+            _, role = document.xref_get_key(tree_ref, 'RoleMap/'+role.lstrip('/'))
+            if role not in {'/P', '/Caption'}:
+                return False
+        seen = {ref}
+        while (parent := document.xref_get_key(ref, 'P'))[0] == 'xref':
+            ref = int(parent[1].split()[0])
+            if ref == tree_ref:
+                return True
+            if ref in seen:
+                return False
+            seen.add(ref)
+        return False
+
     # 同一错误也会出现在结构树的 /StructElem，而不在内容流 BDC。
     # 先清理这类已明确识别的替代 ID，再让 MuPDF 读取真实字形。
     for ref in objects:
         kind, value = document.xref_get_key(ref, 'ActualText')
-        if kind == 'string' and placeholder(value):
+        if kind == 'string' and (placeholder(value) or (value == '' and empty_text_parent(ref))):
             document.xref_set_key(ref, 'ActualText', 'null')
     reader = None
     # 页面 Contents 数组共同组成一个程序；TJ 操作数和操作符可以在不同

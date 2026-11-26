@@ -1640,10 +1640,13 @@ def _outside_word_signature(
 def _subset_repair_font(
     font_file: Path,
     replacement: str,
+    *,
+    font_data: bytes | None = None,
 ) -> tuple[bytes, dict[str, object]]:
     """只为本次替换文字建立字体子集，不改写 PDF 中已有字体程序。"""
 
-    original_font = fitz.Font(fontfile=str(font_file))
+    original_font = (fitz.Font(fontbuffer=font_data) if font_data is not None
+                     else fitz.Font(fontfile=str(font_file)))
     missing = sorted(
         {
             character
@@ -1659,7 +1662,7 @@ def _subset_repair_font(
     original_bytes = bytes(original_font.buffer)
     try:
         font = TTFont(
-            str(font_file),
+            BytesIO(font_data) if font_data is not None else str(font_file),
             fontNumber=0,
             recalcTimestamp=False,
         )
@@ -1702,6 +1705,8 @@ def _subset_repair_font(
     return subset_bytes, {
         "font_file": str(font_file),
         "font_file_sha256": font_sha256,
+        **({"font_program_sha256_before_subset": hashlib.sha256(original_bytes).hexdigest()}
+           if font_data is not None else {}),
         "font_name": original_font.name,
         "font_subset_sha256": subset_sha256,
         "font_resource_name": f"PLRepair{subset_sha256[:12]}",

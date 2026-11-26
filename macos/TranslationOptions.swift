@@ -48,6 +48,74 @@ struct TranslationOptions {
     }
 }
 
+enum OpenAIProjectModels {
+    private static let endpoint = URL(string: "https://api.openai.com/v1/models")!
+
+    enum RequestError: LocalizedError {
+        case keyFormat, response, http(Int)
+
+        var errorDescription: String? {
+            switch self {
+            case .keyFormat: return "请输入有效的 OpenAI API 密钥。密钥中不能有空格或换行。"
+            case .response: return "OpenAI 返回的模型列表无法读取。请重试。"
+            case .http(401): return "OpenAI 拒绝了 API 密钥（HTTP 401）。请检查密钥后重试。"
+            case .http(403): return "API 密钥没有读取模型列表的权限（HTTP 403）。"
+            case .http(let status): return "OpenAI 未能返回模型列表（HTTP \(status)）。请重试。"
+            }
+        }
+    }
+
+    static func request(apiKey: String) throws -> URLRequest {
+        // 与翻译 Provider 使用相同的密钥格式。仅访问官方地址，并禁止跟随重定向。
+        guard !apiKey.isEmpty, apiKey.utf8.allSatisfy({ (33...126).contains($0) }) else {
+            throw RequestError.keyFormat
+        }
+        var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    static func load(apiKey: String) async throws -> [String] {
+        let request = try request(apiKey: apiKey)
+        let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw RequestError.response }
+        return try modelIDs(data, status: http.statusCode)
+    }
+
+    static func modelIDs(_ data: Data, status: Int) throws -> [String] {
+        guard (200..<300).contains(status) else { throw RequestError.http(status) }
+        struct List: Decodable {
+            struct Model: Decodable { let id: String }
+            let data: [Model]
+        }
+        guard let list = try? JSONDecoder().decode(List.self, from: data) else { throw RequestError.response }
+        // 列表只返回模型身份，无法据此确认 Responses 结构化输出能力。
+        // 排除明确面向非正文任务的系列；其余 ID 按 API 返回原样显示。
+        let nonText = ["text-embedding-", "gpt-image-", "chatgpt-image-", "dall-e-", "whisper-", "tts-",
+                       "omni-moderation-", "text-moderation-", "sora-"]
+        let otherModes: Set<Substring> = ["audio", "realtime", "transcribe", "tts"]
+        let ids = list.data.map(\.id).filter { id in
+            guard !id.isEmpty, !id.contains(where: \.isWhitespace) else { return false }
+            let fields = id.lowercased().split(separator: ":", maxSplits: 2)
+            let family = fields.first == "ft" && fields.count > 1 ? fields[1] : Substring(id.lowercased())
+            return !nonText.contains(where: family.hasPrefix)
+                && otherModes.isDisjoint(with: family.split(separator: "-"))
+        }
+        return Set(ids).sorted()
+    }
+
+    private final class NoRedirect: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
+}
+
 // Codex 的本机模型目录提供当前账户可见名称与能力；仅取 CLI 支持的档位，
 // 不读取登录材料。没有目录时仅提供 CLI 已有默认模型，其他模型可走兼容 API。
 struct CodexModelChoice {

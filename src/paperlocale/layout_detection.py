@@ -3,12 +3,13 @@
 识别图表、图注、独立公式及页眉页脚；结果绑定源文件和模型摘要保存，
 网络/模型资源不可用时由外层等待恢复，不静默降级为纯文字猜测。
 """
+from collections.abc import Callable
 from pathlib import Path
 
 from .source_layout import digest, save_json
 
 
-def detect_regions(source: Path, output: Path) -> list[dict]:
+def detect_regions(source: Path, output: Path, *, page_progress: Callable[[int, int], None] | None = None) -> list[dict]:
     import json
     if output.exists():
         record = json.loads(output.read_text(encoding='utf-8'))
@@ -27,6 +28,8 @@ def detect_regions(source: Path, output: Path) -> list[dict]:
     regions = []
     with fitz.open(source) as document:
         for number, page in enumerate(document, 1):
+            if page_progress is not None:
+                page_progress(number, len(document))
             pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
             pixels = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, 3)
             result = model.predict(pixels)[0]

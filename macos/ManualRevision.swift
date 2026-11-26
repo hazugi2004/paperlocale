@@ -31,6 +31,12 @@ struct RevisionRequest: Hashable, Identifiable {
 }
 
 struct RevisionBlock: Decodable, Identifiable {
+    struct ProtectedSpan: Decodable {
+        let markers: [String]
+        let encoded: String
+        let display: String
+    }
+
     let id: String
     let segment_id: String
     let source: String
@@ -40,6 +46,7 @@ struct RevisionBlock: Decodable, Identifiable {
     let regions: [SourceRegion]
     let rule_details: [RuleDetail]?
     let unresolved_denominator: String?
+    let protected_spans: [ProtectedSpan]?
 }
 
 struct RevisionBlocks: Decodable { let items: [RevisionBlock] }
@@ -80,7 +87,7 @@ struct RevisionText: Equatable {
         // 待修复的草稿只显示目前的内容；若漏了子图字母，预览也应显示这个差异。
         locks.reduce(text) { draft, lock in
             let label = String(lock.display.dropLast(lock.figureSuffix?.count ?? 0))
-            return draft.replacingOccurrences(of: lock.marker, with: label)
+            return draft.replacingOccurrences(of: lock.figureSuffix == nil ? lock.encoded : lock.marker, with: label)
         }
     }
 
@@ -109,7 +116,13 @@ struct RevisionText: Equatable {
             Range(match.range, in: source).map { String(source[$0]) }
         }
         guard Set(ids).count == ids.count, Set(ids) == Set(block.anchors.keys) else { return nil }
-        let locks = ids.compactMap { id -> Lock? in
+        // 后端为旧断点提供可合并的固定片段。界面显示一个实体，仍提交原占位符和空白。
+        let groups = block.protected_spans ?? []
+        let continuations = Set(groups.flatMap { $0.markers.dropFirst() })
+        let locks = ids.filter { !continuations.contains($0) }.compactMap { id -> Lock? in
+            if let group = groups.first(where: { $0.markers.first == id }) {
+                return Lock(marker: id, display: group.display, encoded: group.encoded, figureSuffix: nil)
+            }
             guard let label = block.anchors[id], !label.isEmpty else { return nil }
             // Fig. 3 的底层锚点可能只覆盖左括号和编号。原句和可读 PDF 文本均证明
             // 连写的是同一个子图范围时，界面再将尾缀一起锁定，避免把 d 当成天。
@@ -124,7 +137,7 @@ struct RevisionText: Equatable {
             }
             return Lock(marker: id, display: label, encoded: id, figureSuffix: nil)
         }
-        guard locks.count == ids.count else { return nil }
+        guard locks.count == ids.count - continuations.count else { return nil }
         return Self(parts: Array(repeating: "", count: locks.count + 1), locks: locks)
     }
 
@@ -218,6 +231,14 @@ struct RevisionText: Equatable {
                     SourcePDFPreview(path: job.pdf, page: page, regions: sourceRegions, focus: focus)
                 }.frame(minWidth: 350, idealWidth: 495)
                 VStack(alignment: .leading, spacing: 10) {
+                    if let classification = report?.classification, classification.code == "layout.capacity" {
+                        Text(classification.title).font(.subheadline.weight(.semibold))
+                        Text(classification.guidance).font(.callout).foregroundStyle(.secondary)
+                        if report?.actions.contains(where: { $0.key == "f" }) == true {
+                            Text("「其他处理方式」中也可以降低失败段落的字号下限后重试。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     if job.revisionBlocks.count > 1 {
                         Picker("译文区块", selection: $selectedID) {
                             ForEach(Array(job.revisionBlocks.enumerated()), id: \.element.id) { index, item in

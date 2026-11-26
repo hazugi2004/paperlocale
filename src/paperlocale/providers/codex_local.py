@@ -14,7 +14,6 @@ import sys
 import shutil
 import subprocess
 import tempfile
-from dataclasses import replace
 from pathlib import Path
 
 from .base import (
@@ -22,75 +21,9 @@ from .base import (
     Translation,
     TranslationContext,
     TranslationProvider,
-    build_prompt,
+    _keyed_request,
+    _parse_keyed_response,
 )
-
-
-def _keyed_request(
-    segments: list[Segment], context: TranslationContext,
-) -> tuple[str, dict[str, object]]:
-    """只让模型填充短键对应的译文，稳定片段哈希始终留在本地。
-
-    s1、s2 等键仅在当前批次有效；每个键都是 schema 中的必填属性，且不允许
-    额外属性。参考文献标记与合同修复反馈按同一映射转移，不修改原 context。
-    磁盘上的片段 ID、缓存、内容验证和其它 Provider 接口继续使用原始哈希。
-    """
-
-    ids = [segment.id for segment in segments]
-    if not ids or len(set(ids)) != len(ids):
-        raise ValueError("Codex 输入批次不能为空或包含重复 ID")
-    aliases = {sid: f"s{index}" for index, sid in enumerate(ids, 1)}
-    wire_segments = [Segment(aliases[s.id], s.source) for s in segments]
-    wire_context = replace(
-        context,
-        reference_segment_ids=frozenset(aliases[sid] for sid in ids
-                                        if sid in context.reference_segment_ids),
-        repair_feedback={aliases[sid]: context.repair_feedback[sid] for sid in ids
-                         if sid in context.repair_feedback},
-        anchor_text={aliases[sid]: context.anchor_text[sid] for sid in ids
-                     if sid in context.anchor_text},
-    )
-    schema = {
-        "type": "object",
-        "properties": {"translations": {
-            "type": "object",
-            "properties": {key: {"type": "string"} for key in aliases.values()},
-            "required": list(aliases.values()),
-            "additionalProperties": False,
-        }},
-        "required": ["translations"],
-        "additionalProperties": False,
-    }
-    prompt = build_prompt(wire_segments, wire_context) + (
-        '\n输出 translations 必须是对象：键为输入的 s1、s2 等短 ID，'
-        '值为对应的完整译文字符串。不要返回数组或 id/target 子对象。\n'
-    )
-    return prompt, schema
-
-
-def _parse_keyed_response(text: str, segments: list[Segment]) -> list[Translation]:
-    """验证短键闭合后恢复本地哈希；不按响应顺序配对，也不做模糊 ID 修补。"""
-
-    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        result: dict[str, object] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"Codex 输出重复键：{key}")
-            result[key] = value
-        return result
-
-    # 默认 json.loads 会静默覆盖重复对象键；这里必须在解析时拒绝，避免错配。
-    payload = json.loads(text, object_pairs_hook=unique_object)
-    if not isinstance(payload, dict) or set(payload) != {"translations"}:
-        raise ValueError("Codex 输出必须且只能包含 translations 对象")
-    targets = payload["translations"]
-    expected = {f"s{index}" for index in range(1, len(segments) + 1)}
-    if not isinstance(targets, dict) or set(targets) != expected:
-        raise ValueError("Codex 输出短键集合不闭合；拒绝猜测译文与原文的对应关系")
-    if any(not isinstance(target, str) for target in targets.values()):
-        raise ValueError("Codex 输出的每条译文必须是字符串")
-    return [Translation(segment.id, targets[f"s{index}"])
-            for index, segment in enumerate(segments, 1)]
 
 REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 _ROUTING_FAILURE = {"space routing discovery failed", "ERROR: space routing discovery failed"}

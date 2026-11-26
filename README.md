@@ -107,15 +107,15 @@ Install the exact public release with:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "paperlocale[layout]==0.8.7"
+python -m pip install "paperlocale[layout]==0.8.8"
 paperlocale --version
 paperlocale domain-check atmospheric-science
 ```
 
-PaperLocale 0.8.7 adds the official OpenAI API to the CLI and macOS app and
-writes smaller PDFs with lossless compression. New translations use the
+PaperLocale 0.8.8 keeps scientific identifiers and verified multi-line URLs intact
+and improves the macOS model picker and repair guidance. New translations use the
 built-in atmospheric-science glossary 2.0.0 by default. The macOS download
-includes a matching CLI wheel and setup command. See the [release notes](docs/releases/v0.8.7.md) and
+includes a matching CLI wheel and setup command. See the [release notes](docs/releases/v0.8.8.md) and
 [macOS setup instructions](macos/README.md). To install this checkout from source,
 use `python -m pip install ".[layout]"`.
 

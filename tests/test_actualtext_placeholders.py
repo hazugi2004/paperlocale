@@ -101,6 +101,44 @@ class ActualTextTests(unittest.TestCase):
             with open_source_pdf(path) as doc:
                 self.assertIn('Temperature',doc[0].get_text())
 
+    def test_empty_text_structure_parent_recovers_drawn_text_without_removing_nested_aliases(self):
+        for role in ('BCnoindent', 'Caption', 'Figure'):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder)/'source.pdf'
+                with fitz.open() as doc:
+                    page = doc.new_page()
+                    page.insert_text((50, 100), 'Visible body text')
+                    page.insert_text((50, 120), 'T')
+
+                    def obj(value):
+                        ref = doc.get_new_xref()
+                        doc.update_object(ref, value)
+                        return ref
+
+                    root = obj('<< /Type /StructTreeRoot /RoleMap << /BCnoindent /P >> >>')
+                    parent = obj(f'<< /S /{role} /P {root} 0 R /Pg {page.xref} 0 R '
+                                 '/K [0 1] /ActualText () >>')
+                    tree = obj(f'<< /Nums [0 [{parent} 0 R {parent} 0 R]] >>')
+                    doc.xref_set_key(root, 'K', f'[{parent} 0 R]')
+                    doc.xref_set_key(root, 'ParentTree', f'{tree} 0 R')
+                    doc.xref_set_key(doc.pdf_catalog(), 'StructTreeRoot', f'{root} 0 R')
+                    doc.xref_set_key(doc.pdf_catalog(), 'MarkInfo', '<< /Marked true >>')
+                    doc.xref_set_key(page.xref, 'StructParents', '0')
+                    first, second = page.get_contents()
+                    doc.update_stream(first, b'/P <</MCID 0>> BDC\n'+doc.xref_stream(first)+b'\nEMC')
+                    doc.update_stream(second, b'/P <</MCID 1>> BDC\n'
+                                      b'/Span <</ActualText (Temperature)>> BDC\n'
+                                      +doc.xref_stream(second)+b'\nEMC\nEMC')
+                    doc.save(path)
+                with fitz.open(path) as before, open_source_pdf(path) as after:
+                    self.assertNotIn('Visible body text', before[0].get_text())
+                    if role == 'Figure':
+                        self.assertNotIn('Visible body text', after[0].get_text())
+                    else:
+                        self.assertIn('Visible body text', after[0].get_text())
+                        self.assertIn('Temperature', after[0].get_text())
+                    self.assertEqual(before[0].get_pixmap().samples, after[0].get_pixmap().samples)
+
     def test_unallocated_xref_slot_is_not_an_object(self):
         # 自造经典 xref 的编号 6 没有条目，/Size 仍合法覆盖到 8。
         # 不能把 1..Size 都当成可读取对象，也不能屏蔽真正对象损坏。
